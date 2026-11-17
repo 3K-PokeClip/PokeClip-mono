@@ -1,5 +1,5 @@
 import { MessageSquare } from 'lucide-react';
-import { Avatar, Skeleton } from '@/ui';
+import { Avatar, PRIVATE_TEXT_CLASS, Skeleton } from '@/ui';
 import styles from './GlassPlayer.module.css';
 import { PlayerControlHint } from './PlayerControlHint';
 
@@ -50,7 +50,7 @@ export function PlayerTopOverlay({
             {infoPending && !channelName ? (
               <Skeleton width={84} height={12} data-testid="player-channel-pending" />
             ) : (
-              <span className={styles.channelName}>{channelName}</span>
+              <span className={`${styles.channelName} ${PRIVATE_TEXT_CLASS}`}>{channelName}</span>
             )}
             <span className={styles.liveBadge} data-status={status}>
               <span className={styles.liveBadgeDot} aria-hidden />

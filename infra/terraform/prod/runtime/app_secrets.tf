@@ -1,5 +1,5 @@
-# prod 앱 비밀 그릇 아홉(값 없음)과 서비스별 ARN 지도(POK-305 · POK-427 ·
-# POK-408 · POK-429).
+# prod 앱 비밀 그릇 열(값 없음)과 서비스별 ARN 지도(POK-305 · POK-427 ·
+# POK-408 · POK-429 · POK-551).
 # 비밀 값은 운영 단계에서 Terraform 밖으로 넣는다 — 상태에 남기지 않는다(R1).
 # 읽기 정책은 두지 않는다 — platform(실행 역할) · media(인스턴스 역할)가 자기
 # 정책으로 붙인다(R6 · CONTRACT-runtime.md 「출력과 소유 경계」).
@@ -21,6 +21,7 @@ locals {
     PROFILE_PHOTO_TOKEN_SECRET = "pokeclip/prod/profile-photo-token-secret"
     SOOP_CLIENT_SECRET         = "pokeclip/prod/soop-client-secret"
     STREAM_KEY_RESOLVE_TOKEN   = "pokeclip/prod/stream-key-resolve-token"
+    EXPIRED_BROADCASTS_TOKEN   = "pokeclip/prod/expired-broadcasts-token"
   }
 
   # 서비스 → 그 서비스가 읽는 env 이름(application.yml 실물). 일꾼 render ·
@@ -38,7 +39,7 @@ locals {
       "SOOP_CLIENT_SECRET",
       "STREAM_KEY_RESOLVE_TOKEN",
     ]
-    clip = ["JWT_SECRET", "INTERNAL_API_TOKEN"]
+    clip = ["JWT_SECRET", "INTERNAL_API_TOKEN", "EXPIRED_BROADCASTS_TOKEN"]
     "chat-collector" = [
       "INTERNAL_API_TOKEN",
       "CHZZK_CLIENT_SECRET",
@@ -75,13 +76,16 @@ output "app_secret_arns" {
   }
 }
 
-# Media 는 resolve 전용 토큰 그릇 하나만 읽는다(POK-429 · K2). 그 토큰은 auth
-# 의 resolve 하나만 연다. 공용 INTERNAL_API_TOKEN 은 앱 몫이다. 꼴은 소비자
-# modules/media_host 의 변수 media_secret_arns(list(string))와 같다.
+# Media 는 전용 토큰 그릇 둘만 읽는다. resolve 전용 토큰(POK-429 · K2)은 auth
+# 의 resolve 하나만, 만료 창구 전용 토큰(POK-551)은 clip 의
+# GET /internal/broadcasts/expired 하나만 연다. 공용 INTERNAL_API_TOKEN 은 앱
+# 몫이다. 꼴은 소비자 modules/media_host 의 변수 media_secret_arns
+# (list(string))와 같다.
 output "media_secret_arns" {
-  description = "비밀 전체 ARN 목록 — media 의 인스턴스 역할 읽기 정책. resolve 전용 토큰(STREAM_KEY_RESOLVE_TOKEN) 그릇 하나."
+  description = "비밀 전체 ARN 목록 — media 의 인스턴스 역할 읽기 정책. resolve 전용 토큰(STREAM_KEY_RESOLVE_TOKEN) · 만료 창구 전용 토큰(EXPIRED_BROADCASTS_TOKEN) 그릇 둘."
   value = [
     module.secret_shells.secret_arns[local.app_secret_shell_names["STREAM_KEY_RESOLVE_TOKEN"]],
+    module.secret_shells.secret_arns[local.app_secret_shell_names["EXPIRED_BROADCASTS_TOKEN"]],
   ]
 }
 
@@ -91,4 +95,12 @@ output "media_secret_arns" {
 output "ingest_auth_resolve_token_secret_arn" {
   description = "resolve 전용 토큰 그릇 전체 ARN — 응답기(ingest-auth) media.env 의 STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN 용(키 정의 · 읽기 = M15, 렌더 = M9(user_data))."
   value       = module.secret_shells.secret_arns[local.app_secret_shell_names["STREAM_KEY_RESOLVE_TOKEN"]]
+}
+
+# 사이드카 만료 실행기용 이름 있는 출력(POK-551) — 응답기 출력과 같은 까닭으로
+# 목록의 순서에 기대지 않게 한다. media_secret_arns 의 원소와 같은 ARN 이고,
+# clip 이 EXPIRED_BROADCASTS_TOKEN 으로 받는 그릇이다.
+output "clip_expiry_token_secret_arn" {
+  description = "만료 창구 전용 토큰 그릇 전체 ARN — Media media.env 의 CLIP_EXPIRY_TOKEN_SECRET_ARN 용(시작 스크립트가 읽어 사이드카 파일로 둔다)."
+  value       = module.secret_shells.secret_arns[local.app_secret_shell_names["EXPIRED_BROADCASTS_TOKEN"]]
 }

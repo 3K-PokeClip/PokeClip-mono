@@ -1,5 +1,5 @@
 import type { HlsConfig } from 'hls.js';
-import { mediaCredentials } from '@/api/mediaPlayback';
+import { mediaCredentials } from '@/api/mediaAccess';
 
 // 계약3 4절 1번 "catch-up 끄기" — POK-31 스파이크에서 확정한 설정 (hls.js 1.7 기준 실측).
 // catch-up이 살아 있으면 되감기 중 플레이어가 스스로 라이브로 점프해 "DVR이 안 되는

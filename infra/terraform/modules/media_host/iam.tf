@@ -95,6 +95,14 @@ data "aws_iam_policy_document" "media" {
     resources = ["${var.rewind_bucket_arn}/*"]
   }
 
+  # 60일 만료(expiry)의 객체 삭제 — DeleteObjects 는 객체마다 s3:DeleteObject 로
+  # 인가되므로 이 권한이 없으면 만료가 지우지 못한다(기존 만료 결함 수정).
+  statement {
+    sid       = "RewindDelete"
+    actions   = ["s3:DeleteObject"]
+    resources = ["${var.rewind_bucket_arn}/*"]
+  }
+
   # 사이드카 기동 때 HeadBucket(s3:ListBucket 필요) — 없으면 rewind 조립이 실패하고,
   # 없는 키의 HEAD 가 404 가 아니라 403 이 된다.
   statement {
@@ -108,6 +116,31 @@ data "aws_iam_policy_document" "media" {
     sid       = "DenylistRead"
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.denylist.arn]
+  }
+
+  # 사이드카 계약9 발행(broadcast.started · ended). 주제 · 주제 정책은 런타임
+  # 1단 몫이고 발행 권한은 이 신원 정책이다(CONTRACT-runtime). 주제에 KMS 가
+  # 없어 kms 동작이 없다. 발행 목록이 비어도 둔다 — 발행 끄기 · 켜기가 IAM
+  # 차분 없이 상자 교체 하나로 끝나게 한다.
+  statement {
+    sid       = "BroadcastPublish"
+    actions   = ["sns:Publish"]
+    resources = [var.broadcast_topic_arn]
+  }
+
+  # 사이드카 /dvr 하한 Writer(POK-525) — 판 읽기 · If-Match 묶음 쓰기(올림 ·
+  # 해제 표지). 그릇은 런타임 1단 몫이다(CONTRACT-runtime). GetKey 는 상자에서
+  # 부르는 곳이 없어 뺐고(POK-574), ListKeys · PutKey · DeleteKey 는 Writer 가
+  # 쓰지 않아 주지 않는다. 동작 이름은 서비스 승인 참조
+  # (cloudfront-keyvaluestore · 2026-11-04 대조)이고 실제 허용 · 거부는 ISB
+  # 실측 몫이다. Writer 스위치가 꺼져도 둔다 — BroadcastPublish 와 같은 까닭.
+  statement {
+    sid = "EdgeBoundsKvs"
+    actions = [
+      "cloudfront-keyvaluestore:DescribeKeyValueStore",
+      "cloudfront-keyvaluestore:UpdateKeys",
+    ]
+    resources = [var.edge_bounds_kvs_arn]
   }
 }
 

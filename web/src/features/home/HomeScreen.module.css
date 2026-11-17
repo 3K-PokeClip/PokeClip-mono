@@ -421,6 +421,8 @@
   font-size: calc(11 * var(--pc-u));
   font-weight: 750;
   letter-spacing: 0.03em;
+  /* 경과가 매초 바뀐다: 숫자 폭이 제각각이면 배지가 매초 떨린다 */
+  font-variant-numeric: tabular-nums;
 }
 
 /* 영상 위 오버레이 — 테마 불변이라 시안 raw 값 유지 */
@@ -539,7 +541,7 @@
   background: var(--pc-color-accent-hover);
 }
 
-/* ---------- 지난 방송 · VOD ---------- */
+/* ---------- 지난 방송 ---------- */
 
 .vodHeader {
   display: flex;
@@ -557,13 +559,20 @@
   color: var(--pc-color-text-muted);
 }
 
-/* 목적지 화면이 아직 없는 링크 자리 (M2) — Side 비활성 항목 선례 */
-.mutedLink {
+.vodAllLink {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(1 * var(--pc-u));
   font-size: calc(12 * var(--pc-u));
-  font-weight: 600;
+  font-weight: 650;
   color: var(--pc-color-accent-text);
-  opacity: 0.6;
+  text-decoration: none;
+}
+
+.vodAllLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .vodGrid {
@@ -572,13 +581,11 @@
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(calc(180 * var(--pc-u)), 1fr));
-  gap: calc(12 * var(--pc-u));
+  gap: calc(16 * var(--pc-u)) calc(12 * var(--pc-u));
 }
 
 .vodCard {
-  display: flex;
-  flex-direction: column;
-  gap: calc(7 * var(--pc-u));
+  min-width: 0;
 }
 
 .thumb {
@@ -597,12 +604,21 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 사진을 받는 동안 칸 전체를 덮는 반짝이는 회색(Thumb shimmer). Skeleton의 position: relative를 이기려고 두 단계로 쓴다 */
+.thumb .thumbLoading {
+  position: absolute;
+  inset: 0;
+}
+
 .overlayPillTopLeft {
   position: absolute;
   top: calc(7 * var(--pc-u));
   left: calc(7 * var(--pc-u));
   z-index: 2;
-  padding: calc(2 * var(--pc-u)) calc(7 * var(--pc-u));
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
   border-radius: calc(99 * var(--pc-u));
   background: rgb(0 0 0 / 0.6); /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
@@ -627,25 +643,121 @@
   background: rgb(0 0 0 / 0.62); /* 테마 고정 */
   font-size: calc(10 * var(--pc-u));
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: #fff; /* 테마 고정 */
 }
 
+/* 다시 보기 준비 중 — 기다리는 중임을 점이 깜빡여 말한다 */
+.vodPulse {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-point);
+  animation: pc-home-vod-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pc-home-vod-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vodPulse {
+    animation: none;
+  }
+}
+
+/* 보관이 끝난 방송 — 사진을 흑백 · 흐리게 하고 가운데 「보관 만료」. 받는 중(data-pending)의 숨김이 더 세다 */
+.vodThumbOff img {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+/* 가운데 어두운 알약 — 흐린 사진의 밝기와 상관없이 읽힌다(길이 표시와 같은 바탕) */
+.vodOffCover {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  padding: calc(3 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
+  background: rgb(0 0 0 / 0.62); /* 테마 고정 */
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 700;
+  white-space: nowrap;
+  color: #fff; /* 테마 고정 */
+}
+
+.vodNoPhoto {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+}
+
 .vodText {
+  margin-top: calc(8 * var(--pc-u));
+  min-width: 0;
   line-height: 1.35;
 }
 
 .vodTitle {
   font-size: calc(12.5 * var(--pc-u));
-  font-weight: 650;
+  font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+
+.vodUntitled {
+  color: var(--pc-color-text-muted);
+  font-weight: 600;
 }
 
 .vodMeta {
   font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
   margin-top: calc(2 * var(--pc-u));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vodStats {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(6 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.vodStatsEmpty {
+  color: var(--pc-color-text-muted);
+}
+
+.vodStat {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--pc-u));
+}
+
+.vodStat b {
+  font-weight: 750;
+  color: var(--pc-color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.vodStatCardIcon {
+  color: var(--pc-color-point);
+}
+
+.vodStatClipIcon {
+  color: var(--pc-color-accent-text);
 }
 
 /* ---------- 우측 aside 카드 공통 ---------- */
@@ -898,4 +1010,41 @@
   display: block;
   color: inherit;
   text-decoration: none;
+  border-radius: calc(10 * var(--pc-u));
+}
+
+.vodLink:focus-visible {
+  outline: 2px solid var(--pc-color-accent);
+  outline-offset: calc(3 * var(--pc-u));
+}
+
+/* ThumbnailImage의 나타나기(opacity)를 지우지 않게 함께 적는다. 이 선택자가 ThumbnailImage의 감속 모드 `.img { transition: none }`보다
+   세므로, 감속 모드 끄기도 여기서 같이 적는다 */
+.vodLink .thumb img {
+  transition:
+    opacity 0.2s ease,
+    transform 0.25s var(--pc-ease-decelerate, ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vodLink .thumb img {
+    transition: none;
+  }
+}
+
+.vodLink:hover .vodTitle {
+  color: var(--pc-color-accent-text);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .vodLink:hover .thumb img {
+    transform: scale(1.04);
+  }
+}
+
+/* 열 것이 없는 카드(보관 만료) — 눌리는 척하지 않는다. 글자는 흐리지 않는다: 제목 · 시각은 내용이라 대비(4.5:1)를 지키고,
+   만료는 흑백 사진과 「보관 만료」 알약이 말한다 */
+.vodLinkOff {
+  display: block;
+  cursor: default;
 }

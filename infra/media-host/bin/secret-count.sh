@@ -5,8 +5,9 @@
 # 사용:
 #   secret-count.sh [--passphrase] box
 #       상자에서 SSM 으로 돌린다(실행 직전 승인). 유닛 저널(pokeclip-media) ·
-#       비부착 서비스 태그 저널 셋(pokeclip-media-sidecar · -ingest-auth ·
-#       -janitor) · mediamtx · nginx 컨테이너(정지한 것 포함)의 docker logs 를
+#       비부착 서비스 태그 저널 넷(pokeclip-media-sidecar · -ingest-auth ·
+#       -janitor · -cred-relay — 마지막은 창구 켬 상자의 중계, 끔 상자에서는
+#       빈 저널) · mediamtx · nginx 컨테이너(정지한 것 포함)의 docker logs 를
 #       대조한다. 사이드카는 docker logs 가 아니라 태그 저널로 읽는다 — 엔진이
 #       다시 띄운 사이드카의 앞 컨테이너 로그까지 남는 곳이다. docker inspect ·
 #       exec · env 는 쓰지 않는다.
@@ -41,9 +42,27 @@
 # 표지가 하나도 없으면 옛 모드(위 대조만)다. 일부만 있거나, 있는 것이 시작
 # 스크립트가 쓰는 꼴 밖이면(Basic 파일은 16진 64자 한 줄 · 4C 파일은 끝
 # 줄바꿈 하나의 한 줄 · 4096바이트 이하이고 값은 시작 스크립트
-# read_resolve_token 이 받는 꼴 — 빈 값 · None · 제어 문자(C1 포함) · 앞뒤
+# read_token_secret 이 받는 꼴 — 빈 값 · None · 제어 문자(C1 포함) · 앞뒤
 # 공백 없음 · 잠금 줄은 「  키: '16진 64자'」 정확히 한 줄씩 · 링크 아님)
-# 실패다. ssm 은 넷도 대조하지 않는다(한계 — 같은 까닭). 대조는
+# 실패다. ssm 은 넷도 대조하지 않는다(한계 — 같은 까닭).
+#
+# box 60일 만료 창구 토큰(두 모드): 시작 스크립트가 RUNTIME_DIR/clip-expiry/
+# token 에 둔 파일(사이드카가 clip 에 싣는 토큰)이 있으면 원문과 slog JSON
+# 꼴(4C 토큰과 같은 규칙 — 원문과 다를 때만)을 더 대조한다. 없으면(만료 끔 ·
+# 받기 실패) 더하지 않는다. 있는데 꼴 밖이면(4C 파일과 같은 꼴 · 파일이나
+# 디렉터리가 링크) 실패다. ssm 은 대조하지 않는다(한계 — 같은 까닭).
+#
+# box IMDS 대리 창구(창구 켬 상자): 시작 스크립트가 RUNTIME_DIR/cred-relay/
+# <호출자>(indexer · janitor)에 둔 중계 토큰(16진 64자 · 끝 줄바꿈 없음 — 소비자
+# 사본과 같은 값)이 둘 다 있으면 켬으로 보고, 두 토큰과 「지금」 역할 자격의
+# 비밀 키 · 세션 토큰(호스트 aws CLI 의 configure export-credentials —
+# 중계가 IMDS 에서 받는 것과 같은 역할 자격. 원천은 인스턴스 역할로 고정하고
+# 값은 표준 출력으로만 받는다)을
+# 더 대조한다. 둘 다 없으면(끔 상자 · 정지 뒤) 더하지 않고 자격도 받지 않는다.
+# 하나만 있거나 꼴 밖이면(일반 파일 아님 · 파일이나 디렉터리가 링크) 실패다.
+# 한계: 대조는 실행 시점의 자격 한 벌뿐이다 — 그 전에 교대된 자격이 로그에
+# 남았는지는 못 센다(그 몫은 중계 코드의 카나리아 누설 시험). ssm 은 둘 다
+# 대조하지 않는다(같은 까닭). 대조는
 # `printf '%s\n' … | LC_ALL=C grep -a -F -c -f - <파일>` 로만 한다 — 값은 표준
 # 입력으로만 grep 에 가고, 바이너리 · 깨진 바이트가 섞인 로그도 줄 단위로
 # 센다. 대조할 입력은 스크래치 파일(0600)에 먼저 받고 끝나면 지운다.
@@ -54,7 +73,12 @@
 #                                api-pass(box — 비밀번호 파일 없음 · 못 읽음 ·
 #                                파일 전체가 16진 64자 한 줄이 아님) ·
 #                                ingest-auth(box — 응답기 표지 일부만 · 꼴 밖 ·
-#                                못 읽음) ·
+#                                못 읽음) · clip-expiry(box — 만료 토큰 파일
+#                                꼴 밖 · 링크 · 못 읽음) ·
+#                                cred-relay(box — 중계 토큰 하나만 · 꼴 밖 ·
+#                                링크 · 못 읽음) · role-cred(box 창구 켬 —
+#                                역할 자격을 못 받음 · 비밀 키나 세션 토큰
+#                                줄이 하나가 아님 · 꼴 밖) ·
 #                                scratch · journal · mediamtx · nginx ·
 #                                docker-logs ·
 #                                ssm-command · ssm-list · ssm-status ·
@@ -74,7 +98,8 @@ ulimit -c 0
 # 비밀 · 그것이 든 원문을 담는 변수 이름이 부모 환경에서 export 된 채 들어오면
 # local 이 그 속성을 이어받아 자식(grep · wc · tail · base64) 환경에 값이
 # 실린다 — 쓰기 전에 지운다.
-unset -v values value first pass basic raw token found line locks
+unset -v values value first pass basic raw token found line locks \
+  expiry_token relay_token role_secret role_session rest
 
 BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly BIN_DIR
@@ -83,7 +108,7 @@ source "${BIN_DIR}/lib/ops.sh"
 
 readonly UNIT_NAME='pokeclip-media'
 readonly DETACHED_TAGS=(pokeclip-media-sidecar pokeclip-media-ingest-auth
-  pokeclip-media-janitor)
+  pokeclip-media-janitor pokeclip-media-cred-relay)
 readonly ATTACHED_SERVICES=(mediamtx nginx)
 readonly COMMAND_ID_PATTERN='^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
 readonly INSTANCE_ID_PATTERN='^i-[0-9a-f]{8,17}$'
@@ -110,6 +135,35 @@ readonly RESOLVE_TOKEN_MAX_BYTES=4096
 readonly RENDER_NAME='mediamtx.yml'
 readonly RENDER_MAX_BYTES=1048576
 readonly LOCK_KEYS=(srtPublishPassphrase srtReadPassphrase)
+# 60일 만료 창구 토큰(시작 스크립트 lib/clip_expiry.sh 와 같은 이름 · 꼴): 디렉터리
+# · 파일 이름 · 파일 크기 상한(사이드카 secretfile 과 같다).
+readonly CLIP_EXPIRY_DIR_NAME='clip-expiry'
+readonly CLIP_EXPIRY_TOKEN_NAME='token'
+readonly CLIP_EXPIRY_TOKEN_MAX_BYTES=4096
+# IMDS 대리 창구(시작 스크립트 lib/cred_relay.sh 와 같은 이름 · 꼴): 중계 토큰
+# 디렉터리 · 호출자(디렉터리 안 파일 이름) · 토큰 꼴(16진 64자 · 끝 줄바꿈
+# 없음 — 파일 크기가 곧 64).
+readonly CRED_RELAY_DIR_NAME='cred-relay'
+readonly CRED_RELAY_CALLERS=(indexer janitor)
+readonly CRED_RELAY_TOKEN_PATTERN='^[0-9a-f]{64}$'
+readonly CRED_RELAY_TOKEN_BYTES=64
+# 역할 자격 값(aws configure export-credentials --format env-no-export 의 「이름=
+# 값」 줄)의 이름 · 꼴. 값은 base64 글자이고, 비밀 키는 40자 · 세션 토큰은 그보다
+# 길다 — 40자 미만은 꼴 밖이다(짧은 값이 남의 줄에 우연히 맞지 않게).
+readonly ROLE_SECRET_NAME='AWS_SECRET_ACCESS_KEY'
+readonly ROLE_SESSION_NAME='AWS_SESSION_TOKEN'
+readonly ROLE_CRED_PATTERN='^[A-Za-z0-9/+=]{40,}$'
+# 역할 자격의 원천을 인스턴스 역할(IMDS — 중계가 받는 곳) 아닌 곳으로 바꾸는
+# 환경 변수 — AWS CLI 기본 자격 체인의 앞 단계(환경 자격 · 프로필 · 컨테이너
+# 자격 · 웹 ID)와 IMDS 주소. export-credentials 호출 하나에서만 지우고 설정 ·
+# 자격 파일은 /dev/null 로 둔다(비밀 읽기는 그대로 — 어느 자격으로 읽어도 값이
+# 같다). IMDS 끔(AWS_EC2_METADATA_DISABLED)은 남긴다 — 자격을 못 받아 role-cred
+# 로 드러난다.
+readonly ROLE_CRED_SOURCE_ENV=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE
+  AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+  AWS_WEB_IDENTITY_TOKEN_FILE AWS_EC2_METADATA_SERVICE_ENDPOINT
+  AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE)
 # slog JSON 처리기가 문자열에서 이스케이프하는 것 중 4C 꼴 안에 들 수 있는 것과
 # 그 꼴(Go log/slog json_handler.go appendEscapedJSONString — 「\」 를 맨
 # 앞에 둔다: 뒤에서 넣는 역슬래시를 다시 바꾸지 않게). 같은 자리끼리 짝이다.
@@ -252,21 +306,22 @@ add_api_pass_values() {
 }
 
 #######################################
-# 4C 토큰 파일(값 + 끝 줄바꿈 하나 — 4096바이트 이하)의 값을 낸다. 값의 꼴은
-# 시작 스크립트 read_resolve_token 과 같다 — 빈 값 · None(aws text 출력의 빈
+# 머리글 토큰 파일(4C 토큰 · 만료 토큰 — 값 + 끝 줄바꿈 하나 · 상한 바이트
+# 이하)의 값을 낸다. 값의 꼴은
+# 시작 스크립트 read_token_secret 과 같다 — 빈 값 · None(aws text 출력의 빈
 # 값) · 제어 문자(줄바꿈 · 탭 포함) · C1 제어 문자(U+0080–U+009F 의 UTF-8 두
 # 바이트) · 앞뒤 공백은 꼴 밖이다.
 # Arguments:
-#   상한(초), 파일.
+#   상한(초), 파일, 크기 상한(바이트).
 # Outputs:
 #   토큰(표준 출력 — 줄바꿈 없이).
 # Returns:
 #   0 냄 / 1 파일 없음 · 못 읽음 · 꼴 밖.
 #######################################
-read_resolve_token() {
+read_header_token() {
   local raw token LC_ALL=C
   local c1=$'\xc2['$'\x80''-'$'\x9f'']'
-  raw="$(read_capped "$1" "$2" "${RESOLVE_TOKEN_MAX_BYTES}")" || return 1
+  raw="$(read_capped "$1" "$2" "$3")" || return 1
   token="${raw%$'\n'x}"
   [[ "${raw}" == "${token}"$'\n'x ]] || return 1
   if [[ -z "${token}" || "${token}" == None || "${token}" == *[[:cntrl:]]* \
@@ -372,10 +427,139 @@ add_ingest_auth_values() {
   (( marks == 4 )) || return 1
   pass="$(read_credential "${limit}" "${basic_file}")" || return 1
   basic="$(basic_value "${INGEST_AUTH_BASIC_USER}" "${pass}")" || return 1
-  token="$(read_resolve_token "${limit}" "${resolve_file}")" || return 1
+  token="$(read_header_token "${limit}" "${resolve_file}" \
+    "${RESOLVE_TOKEN_MAX_BYTES}")" || return 1
   values+=("${pass}" "${basic}" "${token}" "${locks[@]}")
   value="$(json_escaped "${token}")"
   [[ "${value}" == "${token}" ]] || values+=("${value}")
+}
+
+#######################################
+# 만료 토큰 파일이 있으면 그 토큰(원문과 다르면 그 JSON 꼴도)을 대조 값(main
+# 의 지역 배열 values)에 더한다. 파일도 링크도 없으면 더하지 않는다(만료 끔 ·
+# 받기 실패 — 시작 스크립트는 받기 전에 앞 토큰을 지운다). 디렉터리가 링크면
+# 받지 않는다(시작 스크립트도 그 자리에 쓰지 않는다).
+# Globals:
+#   RUNTIME_DIR, values(main 의 지역 — 동적 범위)
+# Arguments:
+#   상한(초).
+# Returns:
+#   0 더함 · 파일 없음 / 1 링크 · 꼴 밖 · 못 읽음.
+#######################################
+add_clip_expiry_values() {
+  local dir="${RUNTIME_DIR:-/run/pokeclip-media}/${CLIP_EXPIRY_DIR_NAME}"
+  local file expiry_token value
+  file="${dir}/${CLIP_EXPIRY_TOKEN_NAME}"
+  [[ ! -L "${dir}" ]] || return 1
+  [[ -e "${file}" || -L "${file}" ]] || return 0
+  expiry_token="$(read_header_token "$1" "${file}" \
+    "${CLIP_EXPIRY_TOKEN_MAX_BYTES}")" || return 1
+  values+=("${expiry_token}")
+  value="$(json_escaped "${expiry_token}")"
+  [[ "${value}" == "${expiry_token}" ]] || values+=("${value}")
+}
+
+#######################################
+# 중계 토큰 파일(「16진 64자」 — 끝 줄바꿈 없이 파일 전체)의 값을 낸다.
+# Arguments:
+#   상한(초), 파일.
+# Outputs:
+#   16진 64자(표준 출력 — 줄바꿈 없이).
+# Returns:
+#   0 냄 / 1 파일 없음 · 링크 · 못 읽음 · 꼴 밖.
+#######################################
+read_relay_token() {
+  local raw relay_token
+  raw="$(read_capped "$1" "$2" "${CRED_RELAY_TOKEN_BYTES}")" || return 1
+  relay_token="${raw%x}"
+  [[ "${relay_token}" =~ ${CRED_RELAY_TOKEN_PATTERN} ]] || return 1
+  printf '%s' "${relay_token}"
+}
+
+#######################################
+# 지금 역할 자격의 비밀 키 · 세션 토큰을 대조 값(main 의 지역 배열 values)에
+# 더한다. aws configure export-credentials(env-no-export — 「이름=값」 줄)의
+# 표준 출력으로만 받는다(argv · 환경 · 파일에 값을 올리지 않는다). 원천은
+# 인스턴스 역할로 고정한다(ROLE_CRED_SOURCE_ENV 를 지우고 설정 · 자격 파일은
+# /dev/null — 이름과 경로만 argv 에 오른다). 값의 NUL 은
+# 다른 제어 문자로 바꿔 꼴 검사에 걸리게 한다(ops::read_secret 과 같다). 두
+# 이름의 줄이 각각 정확히 하나이고 값이 꼴 안이어야 한다.
+# Globals:
+#   values(main 의 지역 — 동적 범위)
+# Arguments:
+#   상한(초).
+# Returns:
+#   0 더함 / 1 못 받음 · 꼴 밖.
+#######################################
+add_role_cred_values() {
+  local rest line role_secret="" role_session="" secrets=0 sessions=0 name
+  local pin=()
+  for name in "${ROLE_CRED_SOURCE_ENV[@]}"; do
+    pin+=(-u "${name}")
+  done
+  pin+=(AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null)
+  rest="$({ ops::bounded "$1" env "${pin[@]}" aws configure \
+    export-credentials --format env-no-export </dev/null 2>/dev/null \
+    && printf x; } | LC_ALL=C tr '\000' '\001')" || return 1
+  [[ "${rest}" == *x ]] || return 1
+  rest="${rest%x}"
+  while [[ -n "${rest}" ]]; do
+    line="${rest%%$'\n'*}"
+    if [[ "${rest}" == *$'\n'* ]]; then
+      rest="${rest#*$'\n'}"
+    else
+      rest=""
+    fi
+    case "${line}" in
+      "${ROLE_SECRET_NAME}="*)
+        role_secret="${line#*=}"
+        secrets=$((secrets + 1))
+        ;;
+      "${ROLE_SESSION_NAME}="*)
+        role_session="${line#*=}"
+        sessions=$((sessions + 1))
+        ;;
+    esac
+  done
+  unset line
+  if (( secrets != 1 || sessions != 1 )) \
+    || [[ ! "${role_secret}" =~ ${ROLE_CRED_PATTERN} \
+    || ! "${role_session}" =~ ${ROLE_CRED_PATTERN} ]]; then
+    return 1
+  fi
+  values+=("${role_secret}" "${role_session}")
+}
+
+#######################################
+# 창구 켬 상자면(중계 토큰 둘이 있음) 두 토큰과 지금 역할 자격(비밀 키 · 세션
+# 토큰)을 대조 값(main 의 지역 배열 values)에 더한다. 둘 다 없으면(끔 상자 ·
+# 정지 뒤) 더하지 않는다. 디렉터리가 링크면 받지 않는다(시작 스크립트도 그
+# 자리에 쓰지 않는다).
+# Globals:
+#   RUNTIME_DIR, step, values(main 의 지역 — 동적 범위)
+# Arguments:
+#   상한(초).
+# Returns:
+#   0 더함 · 끔 / 1 실패(단계는 step — cred-relay · role-cred).
+#######################################
+add_cred_relay_values() {
+  local dir="${RUNTIME_DIR:-/run/pokeclip-media}/${CRED_RELAY_DIR_NAME}"
+  local caller file present=0 relay_token
+  step=cred-relay
+  [[ ! -L "${dir}" ]] || return 1
+  for caller in "${CRED_RELAY_CALLERS[@]}"; do
+    file="${dir}/${caller}"
+    [[ ! -e "${file}" && ! -L "${file}" ]] || present=$((present + 1))
+  done
+  (( present == 0 )) && return 0
+  # 하나만 있으면 빠진 쪽 읽기가 실패한다.
+  for caller in "${CRED_RELAY_CALLERS[@]}"; do
+    relay_token="$(read_relay_token "$1" "${dir}/${caller}")" || return 1
+    values+=("${relay_token}")
+  done
+  unset relay_token
+  step=role-cred
+  add_role_cred_values "$1"
 }
 
 #######################################
@@ -511,6 +695,8 @@ main() {
   if [[ "${mode}" == box ]]; then
     add_api_pass_values "${limit}" || fail api-pass
     add_ingest_auth_values "${limit}" || fail ingest-auth
+    add_clip_expiry_values "${limit}" || fail clip-expiry
+    add_cred_relay_values "${limit}" || fail "${step}"
   fi
   ops::make_scratch || fail scratch
   input="${ops_scratch}/input"

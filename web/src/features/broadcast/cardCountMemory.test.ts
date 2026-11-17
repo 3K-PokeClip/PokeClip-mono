@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { vodListQueryOptions } from '@/features/broadcast/vod/useVodListMockState';
 import { homeQueryOptions } from '@/features/home/useHomeMockState';
 import { forgetCardCount } from './cardCountMemory';
+import { FRESH_ROW_VOD } from './vod/vodRoundBadge';
 
 // 키가 어긋나면 지우기가 조용히 빗나간다: 두 화면의 진짜 쿼리 키로 시험한다
 
-const row = { cardCount: 7, countedAt: 1, recorded: true, missing: false };
+const row = { cardCount: 7, countedAt: 1, vod: { ...FRESH_ROW_VOD, badge: 'none', askedAt: 1 } };
 
 function seeded() {
   const client = new QueryClient();
@@ -35,9 +36,9 @@ describe('forgetCardCount', () => {
     forgetCardCount(client, 'target');
 
     const vod = client.getQueryData(vodKey) as unknown as {
-      memory: Record<string, { cardCount: number | null; recorded: boolean }>;
+      memory: Record<string, { cardCount: number | null; vod: { badge: string } }>;
     };
-    expect(vod.memory.target).toMatchObject({ cardCount: null, recorded: true });
+    expect(vod.memory.target).toMatchObject({ cardCount: null, vod: { badge: 'none' } });
     expect(vod.memory.other?.cardCount).toBe(7);
     const home = client.getQueryData(homeKey) as unknown as {
       memory: { cardCounts: Record<string, unknown> };

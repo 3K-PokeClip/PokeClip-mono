@@ -16,6 +16,7 @@ import com.pokeclip.render.recipe.Recipe;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
 import com.pokeclip.render.recipe.Recipe.Output;
 import com.pokeclip.render.recipe.Recipe.SubtitleSegment;
+import com.pokeclip.render.report.ClipReporter.ResultLayout;
 import com.pokeclip.render.storage.S3Store;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +36,9 @@ import javax.imageio.ImageIO;
 /**
  * 주문서 하나로 산출물 파일을 만든다. 받기 → 소스 검사 → 잇기 → 소리 재기 → output마다 렌더.
  * 올리기·보고는 부른 쪽({@link JobProcessor}) 몫이다. 여기는 파일만 만든다.
+ *
+ * <p>렌더 계획이 실린 새 꼴 주문({@link JobEnvelope#plan()} 이 있음)은 {@link JoinedRenderer} 가 맡는다(PDT 설계 r7 7.5 · 13.5).
+ * 옛 꼴 주문은 아래 옛 경로 그대로다 — 두 경로는 계획 칸 하나로만 갈리고 서로의 명령을 쓰지 않는다.
  */
 public class ClipRenderer {
 
@@ -49,6 +53,7 @@ public class ClipRenderer {
     private final ObjectMapper mapper;
     private final String ffmpeg;
     private final String fontsDir;
+    private final JoinedRenderer joined;
 
     public ClipRenderer(S3Store store, MediaProbe probe, ProcessRunner runner, ObjectMapper mapper, String ffmpeg,
                         String fontsDir) {
@@ -58,10 +63,21 @@ public class ClipRenderer {
         this.mapper = mapper;
         this.ffmpeg = ffmpeg;
         this.fontsDir = fontsDir;
+        this.joined = new JoinedRenderer(store, probe, runner, mapper, ffmpeg, fontsDir);
     }
 
     /** 만든 파일 하나. {@code kind}는 계약1 result의 video|srt. */
     public record Produced(String outputId, String kind, Path file) {
+    }
+
+    /**
+     * 렌더 한 번의 결과. {@code layout} 은 새 꼴 주문의 결과 배치(보고 {@code placements} · {@code lengthUs})이고 옛 꼴은 null 이다.
+     */
+    public record Rendered(List<Produced> files, ResultLayout layout) {
+
+        public Rendered {
+            files = List.copyOf(files);
+        }
     }
 
     /** 진행 알림. 부른 쪽이 5초 간격으로 걸러 보고한다. */
@@ -70,7 +86,14 @@ public class ClipRenderer {
         void report(int percent, String stage);
     }
 
-    public List<Produced> render(JobEnvelope job, Path dir, Instant deadline, Progress progress) {
+    public Rendered render(JobEnvelope job, Path dir, Instant deadline, Progress progress) {
+        if (job.plan() != null) {
+            return joined.render(job, dir, deadline, progress);
+        }
+        return new Rendered(renderLegacy(job, dir, deadline, progress), null);
+    }
+
+    private List<Produced> renderLegacy(JobEnvelope job, Path dir, Instant deadline, Progress progress) {
         Recipe recipe = job.recipe();
         List<SourceSegment> sources = job.sources();
         checkRange(sources, recipe.cut());

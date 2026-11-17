@@ -7,9 +7,11 @@ import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
   fetchBroadcast,
+  fetchBroadcastTimeline,
   forgetBroadcastRows,
   fetchJumpCard,
   fetchLibraryAll,
+  forgetLibraryList,
   libraryQueryOptions,
   mediaStreamId,
   openJumpCard,
@@ -196,6 +198,24 @@ describe('방송 목록 쪽 넘기기', () => {
   });
 });
 
+describe('fetchBroadcastTimeline: 받은 signal로 요청을 끊는다(POK-552)', () => {
+  it('부른 쪽이 읽기를 버리면 나간 요청도 끊긴다: 답만 버리면 요청은 clip · 수집기까지 끝까지 돈다', async () => {
+    const spy = stubFetch(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+    const ctrl = new AbortController();
+    const read = fetchBroadcastTimeline('s1', ctrl.signal);
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+    ctrl.abort();
+    await expect(read).rejects.toBeTruthy();
+    expect(spy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  });
+});
+
 describe('openJumpCard: 열기 기록 실패는 삼킨다(POK-393)', () => {
   // 측정 재료 하나 때문에 편집을 막지 않는다: 부르는 쪽은 결과를 기다리지 않으므로 거부가 새면 처리 안 된 거부가 된다
   it('서버가 503을 줘도 거부 없이 끝난다', async () => {
@@ -260,11 +280,20 @@ describe('카드 가리기 · 되살리기 (POK-463)', () => {
 });
 
 describe('broadcastTitle — 방송을 보일 이름(POK-259)', () => {
-  it('치지직 제목이 있으면 앞뒤 공백을 깎아 쓰고, 없거나 비면 방송 번호다', () => {
-    expect(broadcastTitle({ streamId: 'S-1', title: '  롤 랭크 ' })).toBe('롤 랭크');
-    expect(broadcastTitle({ streamId: 'S-1', title: '   ' })).toBe('S-1');
-    expect(broadcastTitle({ streamId: 'S-1', title: null })).toBe('S-1');
-    expect(broadcastTitle({ streamId: 'S-1' })).toBe('S-1');
+  it('치지직 제목이 있으면 앞뒤 공백을 깎아 쓴다', () => {
+    expect(broadcastTitle({ title: '  롤 랭크 ' })).toBe('롤 랭크');
+  });
+
+  it('제목이 없거나 비거나 공백뿐이면 null 이다: 세션 ID 를 제목 자리에 쓰지 않는다', () => {
+    // 서버 줄에는 세션 ID 가 같이 온다. 그 줄을 그대로 넘겨도 세션 ID 로 물러서지 않아야 한다
+    const rows = [
+      { streamId: 'S-20261116-1200-key-1', title: null },
+      { streamId: 'S-20261116-1200-key-1', title: '' },
+      { streamId: 'S-20261116-1200-key-1', title: '   ' },
+      { streamId: 'S-20261116-1200-key-1' },
+    ];
+
+    expect(rows.map((row) => broadcastTitle(row))).toEqual([null, null, null, null]);
   });
 });
 
@@ -551,6 +580,48 @@ describe('보관함 목록 쿼리: 탭으로 돌아올 때', () => {
 
     unsubscribe();
     client.unmount();
+    client.clear();
+  });
+});
+
+describe('forgetLibraryList', () => {
+  it('보고 있는 보관함 목록은 다시 읽고, 안 보이는 목록은 버린다', async () => {
+    // 카드 저장이 끝나기 전에 보관함으로 옮기면 목록이 먼저 떠 있다: 버리기만 하면 그 관찰자는 다시 읽지 않았다(PR #480 2차 리뷰)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const reads = vi.fn(async () => ['편집본']);
+    const observer = new QueryObserver(client, { queryKey: ['library', 1], queryFn: reads });
+    const unsubscribe = observer.subscribe(() => undefined);
+    // 첫 읽기가 끝난 뒤라야 한다: 데이터가 없는 채 진행 중이면 무효화가 그 읽기를 같이 쓴다
+    await vi.waitFor(() => expect(client.getQueryData(['library', 1])).toEqual(['편집본']));
+    client.setQueryData(['library', 2], ['다른 채널']);
+
+    forgetLibraryList(client);
+
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
+    expect(client.getQueryState(['library', 1])).toBeDefined();
+    expect(client.getQueryState(['library', 2])).toBeUndefined();
+    unsubscribe();
+    client.clear();
+  });
+
+  it('첫 읽기가 걸려 있으면 그 읽기를 접고 다시 읽는다 — 저장 전에 나간 요청의 옛 목록이 서지 않게', async () => {
+    // 받아 둔 데이터 없이 읽는 중인 쿼리는 다시 읽으라 해도 그 요청을 같이 썼다(PR #480 3차 리뷰)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const answers: ((list: string[]) => void)[] = [];
+    const reads = vi.fn(() => new Promise<string[]>((resolve) => answers.push(resolve)));
+    const observer = new QueryObserver(client, { queryKey: ['library', 1], queryFn: reads });
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+
+    forgetLibraryList(client);
+
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
+    answers[0]!([]); // 저장 전에 나간 요청 — 새 편집본이 없다
+    answers[1]!(['편집본']);
+    await vi.waitFor(() => expect(client.getQueryData(['library', 1])).toEqual(['편집본']));
+    // 접은 읽기가 오류로 보이지 않는다
+    expect(observer.getCurrentResult().isError).toBe(false);
+    unsubscribe();
     client.clear();
   });
 });

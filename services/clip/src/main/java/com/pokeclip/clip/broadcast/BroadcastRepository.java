@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -142,4 +143,19 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
              ORDER BY started_at DESC NULLS LAST, id DESC
             """, nativeQuery = true)
     List<Broadcast> findLiveByStreamerId(@Param("streamerId") String streamerId);
+
+    /** 썸네일 카드 묶음의 방송들(POK-196 S-c4 — 카드 장면이 방송의 회차를 고른다). 없는 번호는 결과에 없다. */
+    List<Broadcast> findByStreamIdIn(Collection<String> streamIds);
+
+    /**
+     * 방송 중인 방송, 최근 시작 순으로 {@code limit} 개까지(라이브 사진 순회). 시작 시각이 없는 줄은 안 본다(회차도 시간창도
+     * 못 고른다). develop 라이브 사진 질의의 방송 조건 그대로다.
+     */
+    @Query(value = """
+            SELECT * FROM broadcasts
+             WHERE status = 'live' AND started_at IS NOT NULL
+             ORDER BY started_at DESC
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<Broadcast> findLiveStarted(@Param("limit") int limit);
 }

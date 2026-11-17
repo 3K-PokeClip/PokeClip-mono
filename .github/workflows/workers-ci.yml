@@ -16,6 +16,8 @@ on:
     paths:
       - 'workers/**'
       - '.github/workflows/workers-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
+      # 렌더 시험이 services의 공유 시험 표를 읽는다(SharedTimelineCases). 표만 고친 PR도 렌더 시험을 돌린다.
+      - 'services/ledger-timeline/src/test/resources/ledger-timeline-cases.json'
 
 permissions:
   contents: read
@@ -27,19 +29,27 @@ concurrency:
 jobs:
   test:
     name: test (${{ matrix.worker }})
-    runs-on: ubuntu-latest
-    # 실측(2026-10-16, 두 번): render 2분~2분 30초 · upload 1분~1분 45초(꾸러미 설치 포함). 네 배쯤으로 둔다.
-    timeout-minutes: 10
+    runs-on: ${{ matrix.runner }}
+    # 실측(2026-11-11, PR-A 3553cbb7): render 6분 3초 · upload 1분 38초(꾸러미 설치 포함). 렌더의 두 배 반쯤으로 둔다.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
           # 패키지는 각 일꾼 Dockerfile과 같게 둔다. 렌더는 자막의 한글 글꼴(fonts-noto-cjk)이
           # 있어야 libass가 네모 대신 글자를 찍는다. 업로드는 자막을 태우지 않는다.
+          # 렌더는 이미지와 같은 ffmpeg 판으로 시험한다(PDT 설계 7.7). 러너를 이미지 기반(Ubuntu
+          # 26.04)·운영(arm64)과 같게 두고, Dockerfile의 FFMPEG_PACKAGES(ffmpeg와 같은 소스의
+          # 라이브러리 7개 포함) 꾸러미마다 FFMPEG_VERSION 판을 붙여 깐다. 판 글자와 목록은
+          # Dockerfile 한 곳이다. 아카이브가 이 판을 내리면 이미지 빌드처럼 여기서도 설치가 실패해 멈춘다.
           - worker: render
-            packages: ffmpeg fonts-noto-cjk
+            runner: ubuntu-26.04-arm
+            pins-ffmpeg: true
+            packages: fonts-noto-cjk
             burns-subtitles: true
           - worker: upload
+            runner: ubuntu-latest
+            pins-ffmpeg: false
             packages: ffmpeg
             burns-subtitles: false
     defaults:
@@ -60,11 +70,42 @@ jobs:
 
       - name: ffmpeg 설치
         run: |
+          pinned=()
+          if [[ "${{ matrix.pins-ffmpeg }}" == true ]]; then
+            version=$(sed -n 's/^ARG FFMPEG_VERSION=//p' Dockerfile)
+            packages=$(sed -n 's/^ARG FFMPEG_PACKAGES="\(.*\)"$/\1/p' Dockerfile)
+            if [[ -z "$version" || -z "$packages" ]]; then
+              echo "Dockerfile에서 ARG FFMPEG_VERSION · FFMPEG_PACKAGES를 못 읽었다" >&2
+              exit 1
+            fi
+            for p in $packages; do
+              pinned+=("$p=$version")
+            done
+          fi
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ${{ matrix.packages }}
-          # head 대신 sed로 첫 줄만 찍는다. 기본 셸이 pipefail이라 head가 먼저 끝나면 ffmpeg가 SIGPIPE로
+          sudo apt-get install -y --no-install-recommends "${pinned[@]}" ${{ matrix.packages }}
+          # head 대신 sed로 첫 줄만 받는다. 기본 셸이 pipefail이라 head가 먼저 끝나면 ffmpeg가 SIGPIPE로
           # 죽어 단계가 실패할 수 있다(sed는 끝까지 읽는다).
-          ffmpeg -hide_banner -version | sed -n 1p
+          first=$(ffmpeg -hide_banner -version | sed -n 1p)
+          echo "$first"
+          if [[ "${{ matrix.pins-ffmpeg }}" == true ]]; then
+            # 이미지 빌드와 같은 검사다(awk 프로그램은 Dockerfile과 글자가 같아야 한다 — RenderImagePinTest).
+            # 목록의 꾸러미가 다 깔렸는지, ffmpeg 소스 꾸러미 중 판이 다른 것이 없는지 본다.
+            dpkg-query -W -f '${db:Status-Abbrev} ${source:Package} ${Package} ${Version}\n' \
+              | awk -v want="$version" -v need="$packages" '
+                  BEGIN { if (want == "" || split(need, list, " ") == 0) { print "판 글자나 꾸러미 목록이 비었다"; bad = 1; exit }
+                          for (i in list) needed[list[i]] = 1 }
+                  $1 != "ii" { next }
+                  $2 == "ffmpeg" && $4 != want { print "판이 다른 ffmpeg 꾸러미: " $3 " " $4; bad = 1 }
+                  $3 in needed { seen[$3] = 1 }
+                  END { for (p in needed) if (!(p in seen)) { print "안 깔린 ffmpeg 꾸러미: " p; bad = 1 } exit bad }'
+            # 시험이 부르는 것은 PATH의 ffmpeg다. 그 실행 파일이 찍는 판도 본다. 배포판 빌드는 꾸러미 판에서
+            # 앞 epoch(「7:」)를 뺀 글자를 판으로 굳힌다.
+            if [[ "$first" != "ffmpeg version ${version#*:} "* ]]; then
+              echo "PATH의 ffmpeg 판이 Dockerfile 판(${version#*:})과 다르다: $first" >&2
+              exit 1
+            fi
+          fi
 
       - name: 자막 태우기(libass) 확인
         if: matrix.burns-subtitles

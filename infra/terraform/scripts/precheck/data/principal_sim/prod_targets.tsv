@@ -7,8 +7,9 @@
 # 첫 단계 = 그 자원을 만드는 루트를 apply 하는 단계(런북 단계 표 ·
 # stage_actions 의 출처 주석): bootstrap · secrets = 5, network = O7a,
 # certs = O7b, registry = O7c, runtime = runtime-1a(rewind 행만 예외 —
-# 그 행 위 주석), platform = O7d, media = O7e, edge = O7f, records = 8. 그
-# 단계부터 뒤 단계마다 묻는다. 추가 문맥 값 ${ACM_VALIDATION} 은 prod ACM
+# 그 행 위 주석), platform = O7d, media = O7e, edge = O7f, workers =
+# workers(POK-408), records = 8. 그 단계부터 뒤 단계마다 묻는다. 추가 문맥
+# 값 ${ACM_VALIDATION} 은 prod ACM
 # 검증 레코드 이름 자리다(prod/certs 덩어리 주석).
 # 상태 객체 키 = 각 루트 backend.hcl.example 의 key, 상태 버킷 이름 =
 # prod/bootstrap 의 state_bucket_name 기본값.
@@ -50,7 +51,9 @@
 #     않는다. Environment = prod 태그라 secrets · network-sg 행이 이미 푼다.
 
 # 상태 버킷 · 상태 객체(루트마다 · 같은 버킷 정책을 읽는다 — platform ·
-# media 는 POK-460)
+# media 는 POK-460). 런타임 2단(prod/runtime-2)은 edge apply 뒤 O7f 안에서
+# apply 해 첫 단계가 O7f 다(edge-tests 런북 「O7f 순서」 의 6). 일꾼
+# 배치(prod/workers — POK-408)는 자기 단계 workers 가 첫 단계다.
 state-bucket	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2	bucket	ap-northeast-2	s3:ListBucket,s3:PutBucketPolicy,s3:DeleteBucketPolicy,s3:DeleteBucket	s3	-
 state-object-bootstrap	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/bootstrap/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-secrets	5	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/secrets/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
@@ -61,6 +64,8 @@ state-object-runtime	runtime-1a	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/pro
 state-object-platform	O7d	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/platform/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-media	O7e	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/media/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-edge	O7f	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/edge/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-runtime-2	O7f	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/runtime-2/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
+state-object-workers	workers	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/workers/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 state-object-records	8	arn:arn:aws:s3:::pokeclip-tfstate-prod-apne2/prod/records/terraform.tfstate	object	ap-northeast-2	s3:GetObject,s3:PutObject,s3:DeleteObject	s3	-
 
 # 비밀 pokeclip/prod/* · ECR pokeclip-prod/*
@@ -68,6 +73,8 @@ secrets	5	tag:secretsmanager:secret	secret	ap-northeast-2	secretsmanager:GetSecr
 ecr-repository	O7c	tag:ecr:repository	repository	ap-northeast-2	ecr:PutImage,ecr:BatchDeleteImage,ecr:SetRepositoryPolicy,ecr:DeleteRepositoryPolicy,ecr:DeleteRepository,ecr:TagResource,ecr:UntagResource	ecr	-
 
 # prod/network — 태그 없는 기본 네트워크 자원은 범위 밖(결정 3)
+# network-sg 는 태그 해석(Environment = prod 인 SG 전부)이라 인터페이스
+# 엔드포인트 SG(<name>-vpce — POK-408 설계 3-1)도 덮는다.
 network-sg	O7a	tag:ec2:security-group	security-group	ap-northeast-2	ec2:AuthorizeSecurityGroupIngress,ec2:AuthorizeSecurityGroupEgress,ec2:RevokeSecurityGroupIngress,ec2:RevokeSecurityGroupEgress,ec2:DeleteSecurityGroup,ec2:CreateTags,ec2:DeleteTags	none	-
 network-vpc	O7a	tag:ec2:vpc	vpc	ap-northeast-2	ec2:DeleteVpc,ec2:ModifyVpcAttribute,ec2:CreateTags,ec2:DeleteTags	none	-
 network-subnet	O7a	tag:ec2:subnet	subnet	ap-northeast-2	ec2:DeleteSubnet,ec2:AssociateRouteTable,ec2:CreateTags,ec2:DeleteTags	none	-
@@ -75,6 +82,11 @@ network-route-table	O7a	tag:ec2:route-table	route-table	ap-northeast-2	ec2:Creat
 network-igw	O7a	tag:ec2:internet-gateway	internet-gateway	ap-northeast-2	ec2:DetachInternetGateway,ec2:DeleteInternetGateway,ec2:CreateTags,ec2:DeleteTags	none	-
 network-nat	O7a	tag:ec2:natgateway	natgateway	ap-northeast-2	ec2:DeleteNatGateway,ec2:CreateTags,ec2:DeleteTags	none	-
 network-eip	O7a	tag:ec2:elastic-ip	elastic-ip	ap-northeast-2	ec2:ReleaseAddress,ec2:DisassociateAddress,ec2:CreateTags,ec2:DeleteTags	none	-
+# network-s3-endpoint 는 이름과 달리 태그 해석(유형 ec2:vpc-endpoint ·
+# Environment = prod 전부)이라 S3 게이트웨이만이 아니라 인터페이스 엔드포인트
+# (POK-408 설계 3-1)도 덮는다. 행 이름은 바꾸지 않는다(설계 3-5). 두 행이
+# 새 자원을 묻는 것은 data_files_test.sh 의
+# expect_network_endpoint_targets_asked 가 본다.
 network-s3-endpoint	O7a	tag:ec2:vpc-endpoint	vpc-endpoint	ap-northeast-2	ec2:ModifyVpcEndpoint,ec2:DeleteVpcEndpoints,ec2:CreateTags,ec2:DeleteTags	none	-
 
 # prod/certs — 인증서 두 벌(서울 · us-east-1)
@@ -114,6 +126,19 @@ jobs-thumbnail-queue	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokecl
 jobs-thumbnail-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-thumbnail-dlq	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 jobs-upload-queue	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
 jobs-upload-dlq	runtime-1a	arn:arn:aws:sqs:ap-northeast-2:${ACCOUNT}:pokeclip-prod-jobs-upload-dlq	queue	ap-northeast-2	sqs:SendMessage,sqs:ReceiveMessage,sqs:PurgeQueue,sqs:SetQueueAttributes,sqs:AddPermission,sqs:RemovePermission,sqs:DeleteQueue	sqs	-
+
+# /dvr 하한 KVS(POK-525 — edge_bounds_kvs.tf). ARN 끝은 생성 때 정해지는 ID
+# 라 소문자 UUID 꼴 표본 ID 로 묻는다(아래 prod/edge 덩어리의 cf-kvs 와 같은
+# 방식 · 같은 한계 — 실제 ID 를 적은 정책은 놓친다). 그릇 동작과 값 동작은
+# 서비스가 달라 행을 나눈다. 값은 쓰기만 묻는다 — dev 주체가 하한을 쓰거나
+# 지우면 시청자 조각이 404 가 되거나 하한이 사라진다. 하한 값은 비밀이 아니라
+# 읽기(GetKey · ListKeys)는 묻지 않는다 — cf-kvs-data 가 읽기를 묻는 것은 그
+# 값이 CDN 비밀이라서다. 태그 동작(TagResource · UntagResource)도 cf-kvs 와
+# 달리 묻지 않는다 — 이 덩어리 머리 규칙대로 구체 ARN 행이라 태그를 바꿔도
+# 대상에서 빠지지 않는다. O7f 부터 edge 함수(dvr-floor)가 이 그릇을
+# 연결한다 — 첫 단계 runtime-1a 라 O7f 판정에도 이 두 행이 돈다.
+edge-bounds-kvs	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000e1	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore	none	-
+edge-bounds-kvs-data	runtime-1a	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000e1	key-value-store	us-east-1	cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
 
 # SQL 실행기 역할 · 인스턴스 프로필(켜진 동안만 있다 — 꺼져 있어도 묻는다).
 # 역할 넘기기는 EC2 로 넘기는 문맥으로 묻는다(dev 주체가 이 역할로 새 상자를
@@ -224,7 +249,8 @@ chat-archive-object	O7d	arn:arn:aws:s3:::pokeclip-prod-chat-archive-apne2/chat/C
 # POK-479)은 이름이 고정이라 구체 ARN 이다(rds-log-group 과 같은 꼴 · 같은
 # 동작 · 두 꼴로 묻는다 — 머리 주석). ECS 서비스 로그 그룹 이름은 모듈
 # ecs_service 의 <name_prefix>-<name>(prod/platform services.tf 의 next ·
-# auth · clip · chat-collector · chat-detector — chat 둘은 POK-306)이다.
+# auth · clip · chat-collector · chat-detector — chat 둘은 POK-306, prod/workers
+# main.tf 의 render · upload — POK-408)이다.
 platform-load-balancer	O7d	tag:elasticloadbalancing:loadbalancer	loadbalancer/app/,loadbalancer/net/	ap-northeast-2	elasticloadbalancing:DeleteLoadBalancer,elasticloadbalancing:ModifyLoadBalancerAttributes,elasticloadbalancing:SetSecurityGroups,elasticloadbalancing:SetSubnets,elasticloadbalancing:CreateListener,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-target-group	O7d	tag:elasticloadbalancing:targetgroup	targetgroup	ap-northeast-2	elasticloadbalancing:RegisterTargets,elasticloadbalancing:DeregisterTargets,elasticloadbalancing:ModifyTargetGroup,elasticloadbalancing:ModifyTargetGroupAttributes,elasticloadbalancing:DeleteTargetGroup,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
 platform-listener	O7d	tag:elasticloadbalancing:listener	listener/app,listener/net	ap-northeast-2	elasticloadbalancing:ModifyListener,elasticloadbalancing:DeleteListener,elasticloadbalancing:CreateRule,elasticloadbalancing:AddTags,elasticloadbalancing:RemoveTags	none	-
@@ -252,6 +278,33 @@ ecs-log-group-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:poke
 ecs-log-group-chat-collector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-collector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 ecs-log-group-chat-detector	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-chat-detector	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 
+# prod/platform 의 clip 치우개 종료 경보(POK-588 — reaper_alarms.tf). edge 의
+# /dvr 하한 경보 덩어리와 같은 꼴이고 리전만 서울이다. 경보 · 알림 주제는
+# 이름이 고정이라 구체 ARN 이다. 경보 행은 바꾸기 · 지우기 · 알림 끄기 · 상태
+# 덮어쓰기와 태그를 묻는다 — dev 주체가 이것을 가지면 치우개 오판 경보가
+# 조용해진다. 지표 필터는 log-group 자원 동작이라 clip 서비스 로그 그룹 ARN
+# 으로 따로 묻는다(위 ecs-log-group-clip 행과 같은 ARN — 행을 나눠 그 행은
+# 그대로 둔다). 주제 행은 발행 · 구독 · 정책 바꾸기 · 지우기를 묻고 정책은
+# 직접 읽는다(sns). 이 경보를 처음 만드는 platform apply 직전에는 주제가
+# 아직 없어 「자원 없음」 을 정책 없이 판정한다. 동작 × 유형 짝은 edge 덩어리의
+# 대조(2026-11-11)를 따른다. 알려진 한계: 이 대상 행들은 다음 동작 · 자원
+# 유형을 묻지 않는다(서비스 권한 참조상 자원 유형은 SNS 구독 동작이 topic ·
+# PutLogEvents 가 log-stream · PutMetricData 가 dataset) —
+# cloudwatch:PutMetricData(같은 지표에 음수를 넣어 5분 합을 상쇄) ·
+# sns:Unsubscribe · sns:SetSubscriptionAttributes · logs:PutLogEvents(로그
+# 그룹에 거짓 줄). 행 추가는 이번 범위 밖이다.
+platform-alarm-clip-reaper-ended	O7d	arn:arn:aws:cloudwatch:ap-northeast-2:${ACCOUNT}:alarm:pokeclip-prod-clip-reaper-ended	alarm	ap-northeast-2	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+platform-metric-filter-clip	O7d	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-clip	log-group	ap-northeast-2	logs:PutMetricFilter,logs:DeleteMetricFilter	none	-
+platform-alarm-topic	O7d	arn:arn:aws:sns:ap-northeast-2:${ACCOUNT}:pokeclip-prod-platform-alarms	topic	ap-northeast-2	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	sns	-
+# prod/workers(POK-408)의 일꾼 로그 그룹 둘 — 첫 단계 workers. 그 루트의
+# 나머지 자원은 행을 더하지 않는다: ECS 서비스 · 작업 정의는 태그 해석 행
+# (ecs-service · ecs-task-definition), 일꾼 역할 넘기기 · 권한 변경은 prod
+# 역할 경로 행(ecs-role-pass · prod-roles), 일꾼 SG 는 network-sg 가 이미
+# 푼다(모두 Environment = prod 태그 · /pokeclip/prod/ 경로). Cloud Map 서비스
+# 는 판정 표에 없다 — platform 의 네임스페이스 · 서비스와 같은 기존 한계다.
+ecs-log-group-render	workers	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-render	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+ecs-log-group-upload	workers	arn:arn:aws:logs:ap-northeast-2:${ACCOUNT}:log-group:pokeclip-prod-upload	log-group	ap-northeast-2	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+
 # prod/media(POK-460) — media 상자 역할 · 인스턴스 프로필(modules/media_host
 # 의 이름 · 경로). sql-runner 행과 같은 꼴이다 — 역할 넘기기는 EC2 로 넘기는
 # 문맥으로 묻는다(dev 주체가 이 역할로 새 상자를 띄워 media 의 권한을 얻는
@@ -264,10 +317,11 @@ media-profile	O7e	arn:arn:aws:iam::${ACCOUNT}:instance-profile/pokeclip/prod/pok
 # (Resource Groups Tagging API 가 distribution 을 받음 — AWS Resource Groups
 # 「Supported resource types」 대조 2026-10-24). 함수는 이름이 ARN 이라 구체
 # ARN 으로 묻는다. 함수 · KVS 는 그 API 의 지원 목록에 없어 태그로 풀지 않는다.
-# KVS 의 ARN 끝은 생성 때 정해지는 ID 라 표본 ID 로 묻는다(rewind-object 의
-# 표본 키와 같은 방식) — 자원 「*」 · 「key-value-store/*」 를 허용한 정책은
-# 잡고, 실제 ID 를 적은 정책은 놓친다(한계). KVS 값 동작(GetKey · ListKeys 는
-# CDN 비밀 값을 읽는다)은 서비스가 달라 행을 나눈다.
+# KVS 의 ARN 끝은 생성 때 정해지는 ID(소문자 UUID)라 그 꼴의 표본 ID 로
+# 묻는다(rewind-object 의 표본 키와 같은 방식) — 자원 「*」 ·
+# 「key-value-store/*」 · UUID 꼴만 받는 글롭(「key-value-store/*-*-*-*-*」
+# 등)을 허용한 정책은 잡고, 실제 ID 를 적은 정책은 놓친다(한계). KVS 값
+# 동작(GetKey · ListKeys 는 CDN 비밀 값을 읽는다)은 서비스가 달라 행을 나눈다.
 # 배포 행은 표준 로그 전달 설정 권한(AllowVendedLogDeliveryForResource —
 # list_cloudfront.html 의 자원 distribution)도 묻는다(POK-479 · 보안 리뷰
 # M). dev 주체가 이것과 아래 전달 행의 동작을 가지면 media 접근 로그를 자기
@@ -276,16 +330,18 @@ cf-distribution	O7f	tag:cloudfront:distribution	distribution	us-east-1	cloudfron
 cf-function-live-auth	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-live-auth	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-deny-default	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-deny-default	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
 cf-function-apex-request	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-apex-request	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
-cf-kvs	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-cdn-secret-kvs	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore,cloudfront:TagResource,cloudfront:UntagResource	none	-
-cf-kvs-data	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/sample-cdn-secret-kvs	key-value-store	us-east-1	cloudfront-keyvaluestore:GetKey,cloudfront-keyvaluestore:ListKeys,cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
+cf-function-dvr-floor	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:function/pokeclip-prod-dvr-floor	function	us-east-1	cloudfront:UpdateFunction,cloudfront:PublishFunction,cloudfront:DeleteFunction,cloudfront:TagResource,cloudfront:UntagResource	none	-
+cf-kvs	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000c1	key-value-store	us-east-1	cloudfront:UpdateKeyValueStore,cloudfront:DeleteKeyValueStore,cloudfront:TagResource,cloudfront:UntagResource	none	-
+cf-kvs-data	O7f	arn:arn:aws:cloudfront::${ACCOUNT}:key-value-store/00000000-0000-0000-0000-0000000000c1	key-value-store	us-east-1	cloudfront-keyvaluestore:GetKey,cloudfront-keyvaluestore:ListKeys,cloudfront-keyvaluestore:PutKey,cloudfront-keyvaluestore:UpdateKeys,cloudfront-keyvaluestore:DeleteKey	none	-
 
 # prod/edge 의 CLOUDFRONT WAF · 로그 그룹 · apex 버킷(POK-460)과 media 접근
 # 로그 전달 · apex 객체 · 함수 로그 그룹(POK-479). WAF 는 REGIONAL WAF 행과
 # 같은 방식이다(표본 ID · 같은 동작 · ARN 의 범위 조각은 global · 태그로
 # 풀지 않는 까닭도 같다). 로그 그룹(WAF 차단 로그 · media 배포 표준 로그 ·
-# 함수 로그 셋)은 이름이 고정이라 구체 ARN 이다. 함수 로그 그룹 이름은
-# prod/edge function_logs.tf 의 /aws/cloudfront/function/<함수 이름>(함수
-# 이름은 위 함수 행)이고 us-east-1 이다. apex 버킷은 이름 끝이 생성 때 정해져
+# 함수 로그 넷 — dvr-floor 는 POK-525)은 이름이 고정이라 구체 ARN 이다.
+# 함수 로그 그룹 이름은 prod/edge function_logs.tf 의
+# /aws/cloudfront/function/<함수 이름>(함수 이름은 위 함수 행)이고
+# us-east-1 이다. apex 버킷은 이름 끝이 생성 때 정해져
 # (bucket_prefix — modules/cdn_static_site) 태그로 푼다 — 같은 태그의 다른
 # prod 버킷(상태 · rewind · clips · 프로필 사진 · 채팅 원본)도 함께 풀려
 # 같은 동작을 묻는다. 첫 단계(O7f) 직전에는 apex 버킷이 아직 없어 이미 있는 prod 버킷만
@@ -312,6 +368,25 @@ edge-media-delivery-destination	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:delive
 cf-function-log-group-live-auth	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-live-auth	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 cf-function-log-group-deny-default	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-deny-default	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
 cf-function-log-group-apex-request	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-apex-request	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+cf-function-log-group-dvr-floor	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-dvr-floor	log-group	us-east-1	logs:DeleteLogGroup,logs:PutRetentionPolicy,logs:DeleteRetentionPolicy	none	-
+
+# prod/edge 의 /dvr 하한 경보(POK-525 계획 Ⓓ-3 — dvr_floor_alarms.tf). 경보
+# 셋 · 알림 주제는 이름이 고정이라 구체 ARN 이고 us-east-1 이다. 경보 행은
+# 경보를 바꾸기 · 지우기 · 알림 끄기 · 상태 덮어쓰기와 태그를 묻는다 — dev
+# 주체가 이것을 가지면 K5 경보가 조용해진다. 지표 필터는 자원 유형이 따로
+# 없고 log-group 자원 동작이라(PutMetricFilter · DeleteMetricFilter) dvr-floor
+# 함수 로그 그룹 ARN 으로 따로 묻는다(위 함수 로그 그룹 행과 같은 ARN — 행을
+# 나눠 그 행은 그대로 둔다). 주제 행은 발행 · 구독 · 정책 바꾸기 · 지우기를
+# 묻고, 정책은 직접 읽는다(sns — 계정 루트 읽기 하나 · 경보 셋의 CloudWatch
+# 발행, broadcast-topic 과 같은 길). 첫 단계(O7f) 직전에는 주제가 아직 없어
+# 「자원 없음」 을 정책 없이 판정한다(런북 2-3 한계 A13). 동작 × 유형 짝은
+# 서비스 승인 참조 list_cloudwatch.html(alarm) · list_logs.html(log-group) ·
+# list_sns.html(topic) 대조 2026-11-11.
+edge-alarm-dvr-floor-value-invalid	O7f	arn:arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:pokeclip-prod-dvr-floor-value-invalid	alarm	us-east-1	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+edge-alarm-dvr-floor-kvs-error	O7f	arn:arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:pokeclip-prod-dvr-floor-kvs-error	alarm	us-east-1	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+edge-alarm-dvr-floor-execution-errors	O7f	arn:arn:aws:cloudwatch:us-east-1:${ACCOUNT}:alarm:pokeclip-prod-dvr-floor-execution-errors	alarm	us-east-1	cloudwatch:PutMetricAlarm,cloudwatch:DeleteAlarms,cloudwatch:DisableAlarmActions,cloudwatch:SetAlarmState,cloudwatch:TagResource,cloudwatch:UntagResource	none	-
+edge-metric-filter-dvr-floor	O7f	arn:arn:aws:logs:us-east-1:${ACCOUNT}:log-group:/aws/cloudfront/function/pokeclip-prod-dvr-floor	log-group	us-east-1	logs:PutMetricFilter,logs:DeleteMetricFilter	none	-
+edge-alarm-topic	O7f	arn:arn:aws:sns:us-east-1:${ACCOUNT}:pokeclip-prod-edge-alarms	topic	us-east-1	sns:Publish,sns:Subscribe,sns:SetTopicAttributes,sns:AddPermission,sns:RemovePermission,sns:DeleteTopic	sns	-
 
 # prod/records — 공유 공개 존(nonprod/dns-legacy 가 소유)의 prod 레코드
 # 이름 여섯(prod/records 의 enabled_records). 존 ARN 은 dev 레코드와 같아

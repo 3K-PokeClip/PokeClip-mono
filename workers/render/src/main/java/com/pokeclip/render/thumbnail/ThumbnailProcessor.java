@@ -2,7 +2,9 @@ package com.pokeclip.render.thumbnail;
 
 import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.RenderFailure;
+import com.pokeclip.render.media.MediaProbe;
 import com.pokeclip.render.media.ProcessRunner;
+import com.pokeclip.render.media.SegmentTiming;
 import com.pokeclip.render.storage.S3Store;
 import com.pokeclip.render.work.Disposition;
 import com.pokeclip.render.work.MessageHandler;
@@ -12,6 +14,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -34,6 +37,9 @@ import java.util.stream.Stream;
  *       뒤 주문이 올린 새 장면을 옛 장면으로 덮는다(PR #212 codex). 다음 분의 주문이 새로 찍으므로 다시 할 이유가 없다.</li>
  * </ul>
  * 렌더 주문처럼 시작·진행 보고가 없다: 몇 초짜리 일이고, 같은 키에 덮어써도 사진은 하나라 실행을 가를 필요가 없다.
+ *
+ * <p>찍을 자리는 받은 파일을 판독해 정한다({@link Seek} · PDT 설계 r7 8.1). 한 장 뽑기라 프레임 정확 계약 밖의 거친 좌표다 — 입력
+ * {@code -ss} 를 그대로 쓴다(설계 19.4 9).
  */
 public class ThumbnailProcessor implements MessageHandler {
 
@@ -45,17 +51,19 @@ public class ThumbnailProcessor implements MessageHandler {
     private final ObjectMapper mapper;
     private final S3Store store;
     private final ProcessRunner runner;
+    private final MediaProbe probe;
     private final ThumbnailReporter reporter;
     private final String ffmpeg;
     private final Path workRoot;
     private final Duration timeout;
     private final Clock clock;
 
-    public ThumbnailProcessor(ObjectMapper mapper, S3Store store, ProcessRunner runner, ThumbnailReporter reporter,
-                       String ffmpeg, Path workRoot, Duration timeout, Clock clock) {
+    public ThumbnailProcessor(ObjectMapper mapper, S3Store store, ProcessRunner runner, MediaProbe probe,
+                       ThumbnailReporter reporter, String ffmpeg, Path workRoot, Duration timeout, Clock clock) {
         this.mapper = mapper;
         this.store = store;
         this.runner = runner;
+        this.probe = probe;
         this.reporter = reporter;
         this.ffmpeg = ffmpeg;
         this.workRoot = workRoot;
@@ -89,8 +97,11 @@ public class ThumbnailProcessor implements MessageHandler {
             dir = Files.createTempDirectory(workRoot, "thumb-");
             Path source = dir.resolve("source");
             store.download(job.sourceBucket(), job.sourceKey(), source, deadline);
+            Seek seek = Seek.of(job, probe.timing(source, dir, deadline));
+            log.debug("thumbnail.seek kind={} origin={} seekMs={} clamped={}", job.kind(),
+                    "clip".equals(job.kind()) ? "none" : job.offsetOrigin(), seek.ms(), seek.clamped());
             Path picture = dir.resolve("picture.jpg");
-            capture(source, job.offsetMs(), picture, dir, deadline);
+            capture(source, seek.ms(), picture, dir, deadline);
             store.upload(job.outputBucket(), job.outputKey(), picture, "image/jpeg", deadline);
         } catch (RenderFailure e) {
             log.warn("thumbnail.failed kind={} targetId={} retryable={} code={}", job.kind(), job.targetId(),
@@ -136,7 +147,8 @@ public class ThumbnailProcessor implements MessageHandler {
 
     /**
      * 한 장면을 뽑는다. 자리가 원본 끝을 넘으면(조각 길이가 장부와 조금 다르다) ffmpeg가 파일 없이 「Conversion failed」로 끝난다
-     * (9.0 실측, 종료 코드 0이 아니다. 판에 따라 성공하고 파일만 없을 수도 있다). 어느 쪽이든 첫 장면으로 한 번 더 뽑는다.
+     * (9.0 실측, 종료 코드 0이 아니다. 판에 따라 성공하고 파일만 없을 수도 있다). 끝은 {@link Seek} 가 마지막 표시 프레임에서
+     * 미리 자르고, 그래도 그림이 안 나오면 첫 장면으로 한 번 더 뽑는다.
      */
     private void capture(Path source, long offsetMs, Path picture, Path dir, Instant deadline) {
         try {
@@ -164,6 +176,49 @@ public class ThumbnailProcessor implements MessageHandler {
                 "-vf", "scale='min(" + MAX_WIDTH + ",iw)':-2",
                 "-q:v", "4",
                 picture.toString());
+    }
+
+    /**
+     * 찍을 자리 — ffmpeg 입력 {@code -ss}(ms) 값(PDT 설계 r7 8.1). {@code -ss} 는 입력 시각 0 = 파일 {@code format.start_time}
+     * ({@code st})에서 잰다.
+     * <ul>
+     *   <li>카드 · 라이브: {@code (원점 + offsetMs) − st}. 원점은 {@code VIDEO_START} 면 영상 첫 DTS({@code D0}),
+     *       {@code FILE_HEAD} 면 파일 머리({@code Hd} — 모든 스트림 첫 DTS 의 최솟값). 녹화 조각은 소리가 머리라 평시에
+     *       {@code Hd = st} 이고, {@code FILE_HEAD} 는 {@code offsetMs} 그대로다(원점 칸 없는 지금 주문과 같은 자리).</li>
+     *   <li>완성 영상({@code clip}): {@code offsetMs} 그대로 — 결과 파일 안 자리다.</li>
+     * </ul>
+     * 셋 모두 {@code [0, P_last]} 로 자른다. {@code P_last} = 영상 PTS 최댓값 − {@code st} 를 ms 로 <b>내린</b> 값 — 표시 순 마지막
+     * 프레임의 시작이라 {@code -ss} 가 그림을 낼 수 있는 마지막 자리다(올리면 마지막 프레임보다 뒤라 그림이 없다). 자리는 ms 로
+     * 반올림한다(µs 반올림 차 1µs 가 ms 를 바꾸지 않게).
+     *
+     * @param clamped {@code [0, P_last]} 로 잘렸는가(신호 {@code thumbnail.seek})
+     */
+    record Seek(long ms, boolean clamped) {
+
+        private static final BigInteger MICROS = BigInteger.valueOf(1_000_000);
+        private static final BigInteger THOUSAND = BigInteger.valueOf(1_000);
+
+        static Seek of(ThumbnailJob job, SegmentTiming timing) {
+            // 모든 값을 「µs × ts」 단위 정수로 센다 — 영상 틱(1/ts 초)과 µs 를 실수 없이 함께 쓰고, 큰 offsetMs 에도 넘치지 않는다
+            BigInteger ts = BigInteger.valueOf(timing.videoTimescale());
+            BigInteger start = BigInteger.valueOf(timing.formatStartUs()).multiply(ts);
+            BigInteger origin = "clip".equals(job.kind()) ? start : switch (job.offsetOrigin()) {
+                case VIDEO_START -> BigInteger.valueOf(timing.videoFirstDts()).multiply(MICROS);
+                case FILE_HEAD -> BigInteger.valueOf(timing.fileHeadUs()).multiply(ts);
+            };
+            BigInteger seek = origin.subtract(start).add(BigInteger.valueOf(job.offsetMs()).multiply(THOUSAND).multiply(ts));
+            BigInteger msScale = ts.multiply(THOUSAND);
+            BigInteger wanted = floorDiv(seek.add(msScale.shiftRight(1)), msScale);
+            BigInteger last = floorDiv(BigInteger.valueOf(timing.lastPts()).multiply(MICROS).subtract(start), msScale)
+                    .max(BigInteger.ZERO);
+            BigInteger ms = wanted.max(BigInteger.ZERO).min(last);
+            return new Seek(ms.longValueExact(), !ms.equals(wanted));
+        }
+
+        private static BigInteger floorDiv(BigInteger num, BigInteger den) {
+            BigInteger[] qr = num.divideAndRemainder(den);
+            return qr[1].signum() < 0 ? qr[0].subtract(BigInteger.ONE) : qr[0];
+        }
     }
 
     private static void deleteFile(Path file) {

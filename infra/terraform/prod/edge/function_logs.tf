@@ -19,6 +19,7 @@ locals {
   cloudfront_function_names = {
     live_auth    = module.media.function_names.live_auth
     deny_default = module.media.function_names.deny_default
+    dvr_floor    = module.media.function_names.dvr_floor
     apex_request = module.apex.function_name
   }
 }

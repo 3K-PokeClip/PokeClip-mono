@@ -44,10 +44,11 @@
   "hlsAllowOrigins": [
     "https://app.pokeclip.com"
   ],
+  "hlsAlwaysRemux": true,
   "hlsCDNSecret": "@@HLS_CDN_SECRET@@",
   "hlsDirectory": "/dvr",
   "hlsPartDuration": "500ms",
-  "hlsSegmentCount": 900,
+  "hlsSegmentCount": 7,
   "hlsSegmentDuration": "4s",
   "hlsTrustedProxies": [],
   "hlsVariant": "lowLatency",

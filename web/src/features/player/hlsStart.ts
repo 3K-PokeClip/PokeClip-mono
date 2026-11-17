@@ -29,7 +29,7 @@ export function decideLiveStart(
   if (strictStart && startIsTruncated(fragments, startAtMs, 'live', targetduration)) {
     return { kind: 'truncated' };
   }
-  const position = startLoadPosition(fragments, startAtMs, 'live', targetduration);
+  const position = startLoadPosition(fragments, startAtMs, 'live', targetduration, true);
   return { kind: 'load', position: position ?? -1 };
 }
 
@@ -62,11 +62,93 @@ export function armLiveStart(
 export type StartSource = Pick<PlaybackSource, 'kind' | 'startAtMs' | 'strictStart'>;
 
 /**
- * 시작 시각이 있는 재생기에 기동 처리기를 단다(RC-7 · R15 · POK-200 c13). 라이브는
- * 기동 문지기(armLiveStart)가 첫 LEVEL_UPDATED 에서, 되감기는 첫 LEVEL_LOADED 에서
- * 그 자리를 한 번만 정한다. 시작 시각이 없으면 달지 않는다 — hls.js 가 스스로 시작한다.
- * 재생기는 autoStartLoad:false 로 서 있어야 한다. 되감기가 받기 시작한 자리는 load 에
- * 적고(모르면 null), strictStart 라이브의 잘린 시작은 onTruncated 로 알린다(armLiveStart)
+ * 첫 목록에서 앱이 받기 위치를 정하는 재생기인가 — 시작 시각이 있는 재생기와 다시보기 재생기다. 다시보기는 시작 시각이
+ * 없어도 정한다: hls.js 의 VOD 기본 시작은 영상 0초라(base-stream-controller.ts 2042–2047) 그 자리가 맨 앞 GAP 이면
+ * 조각을 하나도 받지 않아 영상 정보가 서지 않고 검은 화면에 멎는다(POK-573 · Chromium · WebKit 실측). 영상 정보 전의
+ * currentTime 대입은 seeking 을 내지 않아 받기 위치를 옮기지 못한다(같은 파일 466–479 · 2050–2061)
+ */
+function placesStart(source: Pick<StartSource, 'kind' | 'startAtMs'>): boolean {
+  return source.kind === 'vod' || source.startAtMs !== null;
+}
+
+/**
+ * 재생기 설정에 기동 방식을 싣는다. 첫 목록에서 받기 위치를 정하는 재생기(armStart)는 자동 시작을 끄고, 나머지는 바탕
+ * 그대로다(hls.js 가 스스로 시작한다)
+ */
+export function startConfig<T extends object>(
+  base: T,
+  source: Pick<StartSource, 'kind' | 'startAtMs'>,
+): T | (T & { autoStartLoad: false }) {
+  return placesStart(source) ? { ...base, autoStartLoad: false } : base;
+}
+
+/**
+ * 다시보기 재생기의 받기 시작 자리(영상 초) — 늘 내용 조각의 자리다. hls.js 는 GAP 조각을 받지 않아(망 요청 없음) 그 자리에서
+ * 기동하면 영상 정보가 서지 않는다. 시작 시각이 없으면 첫 내용 조각(맨 앞 GAP 이 없으면 목록 첫 조각이라 지금처럼 0초)이다.
+ * 있으면 그 자리(첫 내용 조각 앞이면 첫 내용 조각 — startLoadPosition)를 마지막 내용 조각의 시작으로 자르고, 그 자리가 GAP
+ * 조각 안이면 다음 내용 조각의 시작으로 올린다. 마지막 내용 조각의 시작으로 자르는 까닭: 목록 끝에서 받기 시작하면 받을 조각이
+ * 없다. 끝 근처의 시작 시각이면 앱은 그 뒤 꼬리(끝 1초 앞이고 마지막 조각의 시작보다 앞서지 않는다 — useVodPlayback)로 옮기는데,
+ * 자른 자리는 그 꼬리보다 뒤에 서지 않는다. 앱이 그 뒤 옮기는 자리는 바꾸지 않는다. 내용 조각이 없거나(모두 GAP), 시작 시각을
+ * 영상 자리로 셀 시각 표시가 없으면 null — hls.js 가 고른다
+ */
+function vodStartPosition(details: LevelDetails, startAtMs: number | null): number | null {
+  const { fragments, targetduration, live } = details;
+  const content = fragments.filter((frag) => !frag.gap);
+  const firstContent = content[0];
+  const lastContent = content[content.length - 1];
+  if (firstContent === undefined || lastContent === undefined) return null;
+  if (startAtMs === null) return firstContent.start;
+  const position = startLoadPosition(fragments, startAtMs, 'vod', targetduration, live);
+  if (position === null) return null;
+  const at = Math.min(lastContent.start, position);
+  const inGap = fragments.find(
+    (frag) => frag.gap && frag.start <= at && at < frag.start + frag.duration,
+  );
+  if (inGap === undefined) return at;
+  // 뒤에 내용 조각이 없으면 앞의 내용 조각이다 — 마지막 내용 조각의 시작으로 잘라 두어 실제로는 늘 뒤에 있다
+  return content.find((frag) => frag.start > inGap.start)?.start ?? lastContent.start;
+}
+
+/** 첫 LEVEL_LOADED 에서 한 번만 place(details) 자리를 받기 위치로 적고 거기서 받는다(모르면 hls.js 가 고르는 -1) */
+function loadFromFirstList(
+  hls: Hls,
+  events: typeof Events,
+  load: Pick<LoadFrom, 'set'>,
+  place: (details: LevelDetails) => number | null,
+): void {
+  let placed = false;
+  hls.on(events.LEVEL_LOADED, (...[, data]) => {
+    if (placed) return;
+    placed = true;
+    const position = place(data.details);
+    load.set(position);
+    hls.startLoad(position ?? -1);
+  });
+}
+
+/**
+ * 다시보기 주소가 다중 화질 목록(상위 목록)이면 목록을 받은 때(MANIFEST_LOADED) 받기를 깨운다. 자동 시작을 끈 재생기는
+ * startLoad 전에는 화질 목록을 받지 않아 첫 LEVEL_LOADED 가 오지 않는다. 주소가 매체 목록이면 그 목록이 이미 화질 하나의
+ * 상세라(levels[0].details — playlist-loader.ts handleTrackOrLevelPlaylist) 곧 LEVEL_LOADED 가 오므로 깨우지 않는다. 이 사건은
+ * level-controller 가 먼저 받아 MANIFEST_PARSED 까지 낸 뒤라 화질이 서 있다. 깨운 자리는 hls.js 가 고르고(-1), 실제 받기
+ * 시작 자리는 첫 LEVEL_LOADED 의 loadFromFirstList 가 다시 정한다 — 그 사이 hls.js 가 기본 시작 조각(영상 0초)을 한 번 청할 수
+ * 있고, 그 받기는 바로 뒤 startLoad 가 멈춘다(stream-controller.ts startLoad 의 stopLoad)
+ */
+function wakeMultivariant(hls: Hls, events: typeof Events): void {
+  let seen = false;
+  hls.on(events.MANIFEST_LOADED, (...[, data]) => {
+    if (seen) return;
+    seen = true;
+    if (!data.levels.some((level) => level.details !== undefined)) hls.startLoad(-1);
+  });
+}
+
+/**
+ * 첫 목록에서 받기 위치를 정하는 재생기(startConfig 로 자동 시작을 끈 재생기)에 기동 처리기를 단다(RC-7 · R15 ·
+ * POK-200 c13). 라이브는 기동 문지기(armLiveStart)가 첫 LEVEL_UPDATED 에서, 되감기 · 다시보기는 첫 LEVEL_LOADED 에서
+ * 그 자리를 한 번만 정한다. 다시보기는 주소가 다중 화질 목록이면 먼저 받기를 깨운다(wakeMultivariant). 다시보기는 시작 시각이
+ * 없어도 정하고(vodStartPosition), 라이브 · 되감기는 시작 시각이 없으면 달지 않는다 — hls.js 가 스스로 시작한다. 되감기 ·
+ * 다시보기가 받기 시작한 자리는 load 에 적고(모르면 null), strictStart 라이브의 잘린 시작은 onTruncated 로 알린다(armLiveStart)
  */
 export function armStart(
   hls: Hls,
@@ -76,21 +158,20 @@ export function armStart(
   onTruncated: () => void,
 ): void {
   const { kind, startAtMs, strictStart } = source;
+  if (kind === 'vod') {
+    wakeMultivariant(hls, events);
+    loadFromFirstList(hls, events, load, (details) => vodStartPosition(details, startAtMs));
+    return;
+  }
   if (startAtMs === null) return;
   if (kind === 'live') {
     const decide = (details: LevelDetails) => decideLiveStart(details, startAtMs, strictStart);
     armLiveStart(hls, events, decide, onTruncated);
     return;
   }
-  let placed = false;
-  hls.on(events.LEVEL_LOADED, (...[, data]) => {
-    if (placed) return;
-    placed = true;
-    const { fragments, targetduration } = data.details;
-    const position = startLoadPosition(fragments, startAtMs, kind, targetduration);
-    load.set(position);
-    hls.startLoad(position ?? -1);
-  });
+  loadFromFirstList(hls, events, load, ({ fragments, targetduration, live }) =>
+    startLoadPosition(fragments, startAtMs, kind, targetduration, live),
+  );
 }
 
 /** 재생점을 읽을 미디어 — 시험은 currentTime 하나만 준다 */
@@ -171,7 +252,8 @@ export function trackLoadFrom(video: Playhead): LoadFrom {
  * 멈춘 채 갈아 끼우기 표(설계 5.3.1절 3번 · c13f). 멈춘 채 갈아 끼운 재생기는 스스로
  * 틀지 않는다. 사람이 멈췄는지는 pause · play 사건으로만 안다 — 해체의 media.load() 는
  * pause 사건 없이 video.paused 를 돌린다. 표는 건 때의 세대를 적고, 그보다 새 재생기만
- * 먹는다(옛 재생기가 먼저 먹지 않게)
+ * 먹는다(옛 재생기가 먼저 먹지 않게). 앱이 건 pause(세션의 hold-frame)는 앱 멈춤 표시로
+ * 가려 사람 멈춤으로 적지 않는다(POK-528)
  */
 export interface SwapPause {
   /** pause 사건 — 사람이 멈췄다 */
@@ -184,12 +266,20 @@ export interface SwapPause {
   keep: (generation: number) => void;
   /** MANIFEST_PARSED — 이 세대 재생기가 스스로 틀지 말아야 하나. 표보다 새 세대면 표를 지운다 */
   holds: (generation: number) => boolean;
+  /**
+   * 앱이 곧 pause() 를 부른다(세션의 hold-frame · POK-528) — 다음 pause 사건은 사람 멈춤이 아니다.
+   * 표시는 그 pause 사건(takeAppPause) 또는 play 사건(userPlayed)이 지운다
+   */
+  appPausing: () => void;
+  /** pause 사건 — 앱이 건 멈춤이면 표시를 먹고 참(사람 멈춤으로 적지 않는다) */
+  takeAppPause: () => boolean;
 }
 
 /** 훅 하나(재생기를 갈아 끼워도 남는다)의 멈춤 유지 표를 연다 */
 export function createSwapPause(): SwapPause {
   let paused = false;
   let keepFrom: number | null = null;
+  let appPause = false;
   return {
     userPaused: () => {
       paused = true;
@@ -197,6 +287,7 @@ export function createSwapPause(): SwapPause {
     userPlayed: () => {
       paused = false;
       keepFrom = null;
+      appPause = false;
     },
     keepIfUserPaused: (generation) => {
       if (paused) keepFrom = generation;
@@ -208,6 +299,14 @@ export function createSwapPause(): SwapPause {
       if (keepFrom === null) return false;
       if (generation > keepFrom) keepFrom = null;
       return true;
+    },
+    appPausing: () => {
+      appPause = true;
+    },
+    takeAppPause: () => {
+      const taken = appPause;
+      appPause = false;
+      return taken;
     },
   };
 }

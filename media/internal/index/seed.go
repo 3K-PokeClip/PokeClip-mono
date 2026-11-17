@@ -102,4 +102,46 @@ type InsertCommit struct {
 	PlaybackS3Key string
 	// DurationMS 는 INSERT 때의 duration_ms 다. 꼬리 교정은 그 뒤 UpdateTail 이 따로 한다.
 	DurationMS int32
+	// StartPTSMS 는 이 행의 start_pts_ms 다 — 위치는 store 가 이 트랜잭션에서 정한다(Record.StartPTSMS 는 입력이 아니다).
+	// 인덱서 커서 · ③ 사슬은 이 값으로 전진한다(r6 259–262 승계 · 계획 0절 6).
+	StartPTSMS int64
+
+	// --- PDT 판 칸(설계 r7 3절 · 8절 신호 재료) — 이 트랜잭션이 판 정하기로 고른 값이다 ---
+
+	// TimingVersion 은 이 행의 timing_version 이다. nil 이면 판 NULL 이다.
+	TimingVersion *int16
+	// TimingBranch 는 판 2 행을 쓴 갈래다. 판 NULL 행이면 "" 다.
+	TimingBranch Branch
+	// DeltaMS 는 판 2 행의 견준 차(짐작 − 앞 끝)다. 판 NULL 행 · 견주지 않은 행이면 0 이다.
+	DeltaMS int64
+	// TimingReset 은 판 2 회차 첫 행의 까닭이다(stream_first · new_round · no_round · floor_rejected — 신호 timing_reset).
+	// 섞은 행 · 판 고정 위반으로 접힌 행 · 판 NULL 행이면 "" 다.
+	TimingReset string
+	// TimingBroken 은 판 2 행이 판 고정 위반으로 회차 첫 행에 접힌 까닭이다(prev_missing · version_mismatch — 신호
+	// timing_round_broken). 정상 경로에서는 "" 다.
+	TimingBroken string
+	// TimingSameInstance · TimingCompared 는 판 2 섞기의 견줌 재료다(segment_indexed 의 same_instance · comparable). 회차 첫
+	// 행 · 판 NULL 행이면 거짓이다.
+	TimingSameInstance, TimingCompared bool
+	// TimingLimitedBy 는 겹침 갈래에서 이긴 항이다(w · overlap_cap · end_lead · start_lead — 신호 pdt_overlap 의 limited_by).
+	// 그 밖이면 "" 다.
+	TimingLimitedBy string
+	// TimingPrevFacts 는 섞기가 이은 p(같은 회차 최신 행)의 원래 사실 칸이다 — 새 장 · 겹침의 까닭(녹화기 바뀜 · 번호
+	// 건너뜀 · mtxi 없음)을 가르는 재료다. p 가 없으면(회차 첫 행 · 판 NULL 행) nil 이다.
+	TimingPrevFacts *TimingFacts
+	// TimingPrevVersion 은 같은 회차 앞 행 p 의 판이다 — 판 고정 위반(timing_round_broken version_mismatch)의 「두 판」 재료다.
+	// p 가 없거나 판 NULL 이면 nil 이다.
+	TimingPrevVersion *int16
+	// TimingResetBackMS 는 판 2 회차 첫 행에서 바로 앞 행 q 의 PDT 끝 − 짐작 w 다(timing_reset 의 「q 끝 − w」 — 양수면 PDT 가
+	// 그만큼 뒤로 간다). q 가 없거나 q 의 PDT 가 NULL 이면 nil 이다.
+	TimingResetBackMS *int64
+	// TimingRoundID 는 이 행의 timing_round_id(이어 계산 회차 — 설계 2.4)다. "" 면 회차 없음이다(신호
+	// segment_indexed.round_id 의 재료).
+	TimingRoundID string
+	// LegacyUnattributedMS 는 판 NULL 귀속 행의 PDT 식이 더한 U(기저 행 뒤 · 이 행 앞 비귀속 행 길이 합 — placement.go)다.
+	// 판 2 행 · 비귀속 행 · 기저 행이나 그 PDT 가 없는 행이면 0 이다(신호 legacy_unattributed_sum 의 재료).
+	LegacyUnattributedMS int64
+	// TimingGateRead 는 이 트랜잭션이 판을 고르려고 읽은 게이트 행이다. 새 회차 개시 · 회차 없는 비귀속 행만 게이트를
+	// 읽고, 그 밖(회차를 이어 가는 행)은 nil 이다(신호 timing_gate_read 의 재료 — 고른 판은 TimingVersion).
+	TimingGateRead *TimingGate
 }

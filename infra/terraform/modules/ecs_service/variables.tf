@@ -78,13 +78,39 @@ variable "memory" {
   }
 }
 
-variable "port" {
-  description = "컨테이너 포트(TCP) — 대상 그룹 연결 · Cloud Map 대상 포트."
+variable "ephemeral_storage_gib" {
+  description = "Fargate 임시 디스크(GiB, 21 부터 200). null 이면 블록을 두지 않는다(Fargate 기본 20GiB)."
   type        = number
+  default     = null
 
   validation {
-    condition     = var.port >= 1 && var.port <= 65535 && floor(var.port) == var.port
-    error_message = "port 는 1 부터 65535 까지의 정수여야 한다."
+    condition = var.ephemeral_storage_gib == null ? true : (
+      var.ephemeral_storage_gib >= 21 &&
+      var.ephemeral_storage_gib <= 200 &&
+      floor(var.ephemeral_storage_gib) == var.ephemeral_storage_gib
+    )
+    error_message = "ephemeral_storage_gib 는 null 이거나 21 부터 200 까지의 정수여야 한다."
+  }
+}
+
+variable "port" {
+  description = "컨테이너 포트(TCP) — 대상 그룹 연결용. null 이면 포트를 열지 않는다(웹 서버 없는 일꾼). Cloud Map A 레코드는 포트와 무관하다."
+  type        = number
+  default     = null
+
+  validation {
+    condition = var.port == null ? true : (
+      var.port >= 1 &&
+      var.port <= 65535 &&
+      floor(var.port) == var.port
+    )
+    error_message = "port 는 null 이거나 1 부터 65535 까지의 정수여야 한다."
+  }
+
+  # 대상 그룹은 컨테이너 <name>:<port> 로 붙는다 — 포트 없이는 붙일 곳이 없다.
+  validation {
+    condition     = var.port != null || length(var.target_group_arns) == 0
+    error_message = "port 가 null 이면 target_group_arns 는 비어 있어야 한다."
   }
 }
 

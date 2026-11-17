@@ -1,5 +1,11 @@
 import type { RewindStatusResult } from '@/api/rewindStatus';
-import type { PlaybackSessionState, SessionEvent, StreamPollEvent, XAnswer } from './rewindSwitch';
+import type {
+  DvrSegment,
+  PlaybackSessionState,
+  SessionEvent,
+  StreamPollEvent,
+  XAnswer,
+} from './rewindSwitch';
 
 // 세션 표 시험의 사건 도우미(POK-200 c13). 위치 사건은 재생 여부 · 연속 길이를,
 // 스트림 폴링 사건은 물음 순번을 싣는다. 제품 모듈은 타입만 읽는다 — 제품 파일을
@@ -17,11 +23,23 @@ const LIVE_END_AFTER_FLOOR_MS = 16_000;
 
 let lastPosition: PositionEvent | null = null;
 let streamSeq = 0;
+let segmentSn = 0;
 
-/** 시험마다 처음부터 센다(beforeEach) — 앞 시험의 위치 · 순번이 넘어오지 않게 */
+/** 시험마다 처음부터 센다(beforeEach) — 앞 시험의 위치 · 순번 · 조각 순번이 넘어오지 않게 */
 export function resetEventKit(): void {
   startRun();
   streamSeq = 0;
+  segmentSn = 0;
+}
+
+/**
+ * 404 사건의 기본 조각 — 부를 때마다 다른 영상 조각이다(sn 0 부터). 같은 조각의 404 를 보는
+ * 시험만 조각을 적어 넘긴다(POK-528 후속 — 같은 조각은 같은 목록을 두 번 다시 받지 않는다)
+ */
+export function nextSegment(): DvrSegment {
+  const segment: DvrSegment = { type: 'main', sn: segmentSn };
+  segmentSn += 1;
+  return segment;
 }
 
 /**

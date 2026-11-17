@@ -47,6 +47,19 @@ describe('GlobalHeader', () => {
     expect(await screen.findByText('게임')).toBeInTheDocument();
   });
 
+  it('알림 서버가 열리기 전에는 알림을 읽지 않고, 종을 누르면 빈 안내를 보인다 (POK-540)', async () => {
+    const spy = stubAuthedFetch();
+    renderWithProviders(<GlobalHeader />);
+    await screen.findByText('게임');
+
+    fireEvent.click(screen.getByRole('button', { name: '알림' }));
+
+    expect(await screen.findByText('알림이 없어요')).toBeInTheDocument();
+    expect(spy.mock.calls.some(([url]) => String(url).startsWith('/api/notifications'))).toBe(
+      false,
+    );
+  });
+
   it('로그아웃은 서버 폐기를 부르고 세션을 접은 뒤 /login으로 보낸다', async () => {
     // 가드가 남겨 뒀던 복원 경로 — 로그아웃한 사람의 것이라 함께 지워져야 한다 (리뷰 #72)
     window.sessionStorage.setItem('pc-auth-return', '/settings/plugin');

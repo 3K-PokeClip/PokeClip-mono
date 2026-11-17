@@ -88,6 +88,12 @@ func TestCase03DuplicatePathIsCheckedBeforeLateSegment(t *testing.T) {
 }
 
 // 케이스4 — 진짜 늦은 세그먼트는 INSERT 하지 않고 ERROR 를 남긴다(D12).
+//
+// 귀속 하한 거부(session_floor_rejected)가 탈퇴 정리가 없는 한 운영 경로에서 도달하지 않는 근거이기도 하다(POK-567 — kty
+// 2026-11-13 「고치지 않음」). 세션 started_at 은 그 세션 첫 행의 벽시각이고 하한은 started_at − FloorSlack(기본 1초)이다. 그보다
+// 이른 조각은 꼬리 벽시각보다도 이르므로 H3 가 Insert 앞에서 버린다 — 세션 판정(Decide)은 Insert 안에서만 돈다. late 는
+// first(세션을 연 꼬리)보다 4초 이르러 하한 밖이다. 예외: 방송 중 탈퇴 정리가 조각을 전량 지우면 다음 재스캔이 꼬리 없는 커서를
+// 적재해 H3 를 건너뛴다(cur.Tail == nil) — media README 「PDT 알려진 한계」 가 받아들인 갈래이고 이 시험은 덮지 않는다.
 func TestCase04TrulyLateSegmentIsSkippedWithError(t *testing.T) {
 	f := newFixture(t, 4000)
 	first := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
@@ -102,6 +108,9 @@ func TestCase04TrulyLateSegmentIsSkippedWithError(t *testing.T) {
 	}
 	if n := len(f.store.records("s1")); n != 1 {
 		t.Fatalf("행 수 = %d, want 1 — 늦은 세그먼트를 INSERT 했다", n)
+	}
+	if f.store.insertCalls != 1 {
+		t.Fatalf("Insert 호출 = %d, want 1(first 만) — 늦은 조각이 세션 판정까지 갔다", f.store.insertCalls)
 	}
 }
 
@@ -160,9 +169,6 @@ func TestCase06RegrownCorrectsTailAndDerivedValues(t *testing.T) {
 	if cur.Tail.DurationMS != 6000 {
 		t.Fatalf("커서 꼬리 duration = %d, want 6000", cur.Tail.DurationMS)
 	}
-	if got := cur.NextPTSMS(); got != 6000 {
-		t.Errorf("NextPTSMS = %d, want 6000 — 파생값이 교정되지 않았다", got)
-	}
 	if got, want := cur.ExpectedNextWall(), baseWall.Add(6*time.Second); !got.Equal(want) {
 		t.Errorf("ExpectedNextWall = %v, want %v", got, want)
 	}
@@ -186,8 +192,9 @@ func TestCase08UnknownReasonIsRejected(t *testing.T) {
 	}
 }
 
-// 케이스9 — drift 가 톨러런스를 넘으면 그 공백만큼 타임라인을 건너뛰고 불연속으로 표시한다(H8).
-func TestCase09ReanchorsWhenDriftExceedsTolerance(t *testing.T) {
+// 케이스9 — drift 가 톨러런스를 넘으면 불연속으로 표시한다(H8). 위치는 drift 만큼 건너뛰지 않는다 — 위치는 store 가
+// 판 NULL 위치 식으로 정하고(POK-196 PDT c4a · 비귀속 행이라 바로 앞 행 끝), drift 는 끊김 판정 재료로만 남는다.
+func TestCase09MarksDiscontinuityWhenDriftExceedsTolerance(t *testing.T) {
 	f := newFixture(t, 4000)
 	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
 
@@ -200,8 +207,8 @@ func TestCase09ReanchorsWhenDriftExceedsTolerance(t *testing.T) {
 	if !last.IsDiscontinuity {
 		t.Fatal("is_discontinuity = false, want true")
 	}
-	if want := int64(4000 + 6000); last.StartPTSMS != want {
-		t.Fatalf("start_pts_ms = %d, want %d (= NextPTS + drift)", last.StartPTSMS, want)
+	if want := int64(4000); last.StartPTSMS != want {
+		t.Fatalf("start_pts_ms = %d, want %d (= 바로 앞 행 끝 — drift 를 더하지 않는다)", last.StartPTSMS, want)
 	}
 }
 
@@ -223,7 +230,7 @@ func TestCase10NegativeDriftDoesNotRewindPTS(t *testing.T) {
 		t.Fatalf("start_pts_ms 가 역행했다: %d -> %d", rows[0].StartPTSMS, last.StartPTSMS)
 	}
 	if last.StartPTSMS != 4000 {
-		t.Fatalf("start_pts_ms = %d, want 4000 (max(0, drift) 로 눌러야 한다)", last.StartPTSMS)
+		t.Fatalf("start_pts_ms = %d, want 4000 (= 바로 앞 행 끝 — 위치는 store 가 정한다)", last.StartPTSMS)
 	}
 	if n := f.logs.count(slog.LevelError, "negative_drift"); n != 1 {
 		t.Fatalf("negative_drift = %d건, want 1", n)

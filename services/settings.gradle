@@ -1,8 +1,9 @@
 rootProject.name = 'pokeclip-services'
 
-// 모듈 6개, 실행되는 서버는 4개다. web-support · db-support는 서버가 아니라 라이브러리다.
+// 모듈 7개, 실행되는 서버는 4개다. web-support · db-support · ledger-timeline은 서버가 아니라 라이브러리다.
 include 'web-support'
 include 'db-support'
+include 'ledger-timeline'
 include 'auth'
 include 'clip'
 include 'chat-collector'

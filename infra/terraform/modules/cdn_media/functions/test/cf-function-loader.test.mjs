@@ -8,7 +8,12 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {after, test} from 'node:test';
 
-import {findUnsupportedSyntax, loadHandler} from './cf-function-loader.mjs';
+import {
+  findUnsupportedSyntax,
+  loadHandler,
+  loadHandlerFromSource,
+  renderTemplate,
+} from './cf-function-loader.mjs';
 
 const dir = mkdtempSync(join(tmpdir(), 'cf-function-loader-'));
 after(() => rmSync(dir, {recursive: true, force: true}));
@@ -79,3 +84,48 @@ test('cloudfront 밖의 import 는 거부한다', () => {
 
   assert.throws(() => loadHandler(path), /import · export/);
 });
+
+test('원문 문자열을 바로 평가해 handler 를 꺼낸다', async () => {
+  const source = [
+    'async function handler(event) {',
+    '  console.log(\'seen \' + event.key);',
+    '  return event;',
+    '}',
+  ].join('\n');
+  const logs = [];
+
+  const handler = loadHandlerFromSource(source, 'inline.js', {logs});
+
+  assert.deepEqual(await handler({key: 'k'}), {key: 'k'});
+  assert.deepEqual(logs, ['seen k']);
+});
+
+test('renderTemplate 는 자리표시자를 모두 넘긴 값으로 바꾼다', () => {
+  const source = 'a = \'${app_origin}\';\nb = \'${app_origin}\';';
+
+  const rendered = renderTemplate(source, {app_origin: 'https://a.test'});
+
+  assert.equal(rendered, 'a = \'https://a.test\';\nb = \'https://a.test\';');
+});
+
+test('renderTemplate 는 넣은 값을 다시 해석하지 않는다', () => {
+  assert.equal(renderTemplate('x=${v}', {v: '${w}'}), 'x=${w}');
+});
+
+// templatefile 문법 가운데 이 로더가 흉내 내지 않는 것은 실패로 막는다 —
+// 흉내가 어긋난 채 시험이 초록이 되지 않게.
+const TEMPLATE_REJECT_CASES = [
+  {name: '넘기지 않은 자리표시자', source: 'x=${missing}'},
+  {name: '식이 든 자리표시자', source: 'x=${ app_origin }'},
+  {name: '닫히지 않은 자리표시자', source: 'x=${app_origin'},
+  {name: '지시문', source: '%{ if true }x%{ endif }'},
+  {name: '탈출한 자리표시자', source: 'x=$${app_origin}'},
+];
+
+for (const {name, source} of TEMPLATE_REJECT_CASES) {
+  test(`renderTemplate 는 ${name} 을 거부한다`, () => {
+    assert.throws(
+        () => renderTemplate(source, {app_origin: 'https://a.test'}),
+        /templatefile/);
+  });
+}

@@ -28,6 +28,7 @@ export function RevokeEditorDialog({
       open={target !== null}
       busy={busy}
       title={`${name} 님을 편집자에서 빼고, 내 방송 접근을 막을까요?`}
+      maskTitle
       consequences={[
         '지금 바로 내 방송의 하이라이트·클립을 볼 수 없게 됩니다.',
         '이미 업로드된 클립과 만들어 둔 편집본은 그대로 남아요.',

@@ -16,6 +16,9 @@ import {
 import { timeAgo } from '@/lib/timeAgo';
 import { setVisibleInterval } from '@/lib/visibleInterval';
 import { reuseHighlights } from './highlightCardView';
+import { readPlayerAtMs } from '@/api/cardPositions';
+import { keepKnownPlayerAtMs } from './cardSeek';
+import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
   onAirLabel,
@@ -26,7 +29,7 @@ import {
 import { COLLECTOR_WINDOW_MS } from './chatCollector';
 import { viewedSegment } from './broadcastInfoAt';
 import { focusAtMs } from './categoryThumb';
-import { useBroadcastTimeline } from './useBroadcastTimeline';
+import { refetchTimelineForFirstImage, useBroadcastTimeline } from './useBroadcastTimeline';
 import {
   emitRelay,
   publishLiveData,
@@ -67,21 +70,33 @@ export type HighlightSource = 'auto' | 'manual';
 
 export interface LiveHighlight {
   id: string;
+  /** 카드 시각 표기(h:mm:ss) — 이번 방송 시작부터 잰다(POK-562). 서버 기준점이나 시작을 모르면 UNKNOWN_CLOCK */
   timestamp: string;
+  /**
+   * 카드로 옮길 자리(초, 서버 기준점 축) — 카드 · 통계 핀 · 주소의 카드(?card=)가 이 값으로 옮긴다. 표기(timestamp)를 되읽지 않는다:
+   * 표기는 방송 시작부터라 기준점 축과 다르고, 모르면 숨긴다
+   */
+  seekSeconds: number;
   title: string;
-  meta: string;
   status: HighlightStatus;
   source: HighlightSource;
   /** 채점 점수 — 채점 전(unprocessed)·수동 카드에는 없다 */
   score?: number;
-  /** 방금 감지된 카드 — 마젠타 틴트로 강조 */
-  emphasized?: boolean;
   /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
   /** 카드가 가리키는 절대 시각(epoch ms, cardAt) — 통계 그래프의 핀 자리 */
   atMs?: number;
+  /**
+   * 카드 시점의 플레이어용 PDT(epoch ms, POK-196) — 카드 · 핀 · 주소의 카드가 이 시각으로 옮긴다. 장면이 없으면 null, 칸을 모르는
+   * 옛 clip 이면 없다(둘 다 지금 식). 핀 자리(atMs)와 다른 칸이다
+   */
+  playerAtMs?: number | null;
   /** 감지 사유 한 줄(채팅 ×3.2 급증 (120건) · 수동 마킹) — 통계 그래프 툴팁 */
   reason?: string;
+  /** 카드 창 길이(초) — 카드 사진 위 길이 표기 */
+  lengthSec?: number;
+  /** 만든 지 얼마(방금 · 3분 전) — 카드 사진 오른쪽 아래 */
+  ago?: string;
   /** 가린 카드(POK-463): 「숨김」 칸에서만 보이고 「되살리기」만 할 수 있다 */
   hidden?: boolean;
 }
@@ -129,6 +144,8 @@ interface Snapshot {
   createdAt: string;
   /** 목록 문만 싣는다(POK-277). 통로로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
+  /** 카드 시점의 플레이어용 PDT(POK-196). 장면이 없으면 null, 옛 clip 이면 빠져 온다 */
+  playerAtMs?: number | null;
 }
 interface BroadcastInfoResponse {
   /** 모든 플랫폼 중 가장 새 관측 하나. 화면은 이것 대신 대표 플랫폼의 값을 쓴다(toLiveInfo) */
@@ -207,11 +224,11 @@ export function chartWindows(from: number, to: number): [number, number][] {
 }
 
 /**
- * 카드가 가리키는 방송 시점의 절대 시각. 카드를 만든 시각(createdAt)은 감지가 늦거나 다시 처리되면 급증보다
- * 뒤에 찍혀 마커가 엇나간다(PR #200 codex). 방송 시작 시각을 모르면 만든 시각으로 대신한다.
- * 기준점은 방송 시작 편지 시각이라 녹화 첫 조각과 수십 초 어긋날 수 있다(README 「시각 기준점」).
+ * 카드가 가리키는 방송 시점의 절대 시각 — 통계 그래프의 핀 자리다. 카드 ms는 서버 시각 기준점 축이라 그 0초(timeBaseOf: 틀고 있는
+ * 녹화 → 서버 기준점 → 방송 시작)에 더한다. 기준점이 없어 방송 시작으로 대신하면 수십 초 어긋날 수 있다(README 「시각 기준점」).
+ * 0초를 모르면 카드를 만든 시각(createdAt)으로 대신한다: 감지가 늦거나 다시 처리되면 급증보다 뒤에 찍혀 핀이 엇나간다(PR #200
+ * codex). 카드 시각 표기에는 쓰지 않는다(cardClock): 표기는 기준점을 모르면 대신 재지 않고 숨긴다
  */
-/** 카드가 가리키는 절대 시각. 카드 ms는 시각 기준점(녹화 첫 조각) 축이다 — 방송 시작 시각에 더하면 수십 초 어긋난다 */
 function cardAt(c: { streamTimestampMs: number; createdAt: string }, base: number | null): number {
   return base !== null ? base + c.streamTimestampMs : Date.parse(c.createdAt);
 }
@@ -235,7 +252,27 @@ export function msToClock(ms: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function toHighlight(c: Snapshot, index: number, now: number, base: number | null): LiveHighlight {
+/** 방송 시작부터 몇 초인지 모를 때의 카드 시각 표기(홈 방송 시계 LiveUptime과 같은 꼴). 단추 이름 · 알림 글에는 싣지 않는다 */
+export const UNKNOWN_CLOCK = '--:--:--';
+
+/** 카드 시각 표기의 0초를 정하는 두 시각(epoch ms) — 서버 기준점(카드 ms의 0초)과 이번 방송 시작. 모르면 null */
+interface ClockZero {
+  originMs: number | null;
+  startedAt: number | null;
+}
+
+/** 카드 ms(서버 기준점 축) → 이번 방송 시작부터의 시계. 기준점이나 시작을 모르면 UNKNOWN_CLOCK */
+function cardClock(streamTimestampMs: number, zero: ClockZero): string {
+  const elapsed = elapsedSinceStartMs(streamTimestampMs, zero.originMs, zero.startedAt);
+  return elapsed === null ? UNKNOWN_CLOCK : msToClock(elapsed);
+}
+
+function toHighlight(
+  c: Snapshot,
+  now: number,
+  base: number | null,
+  zero: ClockZero,
+): LiveHighlight {
   const ev = c.evidence ?? {};
   const ratio = typeof ev.ratio === 'number' ? ev.ratio : null;
   const count =
@@ -253,18 +290,22 @@ function toHighlight(c: Snapshot, index: number, now: number, base: number | nul
       : `채팅 급증${count !== null ? ` (${count}건)` : ''}`;
   // 옛 서버가 claimedBy를 실어 보내도 안 본다: 집기는 POK-393에서 없앴다
   const status: HighlightStatus = manual ? 'manual' : 'scored';
+  const ago = timeAgo(c.createdAt, now);
   return {
     id: `card-${c.id}`,
-    timestamp: msToClock(c.streamTimestampMs),
+    timestamp: cardClock(c.streamTimestampMs, zero),
+    // 시계 표기를 되읽어 옮기던 값과 같다(초 내림): 표기는 이제 방송 시작부터라 되읽으면 기준점과 시작의 차만큼 어긋난다
+    seekSeconds: Math.max(0, Math.floor(c.streamTimestampMs / 1000)),
     title: manual ? '핫키로 남긴 순간' : `채팅이 튄 순간 #${c.id}`,
-    meta: `${reason} · ${winSec}초 · ${timeAgo(c.createdAt, now)}`,
     status,
     source: manual ? 'manual' : 'auto',
     score: c.score ?? undefined,
-    emphasized: index === 0,
     thumbnailUrl: c.thumbnailUrl ?? null,
     atMs: cardAt(c, base),
+    playerAtMs: readPlayerAtMs(c),
     reason,
+    lengthSec: winSec,
+    ago,
     ...(c.hidden ? { hidden: true } : {}),
   };
 }
@@ -303,6 +344,7 @@ export function sameSnapshot(prev: Snapshot | undefined, next: Snapshot, now: nu
     (prev.hidden ?? false) === (next.hidden ?? false) &&
     prev.eventSeq === next.eventSeq &&
     prev.createdAt === next.createdAt &&
+    readPlayerAtMs(prev) === readPlayerAtMs(next) &&
     pickThumbnailUrl(shownThumbnail, next.thumbnailUrl ?? null, now, CARD_THUMBNAIL_PASS_MS) ===
       shownThumbnail &&
     JSON.stringify(prev.evidence) === JSON.stringify(next.evidence)
@@ -336,6 +378,9 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
   const live = useLiveData();
   // 카드 ms의 0초(서버 기준점 → 녹화 재생 서버 → 방송 시작, POK-255)
   const base = timeBaseOf(live);
+  // 카드 시각 표기의 0초(POK-562). 값이 같으면 같은 객체라 카드 목록을 다시 세우지 않는다
+  const { originMs, startedAt } = live;
+  const zero = useMemo<ClockZero>(() => ({ originMs, startedAt }), [originMs, startedAt]);
   // 방송 번호는 화면 맨 위(useLiveStreamSelection)가 정한다. 정해지기 전(빈 문자열)에는 아무것도 안 받는다
   const streamId = live.streamId;
   const streamIdRef = useRef(streamId);
@@ -374,6 +419,18 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
     setInfo(null);
     publishLiveData({ chart: null, info: null, cardTimes: [] });
     let stopped = false;
+    /**
+     * 받아 둔 방송 정보(상태 info와 같은 값). 통로 이벤트는 이것에 이어 붙인다. 상태 갱신 함수(setInfo(prev => …)) 안에서 저장소에
+     * 실으면 그 함수가 다음 그리기(LiveDashboard) 도중에 돌아, 저장소를 구독하는 다른 화면(LiveScreenBody)을 그리기 중에 깨웠다
+     * (React 「Cannot update a component while rendering a different component」)
+     */
+    let latestInfo: LoadedInfo | null = null;
+    const putInfo = (next: LoadedInfo) => {
+      if (stopped) return;
+      latestInfo = next;
+      setInfo(next);
+      publishLiveData({ info: toLiveInfo(next) });
+    };
     type Range = typeof rangeRef.current;
     /** 지난 방송 주소인데 방송 상태를 아직 모른다: 그래프를 어느 창으로 읽을지 모르니 기다린다 */
     const waitForRange = (rg: Range) => pastRoute && rg.status !== 'live' && rg.status !== 'ended';
@@ -392,10 +449,13 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       if (stopped) return;
       setCards((prev) => {
         let next: Record<number, Snapshot> | null = null;
-        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
+        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277). 플레이어용 PDT 는 통로에도
+        // 실린다(POK-196 — clip 이 장면을 붙인 판을 내보낸다). 칸을 모르는 옛 clip 이라 칸 없이 오면 목록이 준 값을 지킨다
         for (const c of list) {
           if (isStale(prev[c.id], c)) continue;
-          const value = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
+          const value = fromStream
+            ? keepKnownPlayerAtMs(prev[c.id], keepKnownThumbnail(prev[c.id], c))
+            : c;
           // 내용이 같으면 앞 객체를 그대로 둔다: 3초마다 오는 목록 답은 늘 새 객체라, 그대로 덮으면 바뀐 카드가 없어도 화면 전체가
           // 다시 계산됐다. 바뀐 카드가 하나도 없으면 상태 자체를 그대로 돌려줘 다시 그리지 않는다
           if (sameSnapshot(prev[c.id], value, Date.now())) continue;
@@ -604,8 +664,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
           series,
           scope: sinceMs === null ? 'recent' : 'broadcast',
         };
-        setInfo(loaded);
-        publishLiveData({ info: toLiveInfo(loaded) });
+        putInfo(loaded);
         if (sinceMs !== null && rg.status === 'ended') infoDoneFor = settledKey(rg, askedAt);
       }
     };
@@ -667,35 +726,41 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
                   viewers: number | null;
                   /** 이 관측을 잰 플랫폼(POK-397). 옛 서버면 빠져 온다 */
                   platform?: string | null;
+                  /** 카테고리 사진 주소(POK-462). 없으면 null, 옛 서버면 빠져 온다 */
+                  categoryImageUrl?: string | null;
                 };
-                setInfo((prev) => {
-                  // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
-                  // 최근 창으로 바꾸지 않게
-                  const next: LoadedInfo = {
-                    scope: prev?.scope ?? 'recent',
-                    latest: {
-                      title: ev.title,
-                      tags: ev.tags ?? [],
-                      category: ev.category,
-                      viewers: ev.viewers,
+                // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
+                // 최근 창으로 바꾸지 않게
+                const prev = latestInfo;
+                putInfo({
+                  scope: prev?.scope ?? 'recent',
+                  latest: {
+                    title: ev.title,
+                    tags: ev.tags ?? [],
+                    category: ev.category,
+                    viewers: ev.viewers,
+                    observedAt: ev.time,
+                  },
+                  platforms: withPlatformObservation(prev?.platforms, ev),
+                  // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397). 카테고리도 남긴다:
+                  // 버리면 바뀐 카테고리가 다음 정기 조회까지 통계 띠에 안 보였다(POK-465)
+                  series: [
+                    ...(prev?.series ?? []),
+                    {
                       observedAt: ev.time,
+                      viewers: ev.viewers,
+                      category: ev.category,
+                      platform: ev.platform,
                     },
-                    platforms: withPlatformObservation(prev?.platforms, ev),
-                    // 점마다 플랫폼을 남긴다: 버리면 두 플랫폼 숫자가 한 그래프에 섞인다(POK-397). 카테고리도 남긴다:
-                    // 버리면 바뀐 카테고리가 다음 정기 조회까지 통계 띠에 안 보였다(POK-465)
-                    series: [
-                      ...(prev?.series ?? []),
-                      {
-                        observedAt: ev.time,
-                        viewers: ev.viewers,
-                        category: ev.category,
-                        platform: ev.platform,
-                      },
-                    ].slice(-720),
-                  };
-                  publishLiveData({ info: toLiveInfo(next) });
-                  return next;
+                  ].slice(-720),
                 });
+                // 정보 바의 카테고리 사진은 시점별 기록에서 온다. 첫 사진은 기록의 다음 주기를 기다리지 않고 바로 읽는다(POK-552)
+                refetchTimelineForFirstImage(
+                  queryClient,
+                  streamId,
+                  ev.categoryImageUrl,
+                  ev.platform,
+                );
               } catch {
                 /* 무시 */
               }
@@ -767,29 +832,28 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
   const shownHiddenHighlights = useRef<LiveHighlight[]>([]);
   const highlights = useMemo(() => {
     // 방송 시각이 늦은 것부터, 같으면 번호가 큰 것부터: 둘 다 저장 뒤 안 바뀐다. 순번(eventSeq)은 행이 바뀔 때마다 올라
-    // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에서 「방금」 강조를 받았다(PR #326 codex)
+    // 옛 숨김 카드(숨길 때 올랐다)가 맨 앞에 섰다(PR #326 codex)
     const list = Object.values(cards)
       .filter((c) => !c.hidden)
       .sort(byLatest);
     shownHighlights.current = reuseHighlights(
       shownHighlights.current,
-      list.map((c, i) => toHighlight(c, i, now, base)),
+      list.map((c) => toHighlight(c, now, base, zero)),
       now,
     );
     return shownHighlights.current;
-  }, [cards, now, base]);
+  }, [cards, now, base, zero]);
   const hiddenHighlights = useMemo(() => {
     const list = Object.values(cards)
       .filter((c) => c.hidden)
       .sort(byLatest);
-    // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 가린 카드에는 주지 않는다
     shownHiddenHighlights.current = reuseHighlights(
       shownHiddenHighlights.current,
-      list.map((c) => toHighlight(c, -1, now, base)),
+      list.map((c) => toHighlight(c, now, base, zero)),
       now,
     );
     return shownHiddenHighlights.current;
-  }, [cards, now, base]);
+  }, [cards, now, base, zero]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: soop } = useQuery(soopLinkQueryOptions);
@@ -872,7 +936,7 @@ export function useLiveMockState(pastRoute: boolean, chartPaused = false): LiveM
       if (card.streamId !== streamIdRef.current) return;
       setCards((prev) => {
         if (isStale(prev[card.id], card)) return prev;
-        const known = keepKnownThumbnail(prev[card.id], card);
+        const known = keepKnownPlayerAtMs(prev[card.id], keepKnownThumbnail(prev[card.id], card));
         // 내용이 같으면 앞 객체를 그대로 둔다(merge와 같은 이유)
         return sameSnapshot(prev[card.id], known, Date.now())
           ? prev

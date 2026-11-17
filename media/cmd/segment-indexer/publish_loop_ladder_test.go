@@ -201,6 +201,139 @@ func TestLadderCacheEligibleDBIneligibleAlarmsUnstood(t *testing.T) {
 	}
 }
 
+// pushRow 는 이 프로세스의 인덱서가 스트림 s 의 seq 행(회차 sid · segRow 의 값)을 커밋하고 캐시에 넘기는 INSERT push 다.
+func (f *publishLoop) pushRow(s, sid string, seq int64) {
+	r := segRow(s, sid, seq, false)
+	f.cache.ApplyInsert(s, seq, index.InsertCommit{SessionID: sid, PlaybackPDT: r.PlaybackPDT, PlaybackS3Key: r.PlaybackS3Key,
+		DurationMS: r.DurationMS})
+}
+
+// 놓친 push 의 회복(2026-11-16 prod 교착 회귀) — 다른 상자가 seq 4 를 장부에 먼저 넣어 이 프로세스의 캐시에는 그 push 가 없고,
+// 4 의 ③ 은 영구 실패다. 옛 캐시는 5 · 6 push 를 버려 뷰가 3 에서 멈췄고 사다리는 4 를 못 찾아(no_row) GAP 을 세우지 못해 회차
+// 끝까지 발행이 멈췄다. 지금은 빈 seq 뒤 push 가 적재를 요구해 뷰가 4 를 싣고(cache_drift_repaired), 4 가 GAP_HOLD 를 넘으면
+// L2 가 GAP 틱을 내며, 그 뒤 5 · 6 · 7 발행이 이어진다. 정체 경보는 없다 — 다만 이것은 시험 시계가 1초 다음 25초로 건너뛰어 그
+// 사이 holding 대기 구간의 평가를 하지 않은 결과다(운영에서는 그 구간에 L4 ERROR holding 이 설 수 있다).
+func TestLadderGapsRowWhosePushTheCacheMissed(t *testing.T) {
+	f := newPublishLoop(t)
+	f.put("s1", liveLedger("s1", "S", 3, 3))
+	f.publishOnce("s1", "S", 3, loopBase)
+	ledger := liveLedger("s1", "S", 6, 3) // 장부: 4 는 다른 쓰기자 몫 · ③ failed
+	ledger.Rows[5].PlaybackUploaded, ledger.Rows[6].PlaybackUploaded = true, true
+	f.work.ledgers["s1"] = ledger
+	f.pushRow("s1", "S", 5)
+	f.pushRow("s1", "S", 6)
+
+	f.hold(loopBase.Add(time.Second))
+	f.settle(loopBase.Add(time.Second))
+	if n := len(f.work.loadCalls()); n != 1 {
+		t.Fatalf("적재 = %d번, want 1(빈 seq 뒤 push 가 요구)", n)
+	}
+	if n := f.logs.countLevel(slog.LevelWarn, "cache_drift_repaired"); n != 1 {
+		t.Errorf("cache_drift_repaired WARN = %d줄, want 1", n)
+	}
+	gapAt := loopBase.Add(25 * time.Second) // 행 4 의 dueAt +22초 · holdAge 3초 — L2
+	f.hold(gapAt)
+	f.settle(gapAt)
+	f.pushRow("s1", "S", 7)
+	f.uploaded("s1", "S", 7)
+	f.hold(gapAt.Add(time.Second))
+	f.settle(gapAt.Add(time.Second))
+
+	calls := f.work.tickCalls()
+	gapTicks := 0
+	for _, c := range calls {
+		if c.in.GapCandidate != nil && *c.in.GapCandidate == 4 {
+			gapTicks++
+		}
+	}
+	if gapTicks != 1 {
+		t.Errorf("행 4 의 GAP 틱 = %d번, want 1", gapTicks)
+	}
+	if last := calls[len(calls)-1]; !slices.Equal(rowSeqs(last), seqRange(0, 7)) {
+		t.Errorf("마지막 틱 행 = %v, want 0..7 — GAP 뒤 발행이 이어진다", rowSeqs(last))
+	}
+	if p := f.rewind.streams["s1"].pub.Prev; p == nil || p.PublishedSeq != 7 {
+		t.Errorf("발행본 = %+v, want PublishedSeq 7", p)
+	}
+	if n := f.logs.count("rewind_publish_stall_seconds"); n != 0 {
+		t.Errorf("정체 경보 = %d줄, want 0", n)
+	}
+}
+
+// 감시 단독 회복 — push 가 하나도 오지 않는 경로다. 뷰에는 회차 S 의 0..4 가 있고 4 는 ③ 영구 실패인데 S 가 ending 이 되어
+// 사다리가 꺼졌다(머리 3 고정 · 감시 H+1 = 4 는 뷰 안). 다른 프로세스가 새 회차 T(live)의 5 · 6 을 넣었다. 감시 결과가 실은
+// 장부 마지막 seq(6)가 뷰 끝(4) 너머라 두 감시 연속 뒤 적재가 나가고, 뷰가 T 를 싣고 소유 회차가 T 가 된다. 그 뒤 4 가
+// GAP_HOLD 를 넘으면 L2 가 GAP 틱을 내고 T 의 5 · 6 발행이 이어진다. H+1 대조(settled · 뷰에 없음)만으로는 이 모양에서 적재가
+// 한 번도 나가지 않는다 — H+1 = 4 가 뷰 안에 있기 때문이다.
+func TestWatchAloneRecoversNewSessionBeyondStuckRow(t *testing.T) {
+	f := newPublishLoop(t)
+	f.watchEveryHold()
+	f.put("s1", liveLedger("s1", "S", 4, 3))
+	f.publishOnce("s1", "S", 3, loopBase)
+	// 부팅 감시가 publishOnce 안에서 이미 나갔다 — 그 결과를 받아 감시 몸체가 끝난 뒤에 몸체(watchFn)와 장부를 바꾼다. 도는
+	// 몸체가 락 안에서 읽는 칸을 시험이 락 없이 쓰면 데이터 경쟁이다.
+	f.settleWatch(loopBase, 1)
+	f.cache.ApplySessionEnding("s1", "S")
+	f.rewind.stream("s1").loadedAt = loopBase // 적재로 세운 뷰다 — 쉬는 뷰 버리기(Forget)의 기점
+	ledger := liveLedger("s1", "S", 6, 3)
+	ledger.Sessions[0].State = "ending"
+	ledger.Sessions = append(ledger.Sessions, index.RewindSession{SessionID: "T", State: "live", InitUploaded: true,
+		TargetDuration: 6, MinSeq: 5})
+	for _, seq := range []int64{5, 6} {
+		ledger.Rows[seq] = segRow("s1", "T", seq, true)
+	}
+	f.work.ledgers["s1"] = ledger
+	f.work.watchFn = func(probes []index.WatchProbe) publish.WatchOutcome {
+		var w publish.WatchOutcome
+		for _, p := range probes {
+			d := index.WatchDrift{StreamID: p.StreamID, NextSeq: p.NextSeq, HasCutoff: true, LastSeq: 6, HasLast: true}
+			if p.NextSeq <= 6 {
+				d.Next, d.HasNext = ledger.Rows[p.NextSeq], true
+			}
+			w.Drift = append(w.Drift, d)
+		}
+		return w
+	}
+
+	for i := range 6 {
+		at := loopBase.Add(25*time.Second + time.Duration(i)*time.Second) // 행 4 의 holdAge 3초부터 — L2
+		f.hold(at)
+		f.settleWatch(at, i+2)
+		f.settle(at)
+	}
+
+	if n := len(f.work.loadCalls()); n != 1 {
+		t.Fatalf("적재 = %d번, want 1(감시 두 번 연속 불일치)", n)
+	}
+	if owner, ok := f.cache.Owner("s1"); !ok || owner.SessionID != "T" || owner.State != "live" {
+		t.Errorf("소유 회차 = %+v(%v), want T live", owner, ok)
+	}
+	calls := f.work.tickCalls()
+	last := calls[len(calls)-1]
+	if last.in.Playlist.Owner != "T" || !slices.Equal(rowSeqs(last), []int64{5, 6}) {
+		t.Errorf("마지막 틱 = 회차 %s · 행 %v, want T · [5 6]", last.in.Playlist.Owner, rowSeqs(last))
+	}
+	if p := f.rewind.streams["s1"].pub.Prev; p == nil || p.PublishedSeq != 6 {
+		t.Errorf("발행본 = %+v, want PublishedSeq 6", p)
+	}
+}
+
+// 뷰 뒤처짐 경보의 배선 — 놓친 push 뒤 적재가 나가기 전 평가에서 정체가 7.5초에 닿았으면 사다리 입력에 뒤처짐이
+// 실려(cache.Behind) L4 가 ERROR gap=view_behind 로 선다 — 방송 종료 구간의 no_row WARN 이 아니다.
+func TestLadderAlarmsViewBehindAfterMissedPush(t *testing.T) {
+	f := newPublishLoop(t)
+	f.put("s1", liveLedger("s1", "S", 3, 3))
+	f.publishOnce("s1", "S", 3, loopBase)
+	f.pushRow("s1", "S", 5) // 4 는 다른 쓰기자 몫이라 push 가 없다
+
+	f.hold(loopBase.Add(7500 * time.Millisecond))
+
+	if a := f.logs.attrs("rewind_publish_stall_seconds"); f.logs.countLevel(slog.LevelError, "rewind_publish_stall_seconds") != 1 ||
+		a["gap"] != "view_behind" {
+		t.Errorf("L4 = %v, want ERROR 한 줄(gap=view_behind)", a)
+	}
+}
+
 // lazy 갱신(체크리스트 474 B-3 28 · 계획 커밋 순서 7 〔r51〕 · 판단 J80 ⑷) — fence 를 쥔 live 소유 회차에 마지막 갱신에서 3.5초가
 // 지나야 갱신 작업을 하나 내고(그 전에는 0), 갱신이 돌아오면 그 시각부터 다시 잰다. 틱이 도는 동안에는 차례가 와도 내지 않고
 // 도는 틱에 병합하지도 않는다 — 병합되면 끝난 뒤 틱이 한 번 더 돈다(P0 왕복이 늘어 틱당 상한이 깨진다).

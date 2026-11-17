@@ -84,6 +84,11 @@ type rewindLoop struct {
 	invalid     map[string]index.PlaybackState
 	rangeWarned map[string]string
 	alarms      map[string]*readyAlarm
+	// recheckedAt 은 ending 재조회(recheckEnding)가 마지막으로 묶음을 담은 holdTick 시각이고(영값 = 아직 — 첫
+	// holdTick 에 담는다) recheckQueue 는 아직 읽기를 내지 않은 그 묶음의 스트림이다(이름순 — 다 읽혀야 다음 묶음을
+	// 담는다).
+	recheckedAt  time.Time
+	recheckQueue []string
 
 	// endGapRun 은 L3 종료 손잡이다(gap_run.go — 운영은 index.EndGapRun). nil 이면 스위치 끔이라 셈만 하고 끝내지 않는다.
 	endGapRun func(ctx context.Context, streamID, sessionID string) (string, error)
@@ -94,7 +99,7 @@ type rewindLoop struct {
 	liveEndRetryAt time.Time
 
 	// fin 은 정산 몫이다(M6-3b — rewind_finalize.go). run 이 조립 밖에서 채워 발행 꺼짐 · 강등에서도 돈다. nil 이면 정산 ·
-	// 상태 전달 · 계승 해제를 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
+	// 상태 전달을 하지 않는다(4.1 전이 · 발행 몫만 보는 시험).
 	fin *finalizer
 }
 
@@ -105,8 +110,8 @@ type laneWork struct {
 	renew func(ctx context.Context, st publish.State, sessionID string) publish.Outcome
 	load  func(ctx context.Context, in publish.LoadInput) publish.LoadOutcome
 	watch func(ctx context.Context, probes []index.WatchProbe) publish.WatchOutcome
-	// seal 은 L2′ 의 봉인이다(운영은 Publisher.Endlist — stall_seal.go).
-	seal func(ctx context.Context, streamID, sessionID string) publish.FreezeOutcome
+	// seal 은 L2′ 의 봉인이다(운영은 Publisher.EndlistIfCaughtUp — 장부 끝이 viewNext 앞일 때만 봉인 · stall_seal.go).
+	seal func(ctx context.Context, streamID, sessionID string, viewNext int64) publish.FreezeOutcome
 	// audit 은 동결 감사다(운영은 프로세스에 하나인 FrozenAuditor 의 Audit — 문서당 복구 1회를 그 감사기가 기억한다). nil 이면
 	// 감사를 내지 않는다.
 	audit func(ctx context.Context) publish.AuditOutcome
@@ -162,11 +167,10 @@ type laneJob struct {
 type laneJobKind int
 
 const (
-	jobTick   laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
-	jobRenew                         // lazy 갱신(RenewFence)
-	jobLoad                          // 캐시 적재(LoadLedger)
-	jobRevoke                        // 4D round_split 의 계승 해제(RevokeInheritance — M6-3b)
-	jobSeal                          // L2′ 봉인(Endlist — M6-3b 커밋 ④b)
+	jobTick  laneJobKind = iota + 1 // 발행 틱(평시 · GAP)
+	jobRenew                        // lazy 갱신(RenewFence)
+	jobLoad                         // 캐시 적재(LoadLedger)
+	jobSeal                         // L2′ 봉인(Endlist — M6-3b 커밋 ④b)
 )
 
 // holdTick 은 holdTicks case 의 되감기 몫이다 — 그 case 의 현재 시각 now 로 4.1 종료 전이를 돌리고, 발행 몫이 있으면 차례대로
@@ -179,14 +183,16 @@ const (
 // 스냅숏은 그 틱의 Drain · 개시 삭제를 본다.
 //
 // 정산 몫(M6 3.2 holdTick 순서의 정본)은 4.1 전이와 M5 Drain 사이다: endOfflineSessions → endGapRuns(L3) → endStallSeals(L2′ —
-// 둘 다 스위치 켬일 때만) → 받은편지함 비우기(계승 해제 · 상태 표지 → 차선 발사) → finalizeTick(빠른 길 · 스캔 주기) → M5
-// Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식 EndLive · L3 · L2′ 가 남긴 표지는 같은 틱의
-// 받은편지함 비우기에서 읽힌다. L2′ 의 봉인은 발행 몫의 사다리가 스트림 차선에 낸다(stall_seal.go).
+// 둘 다 스위치 켬일 때만) → 받은편지함 비우기(상태 표지 → 차선 발사) → ending 재조회(남은 읽기 칸만 — POK-525) →
+// finalizeTick(빠른 길 · 스캔 주기) → M5 Drain → 발행 몫. 조기 반환 앞이라 발행 꺼짐 · 강등에서도 돈다(D56). 표식
+// EndLive · L3 · L2′ 가 남긴 표지는 같은 틱의 받은편지함 비우기에서 읽힌다. 재조회가 그 뒤인 것은 커밋 표지가 읽기 칸을
+// 먼저 쓰게 하려는 것이다. L2′ 의 봉인은 발행 몫의 사다리가 스트림 차선에 낸다(stall_seal.go).
 func (r *rewindLoop) holdTick(ctx context.Context, now time.Time) {
 	r.endOfflineSessions(ctx, now)
 	r.endGapRuns(ctx, now)
 	r.endStallSeals(ctx, now)
 	r.drainInboxes(ctx)
+	r.recheckEnding(ctx, now)
 	r.finalizeTick(ctx, now)
 	r.drainFinals()
 	if r.publishing() {
@@ -244,8 +250,6 @@ func (r *rewindLoop) complete(ctx context.Context, res publish.Result, now time.
 		r.finalStepDone(ctx, res, now)
 	case publish.KindPlayback:
 		r.playbackDone(ctx, res, rerun)
-	case publish.KindRevoke:
-		r.revokeDone(ctx, res, rerun, now)
 	case publish.KindSeal:
 		r.sealDone(ctx, res, now)
 	}
@@ -402,6 +406,7 @@ func (r *rewindLoop) evaluateLadders(ctx context.Context, now time.Time) map[str
 		rec.ladder, step = r.pub.EvaluateLadder(ctx, rec.ladder, publish.LadderInput{
 			StreamID: s, Snapshot: snap, Window: w, Owner: owner.RewindSession, Publish: rec.pub,
 			UnstoodGapSeq: rec.unstoodGap, PublishedAt: rec.publishedAt, OwnedSince: rec.ownedSince, Now: now,
+			ViewBehind: r.cache.Behind(s),
 		})
 		if step.Expedite && r.expedite != nil {
 			r.expedite(s, step.Seq)

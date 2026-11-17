@@ -4,7 +4,11 @@ package main
 // 완결 평가 칸(계약9 ended outbox)은 run 이 여기서 한 번 만들고, EndLive · 4D 회차 닫힘 칸 · 정산 걸음이 같은 값을 쓴다.
 //
 // 완결 평가 칸은 broadcast.EnqueueEndedIfComplete 를 게이트와 묶은 것이다. 게이트는 기동 조립(startLifecycle)이 설정에서
-// 만든다 — 꺼진 영값 게이트는 outbox 문장을 보내지 않는다(D45 — 켜기 전 회차는 발행하지 않는다).
+// 만든다 — 꺼진 영값 게이트는 outbox 문장을 보내지 않는다(D45 — 켜기 전 회차는 발행하지 않는다). 그렇게 놓친 완결 평가는
+// 발행기 보정이 거둔다(broadcast repair.go) — 보정 후보(started 가 살아 있고(abandoned 아님) · 닫힘 ∧ 전원 ended ·
+// ended 없음 · 회차 시작이 보정 창(58일) 안)이고, 같은 DB 에 발행 사이드카(마지막 lifecycle_degraded 가 value=0 인
+// 사이드카 — 그 줄을 내지 않는 옛 판은 보정하지 않는다)가 떠 있을 때다. 꺼진 사이드카가 연 회차는 started 가 없어
+// ended 도 없다.
 
 import (
 	"context"
@@ -86,7 +90,7 @@ func logRewindEndSwitches(log *slog.Logger, gapRunEnd, stallSeal bool) {
 }
 
 // closeRound 는 4D 적용의 회차 닫힘 칸이다(session.IntentOptions.CloseRound — 설계 10절 「M6-3b 가 CloseRound 칸을 채운다」).
-// upgraded 는 그 트랜잭션에서 회차를 닫고 완결을 평가하고, round_split 은 R 을 직접 닫은 뒤라 완결만 평가된다.
+// upgraded 와 L 이 끝난 forwarded 가 그 트랜잭션 끝에서 불러 회차를 닫고 완결을 평가한다.
 func (a finalizeAssembly) closeRound() func(ctx context.Context, tx pgx.Tx, round string) error {
 	return func(ctx context.Context, tx pgx.Tx, round string) error {
 		_, err := index.TryCloseRound(ctx, tx, round, a.close, a.enqueue)
@@ -108,14 +112,14 @@ func finalizeMode(bucket string, assembled bool) finalize.Mode {
 
 // wire 는 r 에 정산 몫을 채운다 — run 이 발행 조립(assemblePublishing) 뒤 · 루프 기동 전에 한 번 부른다. 차선은 조립 밖에서
 // 이미 채워져 있어야 한다(run). 상태 전달 sink 는 M5 받은편지함(assembleStatus 가 채운 finals)이다.
-func (a finalizeAssembly) wire(r *rewindLoop, cfg config.Config, pool *pgxpool.Pool, inbox *session.PlaybackInbox, intents *session.IntentInbox) {
+func (a finalizeAssembly) wire(r *rewindLoop, cfg config.Config, pool *pgxpool.Pool, inbox *session.PlaybackInbox) {
 	var sink index.PlaybackSink
 	if r.finals != nil {
 		sink = r.finals.Post
 	}
 	r.fin = newFinalizer(finalizerOptions{
 		Mode: finalizeMode(cfg.S3.Bucket, r.pub != nil), Every: finalizeScanEvery, CloseAfter: a.close.Window + a.close.Slack,
-		Work: newFinalizeWork(pool, r.pub, a.close, a.enqueue), Inbox: inbox, Intents: intents, Sink: sink,
+		Work: newFinalizeWork(pool, r.pub, a.close, a.enqueue), Inbox: inbox, Sink: sink,
 		PlaybackReadMax: cfg.RewindPlaybackReadMax,
 	})
 }

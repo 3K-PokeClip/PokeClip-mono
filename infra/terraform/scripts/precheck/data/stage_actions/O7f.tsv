@@ -10,6 +10,9 @@
 # 로그 그룹 태그 읽기(결정 65 예외 · 리뷰가 찾은 누락 · kty 2026-10-25 넣고
 # PR). KVS 값 동작은 O7f-stop2 에만.
 # SG 규칙 재조회 읽기(POK-479 — 결정 65 예외 · 그 덩어리의 주석).
+# /dvr 하한 함수의 재조회 · 갱신 · 판정 B′(POK-525 계획 Ⓓ 8절 5 — 그
+# 덩어리의 주석).
+# /dvr 하한 경보 · 판정 K(POK-525 계획 Ⓓ-3 — 그 덩어리의 주석).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # CloudFront 제어면(KVS 그릇 생성 · 재조회 포함 — 값 동작 아님)
@@ -29,6 +32,55 @@ cloudfront:CreateOriginRequestPolicy	us-east-1	*
 cloudfront:CreateResponseHeadersPolicy	us-east-1	*
 cloudfront:CreateOriginAccessControl	us-east-1	*
 cloudfront:CreateInvalidation	us-east-1	*
+
+# /dvr 하한 함수 dvr-floor(POK-525 — modules/cdn_media edge_auth.tf). 생성 ·
+# 게시 · 설명은 위 행이 덮는다. provider 6.68.0 은 함수를 Read 에서
+# GetFunction(코드) · DescribeFunction 으로 읽어 재apply 의 refresh 가
+# 부르고, 코드가 바뀌면 UpdateFunction 뒤 PublishFunction 을 부른다(계획 Ⓓ
+# 리서치 R6 · R8). TestFunction 은 1단 apply 뒤 판정 B′(prod 함수
+# test-function — runbooks/edge-tests.md)가 부른다. 함수는 롤백에서도
+# 지우지 않아 DeleteFunction 은 두지 않는다. KVS 연결 권한은 실험대 (3)
+# R6(2026-11-11): 함수 권한만으로 KVS 연결 Create · Update 성공 — KVS 쪽
+# 동작 불요.
+cloudfront:GetFunction	us-east-1	*
+cloudfront:UpdateFunction	us-east-1	*
+cloudfront:TestFunction	us-east-1	*
+
+# /dvr 하한 경보(POK-525 계획 Ⓓ-3 — prod/edge dvr_floor_alarms.tf). 알림
+# 주제 · 주제 정책 · 지표 필터 둘 · 경보 셋, 모두 us-east-1. provider 6.68.0
+# 소스(internal/service/sns topic.go · topic_policy.go · tags_gen.go,
+# logs/metric_filter.go, cloudwatch/metric_alarm.go · tags_gen.go —
+# 2026-11-11 대조)가 부르는 동작이다. 주제: CreateTopic · Read 의
+# GetTopicAttributes · 속성 · 정책의 SetTopicAttributes(정책 자원을 지울 때도
+# 기본 정책으로 되돌리는 SetTopicAttributes) · DeleteTopic. 지표 필터:
+# PutMetricFilter · Read 의 DescribeMetricFilters · DeleteMetricFilter.
+# 경보: PutMetricAlarm · Read 의 DescribeAlarms · DeleteAlarms. 태그는 둘 다
+# 생성 요청에 실려(default_tags) 생성 때 TagResource 도 인가하고(API 원문 —
+# CreateTopic 「you must have the sns:CreateTopic and sns:TagResource
+# permissions」 · PutMetricAlarm 「you must have the cloudwatch:TagResource
+# permission」), Read 가 ListTagsForResource, 태그를 바꾸는 apply 가
+# TagResource · UntagResource 를 부른다. 지우는 동작은 이 커밋을 되돌린
+# apply 가 부른다. 판정 K(runbooks/edge-tests.md — 1단 apply 뒤 · 2단 전
+# 경보 알림 경로 확인)는 TestMetricFilter(자원 없음 — 「*」) · SetAlarmState 를
+# 부른다(판정 B′ 의 TestFunction 과 같은 까닭으로 이 묶음에 둔다).
+sns:CreateTopic	us-east-1	*
+sns:GetTopicAttributes	us-east-1	*
+sns:SetTopicAttributes	us-east-1	*
+sns:DeleteTopic	us-east-1	*
+sns:TagResource	us-east-1	*
+sns:UntagResource	us-east-1	*
+sns:ListTagsForResource	us-east-1	*
+logs:PutMetricFilter	us-east-1	*
+logs:DescribeMetricFilters	us-east-1	*
+logs:DeleteMetricFilter	us-east-1	*
+logs:TestMetricFilter	us-east-1	*
+cloudwatch:PutMetricAlarm	us-east-1	*
+cloudwatch:DescribeAlarms	us-east-1	*
+cloudwatch:DeleteAlarms	us-east-1	*
+cloudwatch:SetAlarmState	us-east-1	*
+cloudwatch:TagResource	us-east-1	*
+cloudwatch:UntagResource	us-east-1	*
+cloudwatch:ListTagsForResource	us-east-1	*
 
 # 표준 로그 v2 전달 · 대상 로그 그룹 · 보존 · 리소스 정책(us-east-1)
 logs:PutDeliverySource	us-east-1	*

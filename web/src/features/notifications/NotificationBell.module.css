@@ -1,0 +1,631 @@
+/* 종과 알림 창 (POK-540, 시안 A · A-1). 창은 포털이라 콘텐츠 유닛(--pc-u)을 쓴다.
+   종 버튼 · 아이콘 크기는 놓인 자리(GlobalHeader · Side의 .bellWrap)가 정한다 — 여기선 숫자 배지만 얹는다. */
+
+.bell {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 안 읽은 수 — 디자인 1a의 point색 점을 숫자 알약으로(10개부터 9+). 테두리는 종 뒤 바탕색으로 끊는다 */
+.badge {
+  position: absolute;
+  top: calc(2 * var(--pc-u));
+  right: calc(1 * var(--pc-u));
+  min-width: calc(17 * var(--pc-u));
+  height: calc(17 * var(--pc-u));
+  box-sizing: border-box;
+  padding: 0 calc(4 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  border: 2px solid var(--pc-color-bg-canvas);
+  background: var(--pc-color-point);
+  color: var(--pc-color-text-on-accent);
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 750;
+  line-height: calc(13 * var(--pc-u));
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* 사이드바 종은 32u 상자 · 셸 유닛(--pc-shell-u)이고 바탕이 surface다 */
+.bell[data-place='sidebar'] .badge {
+  top: calc(-4 * var(--pc-shell-u));
+  right: calc(-5 * var(--pc-shell-u));
+  border-color: var(--pc-color-bg-surface);
+}
+
+.bell button[aria-expanded='true'] {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+/* ---------- 창 ---------- */
+
+/* Popover 기본 안쪽 여백(space-4)을 걷고 머리 · 탭 · 목록이 각자 여백을 갖는다 */
+.panel[role='dialog'] {
+  display: flex;
+  flex-direction: column;
+  width: calc(380 * var(--pc-u));
+  max-width: calc(100vw - 24px);
+  max-height: min(calc(560 * var(--pc-u)), calc(100dvh - 96px));
+  padding: 0;
+  overflow: hidden;
+  border-radius: calc(14 * var(--pc-u));
+  box-shadow: var(--pc-shadow-xl);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(10 * var(--pc-u)) calc(8 * var(--pc-u))
+    calc(16 * var(--pc-u));
+}
+
+.head svg {
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
+}
+
+.title {
+  margin: 0 auto 0 0;
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 750;
+}
+
+.textButton {
+  padding: calc(4 * var(--pc-u)) calc(8 * var(--pc-u));
+  border: none;
+  border-radius: calc(6 * var(--pc-u));
+  background: none;
+  font: inherit;
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-accent-text);
+  cursor: pointer;
+}
+
+.textButton:hover:not(:disabled) {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.textButton:disabled,
+.textButton[aria-disabled='true'] {
+  color: var(--pc-color-text-disabled);
+  cursor: default;
+}
+
+.textButton[aria-disabled='true']:hover {
+  background: none;
+}
+
+.textButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* 안 읽음 · 전체 — 같은 크기 두 칸 */
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(2 * var(--pc-u));
+  margin: 0 calc(12 * var(--pc-u)) calc(6 * var(--pc-u));
+  padding: calc(3 * var(--pc-u));
+  border-radius: calc(9 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+}
+
+.tabs button {
+  height: calc(28 * var(--pc-u));
+  border: none;
+  border-radius: calc(7 * var(--pc-u));
+  background: none;
+  font: inherit;
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-secondary);
+  cursor: pointer;
+}
+
+.tabs button[aria-pressed='true'] {
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+  box-shadow: var(--pc-shadow-sm);
+}
+
+.tabs button:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+.tabs b {
+  margin-left: calc(4 * var(--pc-u));
+  color: var(--pc-color-point-text);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u)) calc(12 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+}
+
+/* 스크롤 상자 안 덩어리가 줄어들어 잘리지 않게 */
+.body > * {
+  flex-shrink: 0;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+}
+
+.groupLabel {
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  margin: calc(6 * var(--pc-u)) calc(8 * var(--pc-u)) calc(4 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+}
+
+.groupCount {
+  color: var(--pc-color-point-text);
+}
+
+/* ---------- 알림 아이콘 — 상태색 하나만 ---------- */
+
+.kindIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(32 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
+  border-radius: 50%;
+}
+
+.kindIcon svg {
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
+}
+
+.kindIcon[data-tone='danger'] {
+  background: var(--pc-color-danger-subtle);
+  color: var(--pc-color-danger-text);
+}
+
+.kindIcon[data-tone='warning'] {
+  background: var(--pc-color-warning-subtle);
+  color: var(--pc-color-warning-text);
+}
+
+.kindIcon[data-tone='success'] {
+  background: var(--pc-color-success-subtle);
+  color: var(--pc-color-success-text);
+}
+
+.kindIcon[data-tone='info'] {
+  background: var(--pc-color-info-subtle);
+  color: var(--pc-color-info-text);
+}
+
+.kindIcon[data-tone='neutral'] {
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-secondary);
+}
+
+/* ---------- 줄 ---------- */
+
+/* 줄 = 그 화면으로 가는 단추 + 오른쪽 「읽음으로 표시」 단추(형제 — 단추 안에 단추를 둘 수 없다) */
+.rowWrap {
+  position: relative;
+  border-radius: calc(10 * var(--pc-u));
+}
+
+.rowWrap:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(11 * var(--pc-u));
+  width: 100%;
+  padding: calc(9 * var(--pc-u)) calc(36 * var(--pc-u)) calc(9 * var(--pc-u)) calc(8 * var(--pc-u));
+  border: none;
+  border-radius: calc(10 * var(--pc-u));
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:focus-visible,
+.todoTop:focus-visible,
+.heldHead:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* 읽은 줄은 흐리게 — 창을 닫기 전엔 「안 읽음」 탭에도 이 모양으로 남는다 */
+.rowWrap:not([data-unread]) .rowTitle,
+.todo:not([data-unread]) .rowTitle {
+  font-weight: 550;
+  color: var(--pc-color-text-secondary);
+}
+
+.rowWrap[data-dim] {
+  opacity: 0.6;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: calc(1 * var(--pc-u));
+  min-width: 0;
+  flex: 1;
+}
+
+.rowTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowDetail {
+  font-size: calc(12 * var(--pc-u));
+  line-height: 1.45;
+  color: var(--pc-color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowDetail[data-wrap] {
+  white-space: normal;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(2 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 갈 곳의 이름은 호버 · 포커스 때만 — 줄 전체가 그 링크다 */
+.go {
+  color: var(--pc-color-accent-text);
+  font-weight: 650;
+  opacity: 0;
+  transition: opacity var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.rowWrap:hover .go,
+.row:focus-visible .go {
+  opacity: 1;
+}
+
+.doneTag {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--pc-u));
+  padding: 0 calc(6 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-bg-inset);
+  font-weight: 650;
+  color: var(--pc-color-text-secondary);
+}
+
+.doneTag svg {
+  width: calc(11 * var(--pc-u));
+  height: calc(11 * var(--pc-u));
+}
+
+.deadline {
+  padding: 0 calc(6 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-warning-subtle);
+  color: var(--pc-color-warning-text);
+  font-weight: 700;
+}
+
+/* 안 읽음 점 = 「읽음으로 표시」 단추. 평소엔 point색 점, 줄에 올리거나 포커스가 오면 체크 단추로 바뀐다 */
+.markRead {
+  position: absolute;
+  top: calc(7 * var(--pc-u));
+  right: calc(4 * var(--pc-u));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(28 * var(--pc-u));
+  height: calc(28 * var(--pc-u));
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--pc-color-text-secondary);
+  cursor: pointer;
+}
+
+.markDot {
+  width: calc(7 * var(--pc-u));
+  height: calc(7 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-point);
+}
+
+.markCheck {
+  display: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}
+
+.rowWrap:hover .markRead,
+.todo:hover .markRead,
+.markRead:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface-raised);
+}
+
+.rowWrap:hover .markDot,
+.todo:hover .markDot,
+.markRead:focus-visible .markDot {
+  display: none;
+}
+
+.rowWrap:hover .markCheck,
+.todo:hover .markCheck,
+.markRead:focus-visible .markCheck {
+  display: block;
+}
+
+.markRead:hover {
+  color: var(--pc-color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--pc-color-border-strong);
+}
+
+.markRead:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 0;
+}
+
+/* 터치 화면엔 올릴 마우스가 없다 — 처음부터 체크 단추로 */
+@media (hover: none) {
+  .markDot {
+    display: none;
+  }
+
+  .markCheck {
+    display: block;
+  }
+
+  .markRead {
+    box-shadow: inset 0 0 0 1px var(--pc-color-border-default);
+  }
+}
+
+/* ---------- 확인 필요 카드 ---------- */
+
+.todoList {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+}
+
+.todo {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(6 * var(--pc-u)) calc(6 * var(--pc-u)) calc(12 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(12 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+}
+
+/* 윗부분이 버튼 — 누르면 그 화면으로 가며 읽음 */
+.todoTop {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: calc(11 * var(--pc-u));
+  width: 100%;
+  padding: calc(6 * var(--pc-u)) calc(36 * var(--pc-u)) calc(4 * var(--pc-u)) calc(6 * var(--pc-u));
+  border: none;
+  border-radius: calc(8 * var(--pc-u));
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.todoTop:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.todo > .markRead {
+  top: calc(9 * var(--pc-u));
+  right: calc(8 * var(--pc-u));
+}
+
+/* 버튼은 카드 폭을 같은 크기로 나눈다(하나면 꽉, 둘이면 반씩) */
+.actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: calc(6 * var(--pc-u));
+  padding: 0 calc(6 * var(--pc-u));
+}
+
+.actions[data-count='2'] {
+  grid-template-columns: 1fr 1fr;
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+.confirm > span {
+  padding: 0 calc(6 * var(--pc-u));
+}
+
+/* ---------- 방송 중 방해 금지 ---------- */
+
+.dnd {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(9 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(12 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  font-size: calc(12 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+.dnd > svg {
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  margin-top: calc(2 * var(--pc-u));
+}
+
+.dnd b {
+  display: block;
+  color: var(--pc-color-text-primary);
+}
+
+.held {
+  border: 1px dashed var(--pc-color-border-default);
+  border-radius: calc(10 * var(--pc-u));
+}
+
+.heldHead {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  width: 100%;
+  padding: calc(10 * var(--pc-u)) calc(12 * var(--pc-u));
+  border: none;
+  border-radius: calc(10 * var(--pc-u));
+  background: none;
+  font: inherit;
+  font-size: calc(12.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.heldHead > svg:first-child {
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+}
+
+.heldHead > span {
+  flex: 1;
+}
+
+.heldBody {
+  display: flex;
+  flex-direction: column;
+  padding: 0 calc(4 * var(--pc-u)) calc(6 * var(--pc-u));
+}
+
+.chevron {
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  transition: transform var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.chevron[data-open] {
+  transform: rotate(180deg);
+}
+
+/* ---------- 비었음 · 불러오는 중 ---------- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(36 * var(--pc-u)) calc(16 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  text-align: center;
+}
+
+.empty > svg {
+  width: calc(22 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.emptySub {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 「안 읽음」 탭에 새로 온 게 없을 때 — 확인 필요 카드 아래 한 줄 */
+.emptyLine {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(4 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) 0 calc(6 * var(--pc-u));
+  font-size: calc(12.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 「전체」 탭 끝 — 보여 주는 기간 */
+.keepNote {
+  margin: calc(4 * var(--pc-u)) 0 0;
+  padding: calc(8 * var(--pc-u)) 0 calc(2 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  text-align: center;
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(8 * var(--pc-u));
+}
+
+.loadingRow {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(11 * var(--pc-u));
+}
+
+.loadingRow .text {
+  gap: calc(6 * var(--pc-u));
+  padding-top: calc(2 * var(--pc-u));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .go,
+  .chevron {
+    transition: none;
+  }
+}

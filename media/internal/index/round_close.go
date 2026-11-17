@@ -114,13 +114,14 @@ SELECT session_id FROM stream_sessions
  ORDER BY started_at, session_id
    FOR NO KEY UPDATE`
 
-// closeRoundSQL 은 회차 닫힘이다 — 회차 전원 행에 같은 round_closed_at 을 쓴다(session closeRemainSQL 과 같은 글자).
+// closeRoundSQL 은 회차 닫힘이다 — 회차 전원 행에 같은 round_closed_at 을 쓴다.
 const closeRoundSQL = `
 UPDATE stream_sessions SET round_closed_at = pg_catalog.now()
  WHERE round_id = $1 AND round_closed_at IS NULL`
 
 // TryCloseRound 는 트랜잭션 tx 안에서 회차 round 의 닫힘 조건을 평가해 참이면 닫고, 닫았든 아니든 끝에서 완결 평가
-// (enqueue)를 부른다 — 이미 닫힌 회차(4D round_split 이 R 을 직접 닫은 뒤)는 완결 평가만 된다. 닫았으면 참이다.
+// (enqueue)를 부른다 — 이미 닫힌 회차(회차가 닫힌 뒤 사슬 phase 4 의 MarkChainEnded 가 부를 때)는 완결 평가만 된다.
+// 닫았으면 참이다.
 //
 // 부른 쪽이 위상 잠금을 쥐고 있어야 한다(phase 4 · CloseRound · 4D · 표식 뒤 EndLive). 잠금은 ② 소속 행(새 문장으로
 // 재확인) → 조건 재평가(같은 트랜잭션의 새 문장 — 소속 잠금 전에 본 값을 쓰지 않는다) → ③ 회차 전원 행 순이다. 개시가 같은

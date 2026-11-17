@@ -19,8 +19,9 @@ import (
 )
 
 // RewindRow 는 되감기 캐시가 싣는 장부 한 행이다 — 설계 4.1 settled 정본 SQL 의 열에서
-// is_discontinuity 를 뺀 것이다. 끊김 표시는 그 열을 근거로 쓰지 않으므로(계획 부기 29) 싣지 않는다 —
-// 실리지 않은 값은 표시 규칙이 잘못 읽을 수도 없다(계획 6.3 #7·#42 의 방어가 타입에 선다).
+// is_discontinuity 를 빼고 판(timing_version — 목록의 판 태그 재료)을 더한 것이다. 끊김 표시는 is_discontinuity
+// 를 근거로 쓰지 않으므로(계획 부기 29) 싣지 않는다 — 실리지 않은 값은 표시 규칙이 잘못 읽을 수도 없다(계획 6.3
+// #7·#42 의 방어가 타입에 선다).
 //
 // NULL 은 영값이다(InsertCommit 과 같은 규약). 세 carrier 열에는 NULL 아니면 실제 값이 들어가므로
 // 영값과 겹치지 않는다.
@@ -37,6 +38,9 @@ type RewindRow struct {
 	PlaybackUploaded bool
 	// IsGap 은 (stream_id, seq) 가 발행된 GAP 원장(stream_published_gaps)에 있는가다.
 	IsGap bool
+	// TimingVersion 은 timing_version 이다. 0 이면 NULL(판 NULL)이다(boundary.Row.TimingVersion). 원래 사실 칸
+	// (timing_wall_guess 등)은 생산자 기록이라 싣지 않는다(계약 B10 — 소비자는 판만 읽는다).
+	TimingVersion int16
 }
 
 // RewindSession 은 되감기 캐시가 싣는 회차(stream_sessions) 한 행의 여덟 열과 회차 최소 seq 다(계획
@@ -117,12 +121,14 @@ SELECT COALESCE((SELECT pg_catalog.max(seq) FROM suffix WHERE suffix_ms >= $3),
 // rewindRowsSQL 은 적재의 조각 축이다 — 설계 4.1 settled 정본 SQL 의 형상에서 범위를 `적재 하한 ≤ seq ≤ 머리($4)`
 // 로 열고 최신 쪽부터 행 수 상한($3)까지만 싣는 것이다(계획 4.5 A3 결정 3 둘째). is_discontinuity 는
 // 읽지 않는다. GAP 원장은 발행 상태(recorded·put_confirmed·vod_abandoned)와 무관하게 소속만 본다 —
-// settled 술어의 「(stream_id,k) ∈ stream_published_gaps」 그대로다.
+// settled 술어의 「(stream_id,k) ∈ stream_published_gaps」 그대로다. PDT 칸은 판(timing_version)만 읽는다 — 원래
+// 사실 칸은 생산자 기록이다(RewindRow.TimingVersion).
 const rewindRowsSQL = `
-SELECT seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded, is_gap
+SELECT seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded, is_gap, timing_version
   FROM (SELECT s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
                (s.playback_upload_state = 'uploaded') AS pb_uploaded,
-               (g.seq IS NOT NULL)                    AS is_gap
+               (g.seq IS NOT NULL)                    AS is_gap,
+               s.timing_version
           FROM stream_segments s
           LEFT JOIN stream_published_gaps g ON g.stream_id = s.stream_id AND g.seq = s.seq
          WHERE s.stream_id = $1 AND s.seq >= $2 AND s.seq <= $4
@@ -243,8 +249,8 @@ func loadRewindRows(ctx context.Context, tx pgx.Tx, streamID string, floor int64
 }
 
 // queryRewindRows 는 조각 축 열(seq · session_id · duration_ms · playback_pdt · playback_s3_key · pb_uploaded ·
-// is_gap)을 내는 문장 sql 을 돌려 행으로 편다 — 되감기 적재와 사슬 장부(LoadChainLedger)가 같은 열 · 같은 NULL
-// 규약을 쓴다. sql 은 이 패키지의 문장 상수(rewindRowsSQL · chainRowsSQL)만 받는다 — 호출자 입력으로 문장을
+// is_gap · timing_version)을 내는 문장 sql 을 돌려 행으로 편다 — 되감기 적재와 사슬 장부(LoadChainLedger)가 같은
+// 열 · 같은 NULL 규약을 쓴다. sql 은 이 패키지의 문장 상수(rewindRowsSQL · chainRowsSQL)만 받는다 — 호출자 입력으로 문장을
 // 짜지 않는다(값은 args 자리표로만 넘긴다).
 func queryRewindRows(ctx context.Context, tx pgx.Tx, streamID, sql string, args ...any) ([]RewindRow, error) {
 	rows, err := tx.Query(ctx, sql, args...)
@@ -260,11 +266,15 @@ func queryRewindRows(ctx context.Context, tx pgx.Tx, streamID, sql string, args 
 			sessionID *string
 			pdt       *time.Time
 			key       *string
+			version   *int16
 		)
-		if err := rows.Scan(&r.Seq, &sessionID, &r.DurationMS, &pdt, &key, &r.PlaybackUploaded, &r.IsGap); err != nil {
+		if err := rows.Scan(&r.Seq, &sessionID, &r.DurationMS, &pdt, &key, &r.PlaybackUploaded, &r.IsGap, &version); err != nil {
 			return nil, fmt.Errorf("되감기 적재 조각 스캔 실패 stream_id=%q: %w", streamID, err)
 		}
 		r.SessionID, r.PlaybackPDT, r.PlaybackS3Key = deref(sessionID), derefTime(pdt), deref(key)
+		if version != nil {
+			r.TimingVersion = *version
+		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -346,9 +356,14 @@ type WatchDrift struct {
 	// CutoffSeq 는 DB 컷오프다. HasCutoff 가 거짓이면 DB 에 컷오프가 없다.
 	CutoffSeq int64
 	HasCutoff bool
-	// Next 는 DB 의 NextSeq 행이다(적재와 같은 열). HasNext 가 거짓이면 그 행이 없다.
+	// Next 는 DB 의 NextSeq 행이다(적재와 같은 열 — 단 판 TimingVersion 은 읽지 않아 0 이다. 감시는 settled 판정만 하고
+	// 렌더하지 않는다). HasNext 가 거짓이면 그 행이 없다.
 	Next    RewindRow
 	HasNext bool
+	// LastSeq 는 장부의 그 스트림 마지막 seq(max(seq))다 — 컷오프 아래 행도 센다. HasLast 가 거짓이면 그 스트림에 행이
+	// 없다. 캐시 뷰 끝 너머의 행을 H+1 한 행과 무관하게 알린다.
+	LastSeq int64
+	HasLast bool
 }
 
 // WatchAbsent 는 감시 결과의 컷오프 부재 한 행이다(설계 4.1 (c)) — 컷오프가 없고 마지막 조각이 SEED_ALARM_AFTER 안인
@@ -380,7 +395,8 @@ type InitRepair struct {
 // H+1(자리로 짝짓는 배열) · $3 = SEED_ALARM_AFTER.
 //
 //	live    state = 'live' 회차의 열 다섯(A2 결정 11 SQL 그대로)
-//	drift   입력 스트림마다 DB 컷오프와 H+1 행의 settled 재료(적재 행 문장과 같은 열) — 판정하지 않는다
+//	drift   입력 스트림마다 DB 컷오프와 H+1 행의 settled 재료(적재 행 문장과 같은 열) — 판정하지 않는다. 그 스트림
+//	        장부의 마지막 seq 도 싣는다(PK 역순 첫 항목 — 스트림마다 색인 한 번)
 //	ids     장부의 스트림 ID 전부 — 색인에서 「지금보다 큰 첫 스트림 ID」만 골라 건너뛰며 뽑는다(재귀 — 문장 머리의
 //	        WITH RECURSIVE 는 이 CTE 때문이다). 마지막 스트림 뒤의 NULL 한 행에서 멈춘다
 //	absent  컷오프 없는 스트림 가운데 마지막 조각이 $3 안인 것 — 설계 4.1 (c) 문장과 뜻이 같다. 스트림은 ids 에서 받고
@@ -401,7 +417,8 @@ WITH RECURSIVE live AS (
     SELECT p.stream_id, p.next_seq, c.cutoff_seq,
            s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
            (s.playback_upload_state = 'uploaded') AS pb_uploaded,
-           (g.seq IS NOT NULL)                    AS is_gap
+           (g.seq IS NOT NULL)                    AS is_gap,
+           (SELECT pg_catalog.max(x.seq) FROM stream_segments x WHERE x.stream_id = p.stream_id) AS last_seq
       FROM ROWS FROM (pg_catalog.unnest($1::text[]), pg_catalog.unnest($2::bigint[])) AS p(stream_id, next_seq)
       LEFT JOIN stream_cutoffs c ON c.stream_id = p.stream_id
       LEFT JOIN stream_segments s ON s.stream_id = p.stream_id AND s.seq = p.next_seq
@@ -422,17 +439,41 @@ WITH RECURSIVE live AS (
 SELECT 'live' AS kind, stream_id, session_id, init_uploaded, inherit_absent, has_cutoff,
        NULL::bigint AS next_seq, NULL::bigint AS cutoff_seq, NULL::bigint AS seq, NULL::text AS row_session,
        NULL::int AS duration_ms, NULL::timestamptz AS playback_pdt, NULL::text AS playback_s3_key,
-       NULL::boolean AS pb_uploaded, NULL::boolean AS is_gap, NULL::timestamptz AS last_wall
+       NULL::boolean AS pb_uploaded, NULL::boolean AS is_gap, NULL::timestamptz AS last_wall, NULL::bigint AS last_seq
   FROM live
 UNION ALL
 SELECT 'drift', stream_id, NULL, NULL, NULL, NULL,
-       next_seq, cutoff_seq, seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded, is_gap, NULL
+       next_seq, cutoff_seq, seq, session_id, duration_ms, playback_pdt, playback_s3_key, pb_uploaded, is_gap, NULL, last_seq
   FROM drift
 UNION ALL
 SELECT 'absent', stream_id, NULL, NULL, NULL, NULL,
-       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, last_wall
+       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, last_wall, NULL
   FROM absent
  ORDER BY kind, stream_id, session_id, next_seq`
+
+// rewindLedgerLastSQL 은 봉인 전 장부 끝 확인이다(POK-591 — 정체 마감 L2′ 가 봉인하기 직전에 그 스트림 장부의 마지막
+// seq 를 본다). 감시 문장의 drift CTE 가 싣는 마지막 seq 하위 질의와 같은 꼴이다 — PK (stream_id, seq) 역순 첫 항목 한 번이고
+// 컷오프 아래 행도 센다. 행이 없으면 NULL 한 행이다.
+const rewindLedgerLastSQL = `SELECT pg_catalog.max(seq) FROM stream_segments WHERE stream_id = $1`
+
+// RowQuerier 는 문장 하나를 보내 한 행을 받는 쪽이다 — 풀(*pgxpool.Pool)과 트랜잭션(pgx.Tx)이 둘 다 맞는다.
+type RowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// LoadLedgerLast 는 streamID 장부의 마지막 seq 다(rewindLedgerLastSQL — 문장 하나). 행이 없으면 ok 거짓이다. q 는 풀이거나
+// 트랜잭션이다(publish.EndlistIfCaughtUp 은 fence 획득과 같은 트랜잭션에서 부른다). 시한은 부르는 쪽 ctx 가 정한다. 못 읽으면
+// 오류다.
+func LoadLedgerLast(ctx context.Context, q RowQuerier, streamID string) (last int64, ok bool, err error) {
+	var v *int64
+	if err := q.QueryRow(ctx, rewindLedgerLastSQL, streamID).Scan(&v); err != nil {
+		return 0, false, fmt.Errorf("장부 마지막 seq 조회 실패 stream_id=%q: %w", streamID, err)
+	}
+	if v == nil {
+		return 0, false, nil
+	}
+	return *v, true, nil
+}
 
 // LoadRewindWatch 는 30초 감시 한 문장을 읽는다(rewindWatchSQL — 풀 단일 문장 · 트랜잭션 없음). probes 는 드리프트
 // 대조 입력이고 seedAlarmAfter 는 (c) 의 창이다. 문장 시한은 TxnDeadline 이다(작업 안에서 — Lanes.Start 의 ctx 는 루프
@@ -469,12 +510,12 @@ func scanWatchRow(rows pgx.Rows, w *RewindWatch) error {
 		session, rowSession, key    *string
 		initUploaded, inheritAbsent *bool
 		hasCutoff, uploaded, gap    *bool
-		nextSeq, cutoff, seq        *int64
+		nextSeq, cutoff, seq, last  *int64
 		duration                    *int32
 		pdt, lastWall               *time.Time
 	)
 	if err := rows.Scan(&kind, &stream, &session, &initUploaded, &inheritAbsent, &hasCutoff,
-		&nextSeq, &cutoff, &seq, &rowSession, &duration, &pdt, &key, &uploaded, &gap, &lastWall); err != nil {
+		&nextSeq, &cutoff, &seq, &rowSession, &duration, &pdt, &key, &uploaded, &gap, &lastWall, &last); err != nil {
 		return fmt.Errorf("되감기 30초 감시 스캔 실패: %w", err)
 	}
 	switch kind {
@@ -482,9 +523,12 @@ func scanWatchRow(rows pgx.Rows, w *RewindWatch) error {
 		w.Live = append(w.Live, WatchLive{StreamID: stream, SessionID: deref(session),
 			InitUploaded: *initUploaded, InheritAbsent: *inheritAbsent, HasCutoff: *hasCutoff})
 	case "drift":
-		d := WatchDrift{StreamID: stream, NextSeq: *nextSeq, HasCutoff: cutoff != nil, HasNext: seq != nil}
+		d := WatchDrift{StreamID: stream, NextSeq: *nextSeq, HasCutoff: cutoff != nil, HasNext: seq != nil, HasLast: last != nil}
 		if d.HasCutoff {
 			d.CutoffSeq = *cutoff
+		}
+		if d.HasLast {
+			d.LastSeq = *last
 		}
 		if d.HasNext {
 			d.Next = RewindRow{Seq: *seq, SessionID: deref(rowSession), DurationMS: *duration, PlaybackPDT: derefTime(pdt),

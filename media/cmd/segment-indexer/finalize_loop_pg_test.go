@@ -22,12 +22,12 @@ import (
 func newLedgerFinalLoop(t *testing.T, pool *pgxpool.Pool, mode finalize.Mode) *finalLoop {
 	t.Helper()
 	f := &finalLoop{offlineLoop: newOfflineLoop(t, nil), lanes: publish.NewLanes(), inbox: session.NewPlaybackInbox(),
-		intents: session.NewIntentInbox(), sunk: &sinkLog{}}
+		sunk: &sinkLog{}}
 	co := index.CloseOptions{Window: 300 * time.Second, Slack: 60 * time.Second, Log: slog.New(f.logs)}
 	r := f.rewind
 	r.lanes = f.lanes
 	r.fin = newFinalizer(finalizerOptions{Mode: mode, Every: time.Second, CloseAfter: 360 * time.Second,
-		Work: newFinalizeWork(pool, nil, co, noEndedEnqueue), Inbox: f.inbox, Intents: f.intents, Sink: f.sunk.sink,
+		Work: newFinalizeWork(pool, nil, co, noEndedEnqueue), Inbox: f.inbox, Sink: f.sunk.sink,
 		PlaybackReadMax: 2})
 	return f
 }
@@ -91,7 +91,7 @@ VALUES ('U', 'slot', $1, 'ending', 'offline', $2, 'RU')`, stop.Add(-time.Hour), 
 INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, upload_state, session_id)
 VALUES ('slot', 1, 0, $1, 4000, 'k1', 'uploaded', 'U')`, stop.Add(-5*time.Second))
 	fa := finalizeAssembly{close: index.CloseOptions{Window: 300 * time.Second, Slack: 60 * time.Second}, enqueue: noEndedEnqueue}
-	o := newIntentOptions(slog.New(slog.DiscardHandler), fa.closeRound(), nil)
+	o := newIntentOptions(slog.New(slog.DiscardHandler), fa.closeRound())
 
 	res, err := session.ApplyIntentionalEnd(context.Background(), pool,
 		session.IntentionalEnd{StreamID: "slot", StoppedAt: stop, ConnStartedAt: stop.Add(-time.Hour)}, o)

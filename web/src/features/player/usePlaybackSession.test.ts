@@ -1,9 +1,16 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RewindStatusResult } from '@/api/rewindStatus';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { handedOff } from './handoffTestKit';
 import { HANDOFF_NOTICE } from './liveHandoff';
-import { transition, type SessionEvent, type XAnswer } from './rewindSwitch';
+import {
+  ENDING_WAIT_MS,
+  RESUME_WAIT_MS,
+  transition,
+  type SessionEvent,
+  type XAnswer,
+} from './rewindSwitch';
 import { usePlaybackSession, type SessionPlayer, type SessionOptions } from './usePlaybackSession';
 
 // 세션에 들어간 사건을 보려고 상태기계를 감싼다 — 동작은 원본 그대로다
@@ -20,6 +27,11 @@ const A1 = `${BASE}/dvr/key-1/a1/index.m3u8`;
 const B1 = `${BASE}/dvr/key-1/b1/index.m3u8`;
 const STREAM = `${BASE}/api/streams/key-1/rewind`;
 const ROUND = `${BASE}/api/streams/key-1/rounds/r-A/rewind`;
+/** 회차별 경로의 ended 답 — 끝남 대기의 종국 */
+const ROUND_ENDED: RewindStatusResult = {
+  kind: 'ok',
+  status: { ready: false, mode: 'ended', url: null, firstPdtMs: null, headPdtMs: null },
+};
 
 function readyBody(url: string, first: number, head: number) {
   return {
@@ -76,6 +88,9 @@ function fakePlayer(): SessionPlayer & { seeks: number[] } {
     seekToMs: (ms) => seeks.push(ms),
     seekToLiveEdge: () => seeks.push(-1),
     keepPausedOnSwap: vi.fn(),
+    holdFrame: vi.fn(),
+    dropPauseMark: vi.fn(),
+    readSound: () => null,
   };
 }
 
@@ -110,6 +125,7 @@ describe('여는 조건 · 폴링', () => {
     const onClose = vi.fn();
     const { result } = renderHook(() => usePlaybackSession(options({ onClose })));
     await flush();
+    const endingSince = Date.now();
     act(() => result.current?.dispatch({ type: 'live-closed' }));
     await flush();
     expect(calls).toContain(ROUND);
@@ -118,7 +134,276 @@ describe('여는 조건 · 폴링', () => {
     expect(onClose).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTime(20_000));
     await flush();
-    expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ reason: 'recorded' }));
+    // 닫는 사유는 past 이고, 끝남 대기를 연 시각(지난 방송 판정의 404 유예 원점 폴백)을 함께 넘긴다(POK-547 T3-1).
+    // 끝에 닿아 닫혔으니 넘길 자리 · 다시보기는 없다(처음부터)
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'past',
+        endingSinceMs: endingSince,
+        handoff: { resumeAtMs: null, seenVod: null, chosen: false, sound: null },
+      }),
+    );
+  });
+});
+
+describe('스트림 사실(streamLive · streamEnded · roundDenied) — 세션이 받은 스트림 답을 접는다', () => {
+  function body(mode: 'vod' | 'ended' | 'ending' | 'live') {
+    return { ready: false, mode, url: null, firstPdt: null, headPdt: null };
+  }
+  /** 다음 정기 물음까지 흘려 그 답을 받는다 */
+  async function nextPoll() {
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+    });
+    await flush();
+  }
+
+  it('라이브 · 발행 전 라이브는 라이브 · 정리 중은 아님 · 다시보기 뒤에는 끝남을 붙잡는다', async () => {
+    let stream: unknown = readyBody(A1, NOW - 60_000, NOW);
+    answer = (url) => (url === STREAM ? jsonResponse(200, stream) : jsonResponse(404, {}));
+    const { result } = renderHook(() => usePlaybackSession(options()));
+    await flush();
+    const facts = () => [result.current?.streamLive, result.current?.streamEnded];
+    expect(facts()).toEqual([true, false]);
+    for (const [mode, expected] of [
+      ['ending', [false, false]],
+      ['live', [true, false]],
+      ['vod', [false, true]],
+      ['live', [true, true]],
+    ] as const) {
+      stream = body(mode);
+      await nextPoll();
+      expect(facts()).toEqual(expected);
+    }
+  });
+
+  it('지금 방송 번호를 묻는 국면(끝남 대기)은 그 X 로 접는다 — 다른 방송의 라이브 답은 라이브가 아니다', async () => {
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 60_000, NOW)) : jsonResponse(404, {});
+    const { result } = renderHook(() =>
+      usePlaybackSession(
+        options({ resolveX: () => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-B' }) }),
+      ),
+    );
+    await flush();
+    expect(result.current?.streamLive).toBe(true);
+    act(() => result.current?.dispatch({ type: 'endlist' }));
+    expect(result.current?.state.phase.kind).toBe('ending-wait');
+    await nextPoll();
+    expect(result.current?.streamLive).toBe(false);
+  });
+
+  it('잠시 못 받은 답(5xx)은 앞 값을 그대로 둔다', async () => {
+    let status = 200;
+    answer = (url) =>
+      url === STREAM
+        ? jsonResponse(status, status === 200 ? body('ending') : {})
+        : jsonResponse(404, {});
+    const { result } = renderHook(() => usePlaybackSession(options()));
+    await flush();
+    expect(result.current?.streamLive).toBe(false);
+    status = 503;
+    await nextPoll();
+    expect(result.current?.streamLive).toBe(false);
+  });
+
+  it('세션을 새로 열면 라이브 · 끝나지 않음으로 돌아간다', async () => {
+    answer = (url) => (url === STREAM ? jsonResponse(200, body('vod')) : jsonResponse(503, {}));
+    const view = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options(),
+    });
+    await flush();
+    expect([view.result.current?.streamLive, view.result.current?.streamEnded]).toEqual([
+      false,
+      true,
+    ]);
+    view.rerender(
+      options({
+        roundId: 'r-B',
+        accessKey: 'r-B|key-2',
+        liveUrl: `${BASE}/live/key-2/index.m3u8`,
+        controlKey: 'key-2',
+      }),
+    );
+    await flush();
+    expect(view.result.current?.state.roundId).toBe('r-B');
+    expect([view.result.current?.streamLive, view.result.current?.streamEnded]).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it('앞 세션이 받은 다른 방송 부정은 새 세션으로 넘어가지 않는다', async () => {
+    answer = (url) =>
+      url === STREAM ? jsonResponse(200, readyBody(A1, NOW - 60_000, NOW)) : jsonResponse(503, {});
+    const resolveX = () => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-B' });
+    const view = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options({ resolveX }),
+    });
+    await flush();
+    act(() => view.result.current?.dispatch({ type: 'endlist' }));
+    await nextPoll();
+    expect(view.result.current?.roundDenied).toBe(true);
+
+    view.rerender(
+      options({
+        resolveX,
+        roundId: 'r-B',
+        accessKey: 'r-B|key-2',
+        liveUrl: `${BASE}/live/key-2/index.m3u8`,
+        controlKey: 'key-2',
+      }),
+    );
+    await flush();
+
+    expect(view.result.current?.state.roundId).toBe('r-B');
+    expect(view.result.current?.roundDenied).toBe(false);
+  });
+});
+
+describe('past 닫힘의 넘김(POK-547)', () => {
+  const VOD = `${BASE}/vod/key-1/r-A/index.m3u8`;
+  const VOD_FIRST = NOW - 3_600_000;
+  const ROUND_VOD: RewindStatusResult = {
+    kind: 'ok',
+    status: { ready: true, mode: 'vod', url: VOD, firstPdtMs: VOD_FIRST, headPdtMs: NOW },
+  };
+  const LIVE_URL = `${BASE}/live/key-1/index.m3u8`;
+
+  /** 라이브를 AT 에서 보다 ENDLIST 로 끝남 대기 → 회차별 vod 로 띠 제안까지 온 세션. 닫히면 다시 열지 않는다 */
+  async function offeredScreen() {
+    const onClose = vi.fn();
+    let closedPast = false;
+    const view = renderHook(() =>
+      usePlaybackSession(
+        options({
+          canOpen: !closedPast,
+          onClose: (closed) => {
+            if (closed.reason === 'past') closedPast = true;
+            onClose(closed);
+          },
+        }),
+      ),
+    );
+    await flush();
+    const at = NOW - 5_000;
+    const feed: SessionEvent[] = [
+      {
+        type: 'list-loaded',
+        url: LIVE_URL,
+        firstMs: NOW - 28_000,
+        lastEndMs: NOW,
+        targetDurationS: 4,
+      },
+      { type: 'position', atMs: at, playing: true, runMs: 0, epoch: 0 },
+      { type: 'endlist' },
+      { type: 'round-poll', result: ROUND_VOD },
+    ];
+    for (const event of feed) act(() => view.result.current?.dispatch(event));
+    await flush();
+    expect(view.result.current?.state.phase).toMatchObject({ kind: 'vod-offered', stopped: null });
+    return { ...view, onClose, at };
+  }
+
+  it('「다시보기 보기」 — onClose 가 넘길 자리 · 확인한 다시보기 · 단추로 닫음을 받는다', async () => {
+    const { result, onClose, at } = await offeredScreen();
+    act(() => result.current?.dispatch({ type: 'button', which: 'vod' }));
+    await flush();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.calls[0]?.[0]).toEqual({
+      reason: 'past',
+      goTo: undefined,
+      endingSinceMs: expect.any(Number),
+      accessKey: 'r-A|key-1',
+      handoff: {
+        resumeAtMs: at,
+        seenVod: { url: VOD, firstPdtMs: VOD_FIRST, headPdtMs: NOW },
+        chosen: true,
+        sound: null,
+      },
+    });
+    expect(result.current).toBeNull();
+  });
+
+  it('닫는 순간 묶인 재생기의 소리 상태를 넘긴다 — 닫힌 뒤 재생기가 바꾼 값은 싣지 않는다', async () => {
+    const { result, onClose } = await offeredScreen();
+    let sound = { muted: false, volume: 30 };
+    act(() => result.current?.bindPlayer({ ...fakePlayer(), readSound: () => sound }));
+
+    act(() => result.current?.dispatch({ type: 'button', which: 'vod' }));
+    sound = { muted: true, volume: 70 };
+    await flush();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.calls[0]?.[0].handoff.sound).toEqual({ muted: false, volume: 30 });
+  });
+
+  /** 끝남 대기를 단추 없이 끝내는 길 — 회차 종국(회차별 ended)과 20분 시한 */
+  const closers: Array<[string, (dispatch: (event: SessionEvent) => void) => Promise<void>]> = [
+    [
+      '회차별 ended',
+      async (dispatch) => {
+        act(() => dispatch({ type: 'round-poll', result: ROUND_ENDED }));
+        await flush();
+      },
+    ],
+    [
+      '20분 시한',
+      async () => {
+        await act(async () => vi.advanceTimersByTime(ENDING_WAIT_MS));
+        await flush();
+      },
+    ],
+  ];
+
+  it.each(closers)(
+    '단추 없이 닫혀도(%s) 묶인 재생기의 소리 상태를 넘긴다',
+    async (_name, close) => {
+      const ending = { ready: false, mode: 'ending', url: null, firstPdt: null, headPdt: null };
+      answer = () => jsonResponse(200, ending);
+      const onClose = vi.fn();
+      const { result } = renderHook(() => usePlaybackSession(options({ onClose })));
+      await flush();
+      act(() =>
+        result.current?.bindPlayer({
+          ...fakePlayer(),
+          readSound: () => ({ muted: false, volume: 30 }),
+        }),
+      );
+      act(() => result.current?.dispatch({ type: 'live-closed' }));
+      await flush();
+
+      await close((event) => result.current?.dispatch(event));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onClose.mock.calls[0]?.[0]).toMatchObject({
+        reason: 'past',
+        handoff: { chosen: false, sound: { muted: false, volume: 30 } },
+      });
+    },
+  );
+
+  it('past 로 닫힌 뒤 재접속 대기 · 20분 시한이 지나도 효과 0 · onClose 1회 · 물음 0', async () => {
+    const { result, onClose } = await offeredScreen();
+    act(() => result.current?.dispatch({ type: 'button', which: 'vod' }));
+    await flush();
+    const asked = calls.length;
+    await act(async () => vi.advanceTimersByTime(ENDING_WAIT_MS + RESUME_WAIT_MS));
+    await flush();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(asked);
+    expect(result.current).toBeNull();
+  });
+
+  it('past 가 아닌 닫힘(left)은 넘길 것이 없다', async () => {
+    const onClose = vi.fn();
+    const { result } = renderHook(() => usePlaybackSession(options({ onClose })));
+    await flush();
+    act(() => result.current?.dispatch({ type: 'leave' }));
+    await flush();
+    expect(onClose).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'left', handoff: null }),
+    );
   });
 });
 
@@ -362,9 +647,9 @@ describe('세션 수명 — 앞 세션의 늦은 답(cx H3)', () => {
     act(() => result.current?.liveButton());
     await flush();
     expect(result.current?.state.liveChecking).toBe(true);
-    // 재조회 전에 세션이 녹화 보기로 닫히고 같은 방송|영상 키로 새로 열린다
+    // 재조회 전에 세션이 끝남 대기의 종국(회차별 ended)으로 닫히고 같은 방송|영상 키로 새로 열린다
     act(() => result.current?.dispatch({ type: 'end-reached' }));
-    act(() => result.current?.dispatch({ type: 'button', which: 'record' }));
+    act(() => result.current?.dispatch({ type: 'round-poll', result: ROUND_ENDED }));
     await flush();
     expect(result.current?.state.phase).toEqual({ kind: 'live' });
     rewindTo();

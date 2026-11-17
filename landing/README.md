@@ -169,16 +169,16 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
-콘솔에서 만들어 두고 링크를 Jira POK-478(콘솔 화면 구성, 백로그)에 남깁니다. 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
+2026-11-11에 콘솔에 만들었고 링크는 Jira POK-478 댓글에 있습니다(대시보드 6개 · 인사이트 18개, 웹 분석은 기본 제공 화면 그대로). 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
 
 | 화면 | 정의 |
 |---|---|
 | 웹 분석(기본 제공) | 일별 방문자, 유입 경로(`utm_source`·`utm_medium`·`$referring_domain`), 기기(`$device_type`: Mobile·Desktop·Tablet), 국가. 랜딩과 대시보드는 `$host`로 나눠 본다 |
-| 가입 퍼널 | `$pageview`(`$host` = pokeclip.com) → `landing_cta_clicked` → `login_started` → `login_completed` → `platform_link_started` → `platform_linked` → `pairing_code_issued` → `video_render_requested`. 사람 기준·순서대로·전환 기간 14일. **처음 유입**(`$initial_utm_source`)과 기기로 나눠 본다. `_started` → 짝 이벤트 사이가 바깥 동의 화면의 이탈이다 |
-| 편집자 퍼널 | `editor_invitation_responded`(`outcome` = accepted) → `channel_switched`(`to_role` = editor) → `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`. 사람 기준·전환 기간 14일. 이 퍼널의 이벤트는 `active_role` = editor로도 거른다 |
+| 가입 퍼널 | `$pageview`(`$host` = pokeclip.com) → `landing_cta_clicked` → `login_started` → `login_completed` → `platform_link_started` → `platform_linked` → `pairing_code_issued` → `video_render_requested`. 사람 기준·순서대로·전환 기간 14일. **유입**(세션에 들어올 때의 `$session_entry_utm_source`, 첫 단계 기준)과 기기(`$device_type`)로 나눠 본다 — 사람 속성 `$initial_utm_source`는 로그인 전 방문자에게 없어서(익명 이벤트에는 사람 속성이 없다) 그것으로 나누면 로그인 전에 떠난 사람이 한 덩어리가 된다. `_started` → 짝 이벤트 사이가 바깥 동의 화면의 이탈이다 |
+| 편집자 퍼널 | `editor_invitation_responded`(`outcome` = accepted) → `channel_switched`(`to_role` = editor) → `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`. 사람 기준·전환 기간 14일. 3~5단계(`clip_editor_opened`부터)는 `active_role` = editor로도 거른다 — 1단계 초대 수락은 대개 자기 채널(`active_role` = owner)에서 일어나, 전 단계에 걸면 첫 단계가 0에 가깝게 나온다 |
 | 제작 | `clip_editor_opened` → `clip_recipe_saved` → `video_render_requested`·`video_upload_requested`, 재시도(`video_render_retried`·`video_upload_retried`)·수동 해결(`video_upload_resolved`) 추이. **영상 완성·업로드 완료는 PostHog에 없다**(서버를 붙이지 않음, 2026-10-24) — DB로 본다 |
 | 기능 이용 | `broadcast_playback_started`(`mode`), `highlight_marked`·`highlight_card_seeked`, `clip_download_requested`, `pending_feature_clicked`(`feature`별 — 준비 중 기능 수요), `setup_step_clicked`(`step`별) |
-| 주간 재방문 | 시작 `login_completed`, 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
+| 주간 재방문 | 시작 `login_completed`(사람별 첫 번째만 — first time), 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
 | 출시 대시보드 | 위 화면들 + `onboarding_tour_started`(`entry`) → `onboarding_tour_finished` 결과 분포 + `platform_unlinked`·`editor_invited`·`editor_delegation_ended`(`initiator`) 추이 |
 
 대시보드 설명에 그대로 적어 둡니다.
@@ -255,6 +255,6 @@ HTML 주석도 소스 보기로 그대로 보이므로 문서 안에는 내부 �
 | 처리방침 14절 | 치지직 연동을 해제하면 그 채널 정보를 더 받지 않음 | 해제 뒤 진행 중 수집이 멈추는 것은 치지직의 `revoked` 이벤트에 기댑니다(미확인) | 처리방침 14절 |
 | 처리방침 3·14절 | SOOP 해제·동의 철회·탈퇴 시 지체 없이 파기, 받은 정보는 SOOP이 승낙한 범위에서 보관(받은 지 60일) | SOOP 연동 코드가 없습니다(SOOP API 심사 제출용 문장). 연동을 붙일 때 철회 확인·지체 없는 파기를 구현하고, 심사(제휴 제안)에서 보관 승낙(채팅 받은 지 60일)을 받아야 합니다 | SOOP 제11조 ③ · ⑭ · ⑰ |
 | 처리방침 3절 · 약관 제8조 | 다시보기·클립·썸네일로 올린 이미지를 60일 뒤 삭제 | 코드는 조회만 막고(`vod_expires_at`) 파일 삭제는 창고 수명 규칙에 맡깁니다. 지금 수명 규칙은 dev 창고 `pokeclip-clips-2557`(버킷 전체 60일, 썸네일 이미지 포함)뿐이고 운영 창고는 아직 없습니다. 운영 창고를 만들 때 녹화 조각·채팅 원본(`chat/`)까지 같은 규칙을 걸어야 합니다 | 처리방침 3절 |
-| 처리방침 1·2·6·7·9·13절 | 소개 페이지·대시보드에서 PostHog로 이용 분석 정보를 모음(US, IP 저장 안 함, 브라우저 추적 금지 존중) | 랜딩은 키를 넣었습니다(2026-10-17, US 프로젝트). **대시보드는 운영 빌드 env(`NEXT_PUBLIC_POSTHOG_KEY`·`NEXT_PUBLIC_POSTHOG_HOST`)가 아직 없어 수집하지 않습니다** — 운영 빌드 자리(app.pokeclip.com)가 생기면 넣습니다. 콘솔의 **IP 저장 끄기**도 확인 전입니다(원격 설정으로는 보이지 않음). 둘 다 되면 이 행을 지웁니다 | 개인정보 보호법 제30조 |
+| 처리방침 1·2·6·7·9·13절 | 소개 페이지·대시보드에서 PostHog로 이용 분석 정보를 모음(US, IP 저장 안 함, 브라우저 추적 금지 존중) | 랜딩은 키를 넣었습니다(2026-10-17, US 프로젝트). **대시보드는 운영 이미지(app.pokeclip.com)가 빌드 인자(`NEXT_PUBLIC_POSTHOG_KEY`·`NEXT_PUBLIC_POSTHOG_HOST`) 없이 빌드돼 수집하지 않습니다**(2026-11-11 운영 번들 확인) — `web/README.md` 「prod 사용 통계 값」대로 다시 빌드하고 굳음 확인까지 하면 풀립니다. 콘솔의 **IP 저장 끄기**는 아직 켜지 않았습니다(2026-11-11 프로젝트 설정 `anonymize_ips: false` 확인). 둘 다 되면 이 행을 지웁니다 | 개인정보 보호법 제30조 |
 | 처리방침 3절 | 이용 분석 기록을 수집한 날부터 1년 뒤 삭제 | PostHog 무료 플랜의 1년은 **조회 기간**이고, 그 뒤 실제로 지워진다는 보장은 문서에 없습니다(「retention is not a deletion tool」, [events retention](https://posthog.com/docs/data/events-retention)). privacy@posthog.com에 물리 삭제 여부를 확인하고, 보장이 없으면 1년 지난 기록을 지우는 운영 절차를 정합니다 | 개인정보 보호법 제21조 |
 | 두 문서 | 〈 〉 자리표시(법인명·대표자명·보호책임자·담당자·시행일) | `check-legal.mjs --release`가 실패합니다 | — |

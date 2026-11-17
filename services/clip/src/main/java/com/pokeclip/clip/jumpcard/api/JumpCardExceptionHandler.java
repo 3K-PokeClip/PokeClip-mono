@@ -233,6 +233,17 @@ public class JumpCardExceptionHandler {
         return json(HttpStatus.CONFLICT, error("source_not_ready"));
     }
 
+    /**
+     * 422. 그 구간은 다시 물어도 렌더할 수 없다(POK-196 · 설계 r7 9.5) — {@code reason} 은 닫힌 목록
+     * {@code outside_recording} · {@code no_footage} 다. 409 {@code source_not_ready}(기다리면 됨)와 다른 축이다.
+     */
+    @ExceptionHandler(RenderErrors.SourceUnrenderableException.class)
+    ResponseEntity<Map<String, Object>> sourceUnrenderable(RenderErrors.SourceUnrenderableException e) {
+        Map<String, Object> body = error("source_unrenderable");
+        body.put("reason", e.reason());
+        return json(HttpStatus.UNPROCESSABLE_CONTENT, body);
+    }
+
     /** 409. 완성 전 영상의 주소를 달라고 했다(POK-247). 빈 목록 200으로 접지 않는다: 화면이 「파일 없는 영상」으로 읽는다. */
     @ExceptionHandler(RenderErrors.ClipNotRenderedException.class)
     ResponseEntity<Map<String, Object>> clipNotRendered(RenderErrors.ClipNotRenderedException e) {

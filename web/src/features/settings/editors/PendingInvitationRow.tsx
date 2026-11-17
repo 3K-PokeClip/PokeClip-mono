@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import { Plus } from 'lucide-react';
-import { Button } from '@/ui';
+import { Button, PRIVATE_TEXT_CLASS } from '@/ui';
 import type { SentInvitation } from '@/api/editors';
 import { expiresLabel } from './editorDates';
 import styles from './EditorSettingsScreen.module.css';
@@ -29,7 +29,7 @@ export function PendingInvitationRow({
       </span>
       <div className={styles.rowBody}>
         <div className={styles.pendingTitle} id={labelId}>
-          대기 중인 초대 · {invitation.inviteeEmail}
+          대기 중인 초대 · <span className={PRIVATE_TEXT_CLASS}>{invitation.inviteeEmail}</span>
         </div>
         <div className={styles.rowMeta}>{expiresLabel(invitation.expiresAt)}</div>
       </div>

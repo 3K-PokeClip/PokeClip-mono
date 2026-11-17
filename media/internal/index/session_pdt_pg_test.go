@@ -137,9 +137,12 @@ func TestBaseRowSkipsRowsThatAreNotSettledInTheBaseSession(t *testing.T) {
 			segAt(stream, 2, wall, 4000), Seed{}, liveIngress()); err != nil {
 			t.Fatalf("Insert 실패: %v", err)
 		}
-		want := sessionBase.Add(4 * time.Second) // seq 0 에서 이어진다(seq 1 은 후보가 아니다)
+		// seq 0 에서 이어지고(seq 1 은 후보가 아니다 — 후보면 seq 1 벽시계 + 4초 = 34초) 그 사이 비귀속 행 길이 U(4초)만큼
+		// 더 간다(POK-196 PDT 판 NULL U · 계약 6-6-3 「비귀속 행 뒤 첫 귀속 행의 PDT 는 그 사이 비귀속 행 길이 합만큼 더
+		// 간다」).
+		want := sessionBase.Add(8 * time.Second)
 		if c := carrierOf(t, pool, stream, 2); c.PDT == nil || !c.PDT.Equal(want) {
-			t.Fatalf("playback_pdt = %v, want %v — NULL 행을 기저항으로 잡았다", c.PDT, want)
+			t.Fatalf("playback_pdt = %v, want %v(= seq 0 PDT + 길이 + U) — NULL 행을 기저항으로 잡았거나 U 를 뺐다", c.PDT, want)
 		}
 	})
 
@@ -164,8 +167,9 @@ func TestBaseRowSkipsRowsThatAreNotSettledInTheBaseSession(t *testing.T) {
 	})
 }
 
-// 전 픽스처 공통 불변 — M3 쓰기 경로가 만든 행은 session_id 와 playback_pdt 가 쌍으로 간다.
+// 전 픽스처 공통 불변 — M3 쓰기 경로가 만든 판 NULL 행은 session_id 와 playback_pdt 가 쌍으로 간다.
 // "세 열 전부-아니면-전무"가 아니다: 키 파생 실패는 playback_s3_key 만 NULL 로 남긴다(설계 5.2).
+// 판 2 행에는 이 쌍이 없다 — 판 2 비귀속 행도 회차의 PDT 를 갖는다(POK-196 PDT 설계 r7 2.5 · timing_v2_store_pg_test.go).
 func TestWrittenRowsPairSessionIDWithPlaybackPDT(t *testing.T) {
 	pool := newTestPool(t)
 	store := newSessionStore(pool)
@@ -185,7 +189,7 @@ func TestWrittenRowsPairSessionIDWithPlaybackPDT(t *testing.T) {
 		var paired bool
 		if err := pool.QueryRow(ctx, `
 			SELECT bool_and((session_id IS NULL) = (playback_pdt IS NULL))
-			  FROM stream_segments WHERE stream_id = $1`, s).Scan(&paired); err != nil {
+			  FROM stream_segments WHERE stream_id = $1 AND timing_version IS NULL`, s).Scan(&paired); err != nil {
 			t.Fatalf("쌍 동치 조회 실패: %v", err)
 		}
 		if !paired {

@@ -1,8 +1,8 @@
 # Media 상자 user_data(`#cloud-config` → gzip + base64 — EC2 16 KiB 한도는 압축본에
 # 걸린다). kty 결정(설치 묶음 이미지): 스크립트 · 상자에서 렌더하는 MediaMTX
 # 템플릿은 ECR 설치 묶음 이미지에 있고, user_data 에는 Terraform 이 값을 넣는
-# 파일(compose · nginx · ingest-auth.env · media.env · docker 설정) · 유닛 · 작은
-# 부트스트랩만 둔다.
+# 파일(compose · nginx · ingest-auth.env · sidecar.env · media.env · docker 설정) ·
+# 유닛 · 작은 부트스트랩만 둔다.
 #
 # 유닛은 묶음이 아니라 여기서 설치한다 — 묶음을 꺼내지 못해도 유닛이 있어야
 # drop-in 의 「MEDIA PREREQ FAIL bundle」 이 유닛 저널에 남는다. 유닛은 20초마다
@@ -12,8 +12,10 @@
 locals {
   media_host_dir = "${path.module}/../../../media-host"
 
-  # compose · nginx 템플릿 변수(키 집합 = infra/media-host/test/render_vars.json).
+  # compose · nginx 공통 템플릿 변수(키 집합 + 키별 cred_relay =
+  # infra/media-host/test/render_vars.json).
   template_vars = {
+    clip_internal_url      = var.clip_internal_url
     control_upstream       = var.control_upstream
     detached_log_driver    = "journald"
     ingest_auth_image      = var.ingest_auth_image
@@ -22,6 +24,7 @@ locals {
     media_health_path      = var.media_health_path
     mediamtx_image         = var.mediamtx_image
     nginx_image            = var.nginx_image
+    playback_round_keys    = var.playback_round_keys
     proxy_control_port     = var.proxy_ports.control
     proxy_health_port      = var.proxy_ports.health
     proxy_live_port        = var.proxy_ports.live
@@ -32,10 +35,21 @@ locals {
     rewind_public_base_url = var.rewind_public_base_url
     sidecar_image          = var.sidecar_image
     stream_key_resolve_url = var.stream_key_resolve_url
+    timing_guard_image     = var.timing_guard_image
+
+    # 계약9 발행 — 응답기 모드에서 목록이 찰 때만 렌더한다(compose 템플릿).
+    broadcast_topic_arn       = var.broadcast_topic_arn
+    lifecycle_publish_streams = var.lifecycle_publish_streams
+
+    # /dvr 하한 Writer — 켬일 때만 KVS ARN, 끔이면 빈 값(사이드카가 Writer 를
+    # 띄우지 않는다). 두 모드 공통이다.
+    edge_bounds_kvs_arn = var.edge_bounds_writer_enabled ? var.edge_bounds_kvs_arn : ""
   }
 
-  compose_yml = templatefile("${local.media_host_dir}/compose.yml.tmpl", local.template_vars)
-  nginx_conf  = templatefile("${local.media_host_dir}/nginx/nginx.conf.tmpl", local.template_vars)
+  # compose 는 키별로 렌더한다(아래 rendered_user_data) — 대리 창구 스위치
+  # cred_relay 가 키별 값이다. 끔 키의 렌더는 이 스위치가 없던 때와 바이트까지
+  # 같다(템플릿 머리 주석).
+  nginx_conf = templatefile("${local.media_host_dir}/nginx/nginx.conf.tmpl", local.template_vars)
 
   bootstrap = templatefile("${path.module}/templates/bootstrap.sh.tftpl", {
     bundle_image                  = var.bundle_image
@@ -45,7 +59,7 @@ locals {
     ecr_credential_helper_version = var.ecr_credential_helper_version
   })
 
-  # 상자 키마다 다른 것은 구성 판뿐이다.
+  # 상자 키마다 다른 것은 구성 판과 대리 창구 스위치(compose)뿐이다.
   rendered_user_data = {
     for key, instance in var.instances : key => join("", [
       "#cloud-config\n",
@@ -56,8 +70,10 @@ locals {
               path        = "/etc/pokeclip-media/media.env"
               permissions = "0644"
               content = templatefile("${path.module}/templates/media.env.tftpl", {
-                bundle_image                        = var.bundle_image
-                cdn_secret_arn                      = var.cdn_secret_arn
+                bundle_image   = var.bundle_image
+                cdn_secret_arn = var.cdn_secret_arn
+                # 만료를 끈(주소 빔) 상자는 토큰을 받지 않는다.
+                clip_expiry_token_secret_arn        = var.clip_internal_url == "" ? "" : var.clip_expiry_token_secret_arn
                 compose_version                     = var.compose_version
                 config_version                      = instance.config_version
                 denylist_parameter_name             = aws_ssm_parameter.denylist.name
@@ -68,12 +84,21 @@ locals {
                 test_stream_key_secret_arn          = var.test_stream_key_secret_arn
               })
             },
-            { path = "/etc/pokeclip-media/compose.yml", permissions = "0644", content = local.compose_yml },
+            {
+              path        = "/etc/pokeclip-media/compose.yml"
+              permissions = "0644"
+              content     = templatefile("${local.media_host_dir}/compose.yml.tmpl", merge(local.template_vars, { cred_relay = instance.cred_relay }))
+            },
             { path = "/etc/pokeclip-media/nginx.conf", permissions = "0644", content = local.nginx_conf },
             {
               path        = "/etc/pokeclip-media/ingest-auth.env"
               permissions = "0644"
               content     = templatefile("${local.media_host_dir}/ingest-auth.env.tmpl", { ingest_auth_ip_limit = var.ingest_auth_ip_limit })
+            },
+            {
+              path        = "/etc/pokeclip-media/sidecar.env"
+              permissions = "0644"
+              content     = templatefile("${local.media_host_dir}/sidecar.env.tmpl", { playback_round_keys = var.playback_round_keys })
             },
             {
               path        = "/root/.docker/config.json"

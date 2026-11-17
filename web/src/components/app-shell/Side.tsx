@@ -20,8 +20,9 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
-import { Avatar, IconButton } from '@/ui';
+import { Avatar, IconButton, PRIVATE_TEXT_CLASS } from '@/ui';
 import { ChannelSwitcher, useChannelIdentity } from '@/features/channel/ChannelSwitcher';
+import { NotificationBell } from '@/features/notifications/NotificationBell';
 import { useSidebarStore } from '@/stores/sidebar';
 import { BrandSymbol } from './BrandSymbol';
 import { isDockHrefActive } from './dockTransition';
@@ -226,7 +227,9 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
             />
             {/* 요금제(Pro)는 뺐다: 구독 API가 없다. 역할은 칩 대신 회색 작은 글씨로 */}
             <span className={styles.userText}>
-              <span className={styles.userName}>{channel.name ? `${channel.name} 채널` : ''}</span>
+              <span className={`${styles.userName} ${PRIVATE_TEXT_CLASS}`}>
+                {channel.name ? `${channel.name} 채널` : ''}
+              </span>
               <span className={styles.userRole}>{channel.role}</span>
             </span>
             {/* 눌러서 채널을 바꾼다는 표시(시안 1u의 위아래 화살표). 접힌 레일에선 라벨과 함께 접는다 */}
@@ -234,10 +237,8 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
           </button>
         </ChannelSwitcher>
         <div className={styles.bellWrap}>
-          <IconButton variant="ghost" size="sm" aria-label="알림">
-            <Bell aria-hidden />
-          </IconButton>
-          <span className={styles.bellDot} />
+          {/* 알림 창은 프로필 블록 기준 오른쪽, 사이드바 경계(블록 오른쪽 12 + 8) 밖에 띄운다: 종에 붙이면 사이드바를 덮는다 */}
+          <NotificationBell place="sidebar" anchorRef={userBlockRef} offset={20} />
         </div>
       </div>
     </aside>

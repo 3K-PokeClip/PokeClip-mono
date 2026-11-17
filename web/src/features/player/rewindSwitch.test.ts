@@ -86,7 +86,6 @@ function rewindAt(t: number): PlaybackSessionState {
         firstMs: T0,
         lastEndMs: NOW,
         targetDurationS: 4,
-        headSpanMs: 12_000,
       },
     ],
     [pos(t)],
@@ -107,14 +106,14 @@ describe('세션 열기와 폴링 켜기(설계 5.1절 표)', () => {
     expect(pollTargets(s)).toEqual({ stream: true, round: false });
   });
 
-  it('끝남 대기는 두 경로를 켜고, recordOnEnd · vod-offered · 닫힘은 둘 다 끈다', () => {
+  it('끝남 대기는 두 경로를 켜고, closeOnEnd · vod-offered · 닫힘은 둘 다 끈다', () => {
     const waiting = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
     expect(pollTargets(waiting)).toEqual({ stream: true, round: true });
-    const record = run(waiting, [
+    const decided = run(waiting, [
       [{ type: 'round-poll', result: status({ mode: 'ended' }) }],
     ]).state;
-    expect(record.phase).toMatchObject({ kind: 'ending-wait', recordOnEnd: true });
-    expect(pollTargets(record)).toEqual({ stream: false, round: false });
+    expect(decided.phase).toMatchObject({ kind: 'ending-wait', closeOnEnd: true });
+    expect(pollTargets(decided)).toEqual({ stream: false, round: false });
     const closed = run(fresh(), [[{ type: 'leave' }]]).state;
     expect(pollTargets(closed)).toEqual({ stream: false, round: false });
   });
@@ -224,7 +223,7 @@ describe('live 국면', () => {
       kind: 'ending-wait',
       origin: 'live',
       atEnd: false,
-      recordOnEnd: false,
+      closeOnEnd: false,
     });
     expect(state.source.kind).toBe('live');
     expect(state.endingSince).toBe(NOW);
@@ -401,7 +400,7 @@ describe('rewind 국면', () => {
     ]);
     expect(state.source.url).toBe(A1);
     expect(state.offer).toEqual({ kind: 'new-broadcast', goTo: 'r-B' });
-    expect(sessionView(state, NOW).actions).toEqual(['record', 'new-broadcast']);
+    expect(sessionView(state, NOW).actions).toEqual(['new-broadcast']);
   });
 
   it('LIVE 버튼 — X 가 보던 방송이면 라이브로, 다른 방송이면 세션을 닫고 그 방송으로(R58)', () => {
@@ -438,7 +437,6 @@ describe('rewind 국면', () => {
           firstMs: NOW,
           lastEndMs: NOW + 2 * MIN,
           targetDurationS: 4,
-          headSpanMs: 12_000,
         },
       ],
     ]);
@@ -468,7 +466,7 @@ describe('rewind 국면', () => {
   });
 });
 
-describe('vod-offered · vod 국면', () => {
+describe('vod-offered 국면', () => {
   const VOD_RANGE = status({ ready: true, mode: 'vod', url: VOD, firstPdtMs: T0, headPdtMs: NOW });
 
   function offered(atEnd: boolean, p = T0 + 20 * MIN): PlaybackSessionState {
@@ -479,43 +477,31 @@ describe('vod-offered · vod 국면', () => {
     return run(waiting, [[{ type: 'round-poll', result: VOD_RANGE }]]).state;
   }
 
-  it('「다시보기 보기」 — atEnd:true 는 처음부터', () => {
-    const { state } = run(offered(true), [[{ type: 'button', which: 'vod' }]]);
-    expect(state.phase).toEqual({ kind: 'vod' });
-    expect(state.source).toMatchObject({ kind: 'vod', url: VOD, startAtMs: null });
+  /** 「다시보기 보기」 의 past 닫힘 — 지난 방송 판정에 넘길 자리 · 제안한 다시보기를 싣는다(POK-547) */
+  function pressed(resumeAtMs: number | null, firstPdtMs = T0): SessionEffect[] {
+    const seenVod = { url: VOD, firstPdtMs, headPdtMs: NOW };
+    return [{ kind: 'close', reason: 'past', handoff: { resumeAtMs, seenVod, chosen: true } }];
+  }
+
+  it('「다시보기 보기」 — atEnd:true 는 처음부터 넘긴다', () => {
+    const { state, effects } = run(offered(true), [[{ type: 'button', which: 'vod' }]]);
+    expect(effects).toEqual(pressed(null));
+    expect(state.closed).toBe('past');
   });
 
-  it('「다시보기 보기」 — atEnd:false 는 지금 자리(P)에서 잇는다', () => {
+  it('「다시보기 보기」 — atEnd:false 는 지금 자리(P)를 넘긴다', () => {
     const p = T0 + 20 * MIN;
-    const { state, effects } = run(offered(false, p), [[{ type: 'button', which: 'vod' }]]);
-    expect(state.source).toMatchObject({ kind: 'vod', startAtMs: p });
-    expect(kinds(effects)).not.toContain('notice');
+    const { effects } = run(offered(false, p), [[{ type: 'button', which: 'vod' }]]);
+    expect(effects).toEqual(pressed(p));
   });
 
-  it('「다시보기 보기」 — P 가 VOD 끝 여유(맨 앞 조각 셋의 길이) 안이면 끝 − 여유로 · 알림', () => {
+  it('「다시보기 보기」 — P 가 VOD 끝 여유 안이어도 그 자리를 그대로 넘긴다(가두기는 다시보기 재생기가 한다) · 알림 0', () => {
     const p = NOW - 2_000;
-    const { state, effects } = run(offered(false, p), [[{ type: 'button', which: 'vod' }]]);
-    expect(state.source).toMatchObject({ startAtMs: NOW - 12_000 });
-    expect(kinds(effects)).toContain('notice');
+    const { effects } = run(offered(false, p), [[{ type: 'button', which: 'vod' }]]);
+    expect(effects).toEqual(pressed(p));
   });
 
-  it('창 하한 여유는 목록의 맨 앞 조각 셋 길이다 — TD 6 · 6초 + 4초 + 4초면 18초가 아니라 14초', () => {
-    const loaded = (headSpanMs: number) => ({
-      type: 'list-loaded' as const,
-      url: A1,
-      firstMs: T0,
-      lastEndMs: NOW,
-      targetDurationS: 6,
-      headSpanMs,
-    });
-    // 기본 여유(12초)와 다른 값이라야 받은 길이를 쓰는지 가른다
-    const state = run(liveWithEntry(), [[loaded(14_000)]]).state;
-    expect(state.edgeMarginMs).toBe(14_000);
-    // 길이를 모르면(0) 앞서 안 여유를 그대로 둔다
-    expect(run(state, [[loaded(0)]]).state.edgeMarginMs).toBe(14_000);
-  });
-
-  it('「다시보기 보기」 — 여유(맨 앞 조각 셋의 길이 · 여기 12초)보다 짧은 VOD 는 첫 조각에서 연다(하한 우선 · R47)', () => {
+  it('「다시보기 보기」 — 짧은 VOD 의 단추도 보던 자리를 그대로 넘긴다(첫 조각으로 가두기는 다시보기 재생기가 한다)', () => {
     const short = status({
       ready: true,
       mode: 'vod',
@@ -525,8 +511,8 @@ describe('vod-offered · vod 국면', () => {
     });
     const base = run(rewindAt(NOW - 6_000), [[{ type: 'endlist' }]]).state;
     const offer = run(base, [[{ type: 'round-poll', result: short }]]).state;
-    const { state } = run(offer, [[{ type: 'button', which: 'vod' }]]);
-    expect(state.source).toMatchObject({ kind: 'vod', startAtMs: NOW - 8_000 });
+    const { effects } = run(offer, [[{ type: 'button', which: 'vod' }]]);
+    expect(effects).toEqual(pressed(NOW - 6_000, NOW - 8_000));
   });
 
   it('vod-offered atEnd:false 의 끝 도달은 버튼을 덮개로 올린다(자동 교체 없음)', () => {
@@ -545,7 +531,6 @@ describe('vod-offered · vod 국면', () => {
           firstMs: NOW - 28_000,
           lastEndMs: NOW,
           targetDurationS: 4,
-          headSpanMs: 12_000,
         },
       ],
       [pos(NOW - 5_000)],
@@ -571,26 +556,6 @@ describe('vod-offered · vod 국면', () => {
     ]);
     const out = run(start, [[{ type: 'seek', targetMs: T0 + MIN, view }]]).state;
     expect(out.source).toMatchObject({ kind: 'rewind', url: A1, startAtMs: T0 + MIN });
-  });
-
-  it('vod 국면의 시크는 문서 안 · 끝 도달은 국면 그대로다', () => {
-    const vod = run(offered(true), [[{ type: 'button', which: 'vod' }]]).state;
-    const view = { lowerMs: T0, endMs: NOW };
-    expect(run(vod, [[{ type: 'seek', targetMs: T0 + MIN, view }]]).effects).toEqual([
-      { kind: 'seek-within', atMs: T0 + MIN },
-    ]);
-    expect(run(vod, [[{ type: 'seek', targetMs: NOW + MIN, view }]]).effects).toEqual([
-      { kind: 'seek-within', atMs: NOW },
-    ]);
-    const ended = run(vod, [[{ type: 'end-reached' }]]);
-    expect(ended.state).toEqual(vod);
-    expect(ended.effects).toEqual([]);
-  });
-
-  it('vod 의 LIVE 버튼은 숨긴다', () => {
-    const vod = run(offered(true), [[{ type: 'button', which: 'vod' }]]).state;
-    expect(sessionView(vod, NOW).liveHidden).toBe(true);
-    expect(run(vod, [[{ type: 'live-button', x: X_A, attempt: 0 }]]).effects).toEqual([]);
   });
 });
 

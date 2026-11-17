@@ -2,9 +2,10 @@
 
 import { memo, useState } from 'react';
 import { CirclePlus, Pencil, Zap } from 'lucide-react';
-import { Avatar, Button, IconButton, Skeleton, Tag } from '@/ui';
+import { Avatar, Button, IconButton, PRIVATE_TEXT_CLASS, Skeleton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { MARK_HOTKEY } from './markKey';
+import { withMarkLabel } from './useManualMarking';
 import type { StreamMeta } from './useLiveDetailsMockState';
 import type { LiveStream } from './useLiveMockState';
 
@@ -28,7 +29,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
 }: {
   stream: LiveStream;
   meta: StreamMeta;
-  /** 시청자 줄: 「1,842명 시청 중」, 끝난 방송은 「끝날 때 N명 시청」, 값이 없으면 그 까닭(확인 중·기록 없음·수집 전) */
+  /** 시청자 줄: 「1,842명 시청 중」, 값이 없으면 그 까닭(확인 중·수집 전). 끝난 방송은 시청자 수 대신 방송한 날짜(「2026.10.20」)다 */
   viewersLabel: string;
   /**
    * 방송 정보를 받아 오는 중이다(POK-449). 빈 제목 · 시청자 줄 · 카테고리 줄을 번쩍이는 회색 막대로 둔다: 수집기가 방송을 찾기 전이라
@@ -49,7 +50,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
    * 「수집 전」, 지난 방송 「기록 없음」
    */
   metaNote: string;
-  /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다 */
+  /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다. 시각을 모르면 빈 글자다(withMarkLabel) */
   pendingLabel: string | null;
   /**
    * 라이브는 시안 1b 「수동 마킹 F8」, 지난 방송은 시안 1c 「이 시점 카드 추가」(재생 위치에 카드를 세운다, POK-392). 화면 상태로
@@ -92,7 +93,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
       <div className={styles.infoBody}>
         <div className={styles.infoTitleRow}>
           {stream.title ? (
-            <h1 className={styles.infoTitle}>{stream.title}</h1>
+            <h1 className={`${styles.infoTitle} ${PRIVATE_TEXT_CLASS}`}>{stream.title}</h1>
           ) : infoPending ? (
             <h1 className={styles.infoTitle} aria-label="방송 정보를 받아 오고 있어요">
               <Skeleton width={260} height={18} data-testid="info-title-pending" />
@@ -112,7 +113,8 @@ export const StreamInfoBar = memo(function StreamInfoBar({
             <>
               {meta.category ? <span className={styles.infoCategory}>{meta.category}</span> : null}
               {meta.tags.map((tag) => (
-                <Tag key={tag} variant="soft" size="sm">
+                // 방송 태그는 스트리머가 쓴 글이다
+                <Tag key={tag} variant="soft" size="sm" className={PRIVATE_TEXT_CLASS}>
                   {tag}
                 </Tag>
               ))}
@@ -173,7 +175,7 @@ export const StreamInfoBar = memo(function StreamInfoBar({
         {/* 눌렀다는 사실이 화면에만 남으면 스크린리더 사용자는 마킹됐는지 알 수 없다.
             쉴 때는 비운다 — CSS가 빈 요소를 접어 버튼이 바의 가운데에 그대로 선다. */}
         <span className={styles.markFeedback} role="status">
-          {pendingLabel ? `${pendingLabel} 마킹됨 · 카드 생성 중` : null}
+          {pendingLabel !== null ? withMarkLabel(pendingLabel, '마킹됨 · 카드 생성 중') : null}
         </span>
       </div>
     </section>

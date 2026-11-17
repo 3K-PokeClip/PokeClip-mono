@@ -4,6 +4,7 @@ package main
 // 설계 M5 2.1 · 3.3 · 4.1–4.4). 모두 루프 고루틴에서 돈다. HTTP 고루틴과 나누는 것은 Holder 의 불변 Board 하나다.
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"slices"
@@ -136,6 +137,52 @@ func (r *rewindLoop) provisionalEnding(s, owner string) {
 	f := status.Final{LatestSessionID: owner, Status: status.Status{Mode: status.ModeEnding}}
 	r.final[s] = f
 	r.logFinal(s, f, "forget_provisional", "")
+}
+
+// endingRecheckEvery 는 ending 재조회 주기다(POK-525 설계 5-3). 주기이지 상한이 아니다 — 재조회 읽기는 상태 읽기 차선의
+// 전체 동시 상한(REWIND_PLAYBACK_READ_MAX) 가운데 커밋 표지가 쓰고 남은 칸만 쓰고, 앞 묶음을 다 읽기 전에는 다음 묶음을
+// 담지 않는다.
+const endingRecheckEvery = 30 * time.Second
+
+// recheckEnding 은 ending 재조회다(설계 5-3 (가)). 상태 표지는 프로세스 안의 맵이라 다른 상자가 장부를 바꾸면(하한 원장
+// 행 삭제 · 회차 닫힘 · VOD 동결) 이 상자에 오지 않고, Board 적중이면 회차 경로는 DB 를 보지 않는다 — 그래서 ending
+// 사본을 DB 에 다시 맞춘다. 묶음(recheckQueue)이 비었고 주기가 찼으면 종료 항목이 ending(Forget 잠정 항목 포함)인
+// 스트림을 이름순으로 담고, 받은편지함 비우기가 쓰고 남은 읽기 칸만큼 묶음 앞에서 읽기를 낸다. 결과는 M5 받은편지함 →
+// drainFinals 로 돌아온다.
+//
+// 묶음은 다 읽혀야 다시 담는다 — 주기마다 처음부터 다시 넣으면 ending 스트림이 주기당 처리량(남은 칸 × 주기 ÷
+// holdTick)보다 많을 때 이름 뒤쪽이 영영 읽히지 않는다. 받은편지함에 넣지 않는 것은 이름순 Drain 에서 커밋 표지와
+// 다투지 않게 하려는 것이다. 그래서 묶음은 틱마다 커밋 표지가 쓰고 남은 칸만큼 앞에서 읽힌다 — 남은 칸이 틱마다 k
+// 이상이면 묶음 길이 ÷ k 틱 안에 다 읽히지만, 커밋 표지가 칸을 계속 다 쓰면 그동안 하나도 읽히지 않는다(시간 보장이
+// 아니라 조건이다). 묶음을 담은 뒤 ending 이 아니게 된 스트림은 읽지 않고 건너뛴다. 부하는 ending 스트림 수 × 주기당
+// 1회 이하이고 매니페스트 합성 경로 밖이다(프로필 4절). 정산 몫이 없으면(차선 없음) 하지 않는다.
+func (r *rewindLoop) recheckEnding(ctx context.Context, now time.Time) {
+	if r.fin == nil {
+		return
+	}
+	if len(r.recheckQueue) == 0 && (r.recheckedAt.IsZero() || now.Sub(r.recheckedAt) >= endingRecheckEvery) {
+		r.recheckedAt = now
+		r.recheckQueue = r.endingStreams()
+	}
+	for len(r.recheckQueue) > 0 && len(r.fin.reading) < r.fin.readMax {
+		s := r.recheckQueue[0]
+		r.recheckQueue = r.recheckQueue[1:]
+		if f, ok := r.final[s]; ok && f.Status.Mode == status.ModeEnding {
+			r.startPlayback(ctx, s)
+		}
+	}
+}
+
+// endingStreams 는 종료 항목이 ending 인 스트림을 이름순으로 돌려준다.
+func (r *rewindLoop) endingStreams() []string {
+	var out []string
+	for s, f := range r.final {
+		if f.Status.Mode == status.ModeEnding {
+			out = append(out, s)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // publishStatus 는 holdTick 끝에서 Board 를 새로 만든다(꺼짐이면 하지 않는다 — DisabledBoard 그대로). 캐시가 든 스트림마다

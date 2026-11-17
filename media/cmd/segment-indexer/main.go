@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/config"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/control"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
@@ -32,6 +34,10 @@ import (
 )
 
 func main() {
+	// 기동 전 검사 명령(timing_gate_check.go)은 사이드카를 띄우지 않고 종료 코드만 낸다.
+	if len(os.Args) > 1 && os.Args[1] == timingGateCheckCommand {
+		os.Exit(runTimingGateCheck(os.Args[2:], os.Getenv, os.Stdout))
+	}
 	err := run()
 	// SIGTERM 으로 끝난 것은 정상 종료다. 이것을 실패로 보고하면 오케스트레이터가
 	// 멀쩡한 종료를 장애로 오인하고 재기동 루프에 넣는다.
@@ -70,6 +76,46 @@ func validateObservationWindow(obsFresh time.Duration) error {
 			"(워처·훅 유입 ⓐ1 은 영향 없다). "+
 			"기본값 30s 로 두거나, 최소 %v 보다 크게 잡아라",
 		obsFresh, index.TxnDeadline, index.TxnDeadline)
+}
+
+// reportPlaybackKeyLayout 은 기동 신호 playback_key_layout 한 줄을 낸다 — 새 꼴 쓰기 스위치(PLAYBACK_ROUND_KEYS)와 회차
+// 불변 트리거가 있는가(POK-525 설계 r9.4 2-2 (다) · 8-1). 트리거는 기동 필수가 아니라(운영은 새 판이 뜬 뒤에 깐다) 조회가
+// 실패해도 기동을 멈추지 않는다 — 그래서 오류를 돌려주지 않는다. 조회는 기동 DB 단계 하나라 dbStepTimeout 상한 안에서
+// 끝난다(답하지 않는 DB 에 기동이 걸리지 않는다).
+func reportPlaybackKeyLayout(ctx context.Context, pool *pgxpool.Pool, roundKeys bool, log *slog.Logger) {
+	cctx, cancel := context.WithTimeout(ctx, dbStepTimeout)
+	present, err := index.RoundFrozenTriggerPresent(cctx, pool)
+	cancel()
+	logPlaybackKeyLayout(ctx, log, roundKeys, present, err)
+}
+
+// logPlaybackKeyLayout 은 신호 줄을 쓴다. 꼴 `playback_key_layout layout=legacy|round round_frozen=present|absent|unknown`
+// (unknown 이면 끝에 err)은 운영 스크립트(sidecar-round-keys.sh)와 런북(media-swap.md)이 사이드카 저널에서 세는 계약이다.
+//
+// 켬인데 트리거가 있다고 확인되지 않으면 WARN 이다 — 켬 재생성 직후 · 운영 SQL 2(60_round_frozen.sql) 적용 전에는 한 줄이
+// 예상된다(설계 9-3 7). 그 뒤 기동의 WARN 은 값으로 갈린다: absent 면 조회가 성공했고 트리거가 없다(깔지 않았다). unknown 이면
+// 조회가 실패한 것이라 트리거가 있는지 모른다(깔려 있어도 나온다) — err 를 보고 DB 를 확인한다. 끔은 트리거와 무관하게 INFO 다.
+func logPlaybackKeyLayout(ctx context.Context, log *slog.Logger, roundKeys, present bool, lookupErr error) {
+	layout := "legacy"
+	if roundKeys {
+		layout = "round"
+	}
+	frozen := "absent"
+	switch {
+	case lookupErr != nil:
+		frozen = "unknown"
+	case present:
+		frozen = "present"
+	}
+	level := slog.LevelInfo
+	if roundKeys && frozen != "present" {
+		level = slog.LevelWarn
+	}
+	args := []any{"layout", layout, "round_frozen", frozen}
+	if lookupErr != nil {
+		args = append(args, "err", lookupErr)
+	}
+	log.Log(ctx, level, "playback_key_layout", args...)
 }
 
 func run() error {
@@ -118,19 +164,34 @@ func run() error {
 	if err := requireLedgerSchema(ctx, pool, log); err != nil {
 		return err
 	}
+	// 기동 검사(POK-196 PDT) — 게이트가 이 이미지가 읽지 못하는 판을 요구하면 timing_downgrade_refused 로 멈춘다.
+	if err := requireTimingGate(ctx, pool, log); err != nil {
+		return err
+	}
+	// 새 꼴 쓰기 스위치 상태 신호(POK-525) — 운영 스크립트가 켬 · 끔 재생성 뒤 이 줄로 판정한다. 기동은 막지 않는다.
+	reportPlaybackKeyLayout(ctx, pool, cfg.PlaybackRoundKeys, log)
 	// 연결 폐기 관측(POK-388). 관측 고루틴이 풀을 읽으므로 pool.Close 보다 뒤에 등록해 먼저 멈춘다.
 	stopIndexerStats := poolstat.Start(ctx, pool, "indexer", log)
 	defer stopIndexerStats()
 
-	// 계약9 발행(M6-8) — 게이트 하나를 결정자(새 회차 started) · 정산 조립(완결 평가 ended) · 4D 칸이 함께 쓴다. 꺼지면
-	// 영값 게이트라 outbox 문장이 0 이다. ★ pool.Close 보다 뒤에 등록해 발행기가 먼저 멈춘다(D47).
+	// 계약9 발행(M6-8) — 게이트 하나를 결정자(새 회차 started) · 정산 조립(완결 평가 ended) · 4D 칸이 함께 쓴다. 게이트는
+	// 설정 의도로 정해진다 — 발행기 준비가 실패해도(강등) 켜진 채 적재하고 재시도가 발행기를 띄운다. 설정으로 꺼지면 영값
+	// 게이트라 outbox 문장이 0 이다. ★ pool.Close 보다 뒤에 등록해 재시도 · 발행기가 먼저 멈춘다(D47).
 	lifecycle, stopLifecycle := startLifecycle(ctx, cfg, pool, resolver, log)
 	defer stopLifecycle()
+	// /dvr 하한 Writer(POK-525) — REWIND_EDGE_BOUNDS_KVS_ARN 이 비거나 꼴 밖이면 띄우지 않고, 원장의 닫힌 미해제 행을
+	// 감시하며 유예가 지난 해제 행을 지운다(KVS 는 부르지 않는다).
+	// 어느 갈래가 실패해도 기동은 이어진다. 다만 Writer 없는 갈래는 기동 때 감시 한 번을 동기로 돌려 기동이 최대 약
+	// 10초 (삭제 · 조회 각 CallTimeout 5초) 늦어질 수 있다. ★ pool.Close 보다 뒤에 등록해 Writer 가 먼저 멈춘다(원장이
+	// 인덱서 풀 위에 있다).
+	observeEdgeFloor, stopEdgeBounds := startEdgeBounds(ctx, cfg, pool, log)
+	defer stopEdgeBounds()
 
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
-	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
+	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다. 키 꼴은 상자 스위치가 고른다(POK-525).
 	store := index.NewPGStore(pool,
-		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log), playback.SegKey)
+		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, lifecycle, log),
+		playbackKeyFor(cfg.PlaybackRoundKeys, log))
 
 	// 업로더가 파일을 여는 유일한 손잡이다. 루트를 못 열면 기동 실패다 —
 	// 그 상태로 진행하면 모든 PUT 이 열기 단계에서 실패한다.
@@ -140,7 +201,7 @@ func run() error {
 	}
 	defer root.Close()
 
-	up, err := newUploader(ctx, cfg, root, index.NewUploadStore(pool), log)
+	up, err := newUploader(ctx, cfg, root, newUploadStore(pool), log)
 	if err != nil {
 		return err
 	}
@@ -181,7 +242,7 @@ func run() error {
 	if w != nil {
 		adopt = w
 	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, adopt, up, observer, cfg.Indexer, log)
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, playback.ReadTiming, adopt, up, observer, cfg.Indexer, log)
 
 	// --- 3-1. 훅 어댑터 (선택) ---
 	//
@@ -235,7 +296,10 @@ func run() error {
 	board := assembleStatus(ctx, cfg, rewind, newPlaybackSeed(pool))
 	// 상태 표지 받은편지함은 기동 때 하나다 — 만료(아래)와 4D 수신부가 Changed 로 넣고, M6-3b 가 Drain 을 루프에 넘긴다(계획 5절).
 	inbox := session.NewPlaybackInbox()
-	pubPool := assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind)
+	// 발행 성공마다 그 목록 마지막 행의 회차 하한 후보를 Writer 에 알린다 — 발행 몫과 Writer 가 둘 다 있을 때만 감싼다.
+	pubPool := assembleObservedPublishing(rewind, observeEdgeFloor, func() *pgxpool.Pool {
+		return assemblePublishing(ctx, cfg, dbConfig.Copy(), up, rewind)
+	})
 	if pubPool != nil {
 		// ★ 등록 순서가 계약이다(위 up.Shutdown 주석과 같은 원리). 발행자 풀은 up.Shutdown 보다 먼저 닫히고 아래
 		//   rewind.stop(fence 반납)보다 늦게 닫힌다 — 반납 문장이 이 풀로 나간다(체크리스트 474 A-3 3).
@@ -276,16 +340,15 @@ func run() error {
 
 	// 되감기 제어면 서버(M5 3.7). ★ 위 rewind.stop · 풀 Close · up.Shutdown 보다 뒤에 등록해 먼저 멈춘다(LIFO) — 처리 중
 	// 요청이 끝난 뒤에 풀이 닫힌다. 회차 조회(round)는 인덱서 풀로 읽는다(동시 2 — M6 11절). 4D 수신부(POK-472)는
-	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown). 계승 해제 받은편지함은 루프가 비운다(fa.wire).
-	intents := session.NewIntentInbox()
-	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound(), startedEnqueuer(lifecycle))), inbox.Changed, intents.Post, log)
+	// stopControl 안에서 서버보다 먼저 닫힌다(recv.Close → 서버 Shutdown).
+	recv, err := newEndSignal(resolver, intentApplier(pool, newIntentOptions(log, fa.closeRound())), inbox.Changed, log)
 	if err != nil {
 		return err
 	}
 	stopControl := startControlWithEndSignal(cfg, board, log, control.NewRoundLookup(pool, cfg.RewindPublicBaseURL, log), recv)
 	defer stopControl()
-	// 정산 몫(M6-3b) — 발행 조립 뒤 · 루프 기동 전. 루프가 받은편지함 둘을 holdTick 마다 비운다.
-	fa.wire(rewind, cfg, pool, inbox, intents)
+	// 정산 몫(M6-3b) — 발행 조립 뒤 · 루프 기동 전. 루프가 받은편지함을 holdTick 마다 비운다.
+	fa.wire(rewind, cfg, pool, inbox)
 
 	// --- 5. 메인 루프 ---
 	//

@@ -120,6 +120,8 @@ export interface SwitchOptions {
   leftStreamerId?: number;
   /** 걷힐 때 포커스를 돌려줄 자리(`data-switch-return` 값, switchCurtain.ts) */
   returnFocus?: string;
+  /** 바꾸고 갈 주소: 방송에 묶인 화면에서 바꿔도 홈이 아니라 여기로 간다(switchCurtain.ts · ChannelScope) */
+  destination?: string;
 }
 
 export interface SwitchTarget {
@@ -150,6 +152,7 @@ export function useSwitchChannel() {
           photo: target.relation === 'OWNER' ? me.profileImageUrl : (target.photo ?? null),
           leftStreamerId: options.leftStreamerId,
           returnFocus: options.returnFocus,
+          destination: options.destination,
         },
         () => {
           select(me.id, target.streamerId === me.id ? null : target.streamerId);

@@ -73,15 +73,3 @@
   outline: 2px solid var(--pc-color-focus-ring);
   outline-offset: 2px;
 }
-
-/* 읽지 않은 알림 점 — 디자인 1a: 8px point색, canvas 2px 테두리 */
-.unreadDot {
-  position: absolute;
-  top: calc(7 * var(--pc-u));
-  right: calc(7 * var(--pc-u));
-  width: calc(8 * var(--pc-u));
-  height: calc(8 * var(--pc-u));
-  border-radius: calc(99 * var(--pc-u));
-  background: var(--pc-color-point);
-  border: 2px solid var(--pc-color-bg-canvas);
-}

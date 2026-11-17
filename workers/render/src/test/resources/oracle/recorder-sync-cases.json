@@ -1,0 +1,1135 @@
+{
+ "source": "녹화기를 거친 합성 자료 세 사례의 조각표 · 확인점(설계 13.5 「보정식 재계산」 표 · 원시 오차는 기준 자리 반올림을 뺀 값 · ms 넷째 자리)",
+ "cases": [
+  {
+   "name": "O_cap180",
+   "origin": "RECORDER",
+   "segments": [
+    {
+     "seq": 1,
+     "frames": 180,
+     "videoTicks": 536999,
+     "packetTicks": 537000,
+     "intervalTicks": 3000,
+     "runHead": true,
+     "audioGaps": 0
+    },
+    {
+     "seq": 2,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 3,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 4,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 5,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 6,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 7,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 8,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 9,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 10,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 11,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 12,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 13,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 14,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 15,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 16,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 17,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 18,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 19,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 20,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 21,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 22,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 23,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 24,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 25,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 26,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 27,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 28,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 29,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 30,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 31,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 32,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 33,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 34,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 35,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 36,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 37,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 38,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 39,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 40,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 41,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 42,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 43,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 44,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 45,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    }
+   ],
+   "checkpoints": [
+    {
+     "atMs": "100.0000",
+     "seq": 1,
+     "rawErrorMs": "+0.0000"
+    },
+    {
+     "atMs": "90000.0000",
+     "seq": 23,
+     "rawErrorMs": "-0.0667"
+    },
+    {
+     "atMs": "179800.0000",
+     "seq": 45,
+     "rawErrorMs": "-0.1222"
+    }
+   ]
+  },
+  {
+   "name": "I9_drift+0",
+   "origin": "RECORDER",
+   "segments": [
+    {
+     "seq": 2,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": true,
+     "audioGaps": 0
+    },
+    {
+     "seq": 3,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 4,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 5,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 6,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 7,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 8,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 9,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 10,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 11,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 12,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 13,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 14,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 15,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 16,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 17,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 18,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 19,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 20,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 21,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 22,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 23,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 24,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 25,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 26,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 27,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 28,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 29,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 30,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 31,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 32,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 33,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 34,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 35,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 36,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 37,
+     "frames": 120,
+     "videoTicks": 360001,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 38,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 39,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 40,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 41,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 42,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 43,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 44,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 45,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 46,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    }
+   ],
+   "checkpoints": [
+    {
+     "atMs": "3566.6667",
+     "seq": 2,
+     "rawErrorMs": "+0.0097"
+    },
+    {
+     "atMs": "7566.6667",
+     "seq": 3,
+     "rawErrorMs": "-0.0111"
+    },
+    {
+     "atMs": "11566.6778",
+     "seq": 4,
+     "rawErrorMs": "-0.0222"
+    },
+    {
+     "atMs": "15566.6889",
+     "seq": 5,
+     "rawErrorMs": "-0.0333"
+    },
+    {
+     "atMs": "19566.7000",
+     "seq": 6,
+     "rawErrorMs": "-0.0333"
+    },
+    {
+     "atMs": "23566.7000",
+     "seq": 7,
+     "rawErrorMs": "-0.0333"
+    },
+    {
+     "atMs": "27566.7000",
+     "seq": 8,
+     "rawErrorMs": "-0.0444"
+    },
+    {
+     "atMs": "31566.7000",
+     "seq": 9,
+     "rawErrorMs": "-0.0444"
+    },
+    {
+     "atMs": "35566.7000",
+     "seq": 10,
+     "rawErrorMs": "-0.0444"
+    },
+    {
+     "atMs": "39566.7000",
+     "seq": 11,
+     "rawErrorMs": "-0.0236"
+    },
+    {
+     "atMs": "43566.7000",
+     "seq": 12,
+     "rawErrorMs": "-0.0333"
+    },
+    {
+     "atMs": "47566.7000",
+     "seq": 13,
+     "rawErrorMs": "-0.0445"
+    },
+    {
+     "atMs": "51566.7000",
+     "seq": 14,
+     "rawErrorMs": "-0.0444"
+    },
+    {
+     "atMs": "55566.7000",
+     "seq": 15,
+     "rawErrorMs": "-0.0444"
+    },
+    {
+     "atMs": "59566.7000",
+     "seq": 16,
+     "rawErrorMs": "-0.0444"
+    },
+    {
+     "atMs": "63566.7111",
+     "seq": 17,
+     "rawErrorMs": "-0.0444"
+    },
+    {
+     "atMs": "67566.7111",
+     "seq": 18,
+     "rawErrorMs": "-0.0347"
+    },
+    {
+     "atMs": "71566.7111",
+     "seq": 19,
+     "rawErrorMs": "-0.0556"
+    },
+    {
+     "atMs": "75566.7222",
+     "seq": 20,
+     "rawErrorMs": "-0.0667"
+    },
+    {
+     "atMs": "79566.7333",
+     "seq": 21,
+     "rawErrorMs": "-0.0778"
+    },
+    {
+     "atMs": "83566.7444",
+     "seq": 22,
+     "rawErrorMs": "-0.0778"
+    },
+    {
+     "atMs": "87566.7444",
+     "seq": 23,
+     "rawErrorMs": "-0.0778"
+    },
+    {
+     "atMs": "91566.7444",
+     "seq": 24,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "95566.7444",
+     "seq": 25,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "99566.7444",
+     "seq": 26,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "103566.7444",
+     "seq": 27,
+     "rawErrorMs": "-0.0681"
+    },
+    {
+     "atMs": "107566.7444",
+     "seq": 28,
+     "rawErrorMs": "-0.0778"
+    },
+    {
+     "atMs": "111566.7444",
+     "seq": 29,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "115566.7444",
+     "seq": 30,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "119566.7444",
+     "seq": 31,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "123566.7444",
+     "seq": 32,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "127566.7556",
+     "seq": 33,
+     "rawErrorMs": "-0.0889"
+    },
+    {
+     "atMs": "131566.7556",
+     "seq": 34,
+     "rawErrorMs": "-0.0792"
+    },
+    {
+     "atMs": "135566.7556",
+     "seq": 35,
+     "rawErrorMs": "-0.1000"
+    },
+    {
+     "atMs": "139566.7667",
+     "seq": 36,
+     "rawErrorMs": "-0.1111"
+    },
+    {
+     "atMs": "143566.7778",
+     "seq": 37,
+     "rawErrorMs": "-0.1222"
+    },
+    {
+     "atMs": "147566.7889",
+     "seq": 38,
+     "rawErrorMs": "-0.1222"
+    },
+    {
+     "atMs": "151566.7889",
+     "seq": 39,
+     "rawErrorMs": "-0.1222"
+    },
+    {
+     "atMs": "155566.7889",
+     "seq": 40,
+     "rawErrorMs": "-0.1333"
+    },
+    {
+     "atMs": "159566.7889",
+     "seq": 41,
+     "rawErrorMs": "-0.1333"
+    },
+    {
+     "atMs": "163566.7889",
+     "seq": 42,
+     "rawErrorMs": "-0.1333"
+    },
+    {
+     "atMs": "167566.7889",
+     "seq": 43,
+     "rawErrorMs": "-0.1125"
+    },
+    {
+     "atMs": "171566.7889",
+     "seq": 44,
+     "rawErrorMs": "-0.1222"
+    },
+    {
+     "atMs": "175566.7889",
+     "seq": 45,
+     "rawErrorMs": "-0.1333"
+    }
+   ]
+  },
+  {
+   "name": "I1_sync",
+   "origin": "RECORDER",
+   "segments": [
+    {
+     "seq": 2,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": true,
+     "audioGaps": 0
+    },
+    {
+     "seq": 3,
+     "frames": 94,
+     "videoTicks": 282000,
+     "packetTicks": 282000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    },
+    {
+     "seq": 4,
+     "frames": 180,
+     "videoTicks": 536999,
+     "packetTicks": 537000,
+     "intervalTicks": 3000,
+     "runHead": true,
+     "audioGaps": 0
+    },
+    {
+     "seq": 5,
+     "frames": 120,
+     "videoTicks": 360000,
+     "packetTicks": 360000,
+     "intervalTicks": 3000,
+     "runHead": false,
+     "audioGaps": 0
+    }
+   ],
+   "checkpoints": [
+    {
+     "atMs": "30.0000",
+     "seq": 2,
+     "rawErrorMs": "+0.0000"
+    },
+    {
+     "atMs": "3726.6667",
+     "seq": 3,
+     "rawErrorMs": "-0.0111"
+    },
+    {
+     "atMs": "6860.0000",
+     "seq": 4,
+     "rawErrorMs": "-0.0000"
+    },
+    {
+     "atMs": "12826.6556",
+     "seq": 5,
+     "rawErrorMs": "+0.0111"
+    },
+    {
+     "atMs": "14686.6556",
+     "seq": 5,
+     "rawErrorMs": "+0.0111"
+    }
+   ]
+  }
+ ]
+}

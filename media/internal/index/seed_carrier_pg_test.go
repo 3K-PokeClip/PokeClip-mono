@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
@@ -187,7 +186,7 @@ func TestInsertReportsInheritsSessionWrittenAtOpening(t *testing.T) {
 	prev := stream + "-prev"
 	putSession(t, pool, fixtureSession{id: prev, stream: stream, startedAt: sessionBase.Add(-time.Hour), state: "ended"})
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
-	store := NewPGStore(pool, inheritingDecider{registryDecider: registryDecider{reg: reg}, prev: prev}, playback.SegKey)
+	store := NewPGStore(pool, inheritingDecider{registryDecider: registryDecider{reg: reg}, prev: prev}, legacySegKey)
 
 	_, res, err := store.Insert(context.Background(), segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
 	if err != nil {

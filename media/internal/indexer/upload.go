@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -59,6 +60,8 @@ func growthConfirmed(r recording.CompletionReason) bool {
 type noUploader struct{}
 
 func (noUploader) RequestUpload(index.UploadTarget) bool { return false }
+
+func (noUploader) RestoredLink(string) (playback.Link, bool) { return playback.Link{}, false }
 
 // requestRowUploads 는 INSERT 한 행 뒤의 업로드 요청을 낸다. ②·③·init 은 형제 분기다 — 한 축의
 // 거부가 다른 축을 세우지 않는다(설계 3.3·5.5.3). 보류 중이던 직전 꼬리의 승격이 새 행보다 먼저라

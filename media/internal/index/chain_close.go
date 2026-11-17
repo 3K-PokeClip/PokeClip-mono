@@ -4,8 +4,8 @@ package index
 // 종결 정정 D75).
 //
 // 사슬 닫힘은 사슬 전원의 vod_state 를 none → freezing 으로 바꾸는 한 문장이다(DDL 변경 0 — 4절 「사슬 닫힘 표식」). 그 뒤
-// 사슬의 구성은 바뀌지 않는다: 개시는 vod_state='none' 인 꼬리만 계승하고(session inheritable), 4D 분리는 닫힌 사슬 안을
-// 가르지 않으며(round_split_blocked), init 계승 해제는 vod_state='none' 일 때만 간선을 끊는다(markInitUploadedSQL).
+// 사슬의 구성은 바뀌지 않는다: 개시는 vod_state='none' 인 꼬리만 계승하고(session inheritable), 4D 는 세션의 round_id ·
+// 계승 간선을 바꾸지 않으며, init 계승 해제는 vod_state='none' 일 때만 간선을 끊는다(markInitUploadedSQL).
 
 import (
 	"context"
@@ -164,7 +164,8 @@ UPDATE stream_sessions SET state = 'ended', ended_at = pg_catalog.now()
 
 // MarkChainEnded 는 사슬 phase 4 다(위상 잠금 선행). 사슬 전원이 dvr · vod 종국일 때만 state='ended', ended_at=now() 를
 // 쓰고 바꾼 행 수를 돌려준다(아니면 0 · 쓰지 않음). 완결 평가할 회차는 Chain 이나 스캔 행의 값이 아니라 잠금 뒤 사슬
-// 꼬리 행에서 다시 읽은 round_id 다 — 늦은 4D 분리가 동결 중인 사슬을 통째로 옮겼을 수 있다(D55 다섯째 갈래). 같은
+// 꼬리 행에서 다시 읽은 round_id 다 — POK-525 전 판의 늦은 4D 분리가 동결 중인 사슬을 통째로 옮겼을 수 있다(D55
+// 다섯째 갈래 — 새 판은 round_id 를 바꾸지 않고, 회차 불변 트리거를 깐 DB 에서는 생기지 않는다). 같은
 // 트랜잭션 끝에서 그 회차로 TryCloseRound(닫힘 조건 평가 + 완결 평가)를 부른다. 잠금 순서는 상한 설정 → 위상 잠금 →
 // ② 소속 행 → ③ 사슬 행이다.
 func MarkChainEnded(ctx context.Context, pool *pgxpool.Pool, c Chain, o CloseOptions, enqueue EndedEnqueuer) (int64, error) {

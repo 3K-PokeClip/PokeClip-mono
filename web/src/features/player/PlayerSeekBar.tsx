@@ -30,6 +30,7 @@ export function PlayerSeekBar({
   onReturnToLive,
   onSeekingChange,
   replay = false,
+  recordingEnded = false,
 }: {
   behindSeconds: number;
   /** 되감기 창 = 시크바 좌측 끝 (계약3 4절 4번) */
@@ -42,6 +43,8 @@ export function PlayerSeekBar({
   onSeekingChange: (seeking: boolean) => void;
   /** 끝난 방송의 녹화 다시보기(재생 계약의 replay). 오른쪽 끝을 부르는 말이 갈린다 */
   replay?: boolean;
+  /** 방송이 끝났다는 근거를 받은 세션 재생기(PlayerSimulation.recordingEnded — 소스와 상관없이). 낭독의 끝 문구만 녹화 끝이다 */
+  recordingEnded?: boolean;
 }) {
   // 드래그 중 표시할 위치. null이면 실제 재생 위치(prop)를 그대로 쓴다.
   const [dragFraction, setDragFraction] = useState<number | null>(null);
@@ -64,6 +67,8 @@ export function PlayerSeekBar({
   const displayBehind = Math.min(rawBehind, windowSeconds);
   const atEdge = isAtEdge(displayBehind);
   const edge = edgeWords(replay);
+  // 끝 문구(끝 · 끝에서)는 방송이 끝났다는 근거를 받은 세션 재생기도 녹화 끝이다. 이름 · 키는 replay 만 가른다
+  const endWords = edgeWords(replay || recordingEnded);
   const pct = progressFraction(displayBehind, windowSeconds) * 100;
   // 클립 마커는 프리뷰를 따라가지 않는다 — 실제 재생 지점 기준 구간이라 스크럽과 무관하다
   const clipPct = progressFraction(behindSeconds, windowSeconds) * 100;
@@ -125,7 +130,9 @@ export function PlayerSeekBar({
       aria-valuemin={-windowSeconds}
       aria-valuemax={0}
       aria-valuenow={-displayBehind}
-      aria-valuetext={atEdge ? edge.atEdge : `${edge.fromEdge} ${formatBehind(displayBehind)}`}
+      aria-valuetext={
+        atEdge ? endWords.atEdge : `${endWords.fromEdge} ${formatBehind(displayBehind)}`
+      }
       className={styles.seekArea}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

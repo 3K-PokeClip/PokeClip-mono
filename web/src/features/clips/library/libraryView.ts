@@ -2,16 +2,22 @@ import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { segmentAt } from '@/features/broadcast/livenow/broadcastInfoAt';
 import { categoryAt, categorySpansOf } from '@/features/broadcast/livenow/categoryThumb';
 import { formatUptime } from '@/features/player/playerMath';
+import { elapsedSinceStartMs } from '@/features/broadcast/elapsedSinceStart';
 import {
   ClipApiError,
   liveUploadsOf,
   platformLabel,
   type BroadcastRow,
   type BroadcastTimeline,
+  type ClipSnapshot,
   type LibraryEntry,
   type UploadSnapshot,
 } from '@/api/clipEditor';
-import { clipStatusView, type ClipStatusView } from '@/features/clips/editor/studio/clipProgress';
+import {
+  clipStatusView,
+  SOURCE_RANGE_REASON,
+  type ClipStatusView,
+} from '@/features/clips/editor/studio/clipProgress';
 import {
   instantLabel,
   PRIVACY_CHANGE_NOTE,
@@ -463,8 +469,20 @@ export function stepViewForClip(clip: LibraryClip, now: Date): LibraryStepView |
   if (entry === undefined || latest == null || entry.status === 'editing') return null;
   const view = clipStatusView(latest, now);
   const detail =
-    uploadFailureText(clip) ?? (entry.status === 'checking' ? noteText('checking') : view.detail);
+    uploadFailureText(clip) ??
+    (entry.status === 'checking'
+      ? noteText('checking')
+      : (renderFailureText(latest) ?? view.detail));
   return { view, detail, versionLabel: `편집본 v${latest.recipeVersion}` };
+}
+
+/**
+ * 범위를 못 덮은 렌더 실패(SOURCE_RANGE)의 보관함 안내. 편집기 말 「범위를 다시 정해 주세요」 는 여기서 할 수 없는 일이다 —
+ * 범위를 고치는 곳은 「이어서 편집」 으로 여는 편집기다. 다른 실패는 편집기와 같은 말이라 null
+ */
+function renderFailureText(latest: ClipSnapshot): string | null {
+  if (latest.status !== 'failed' || latest.error?.code !== 'SOURCE_RANGE') return null;
+  return `${SOURCE_RANGE_REASON} 「${EDIT_CONTINUE.label}」에서 범위를 다시 정해 주세요.`;
 }
 
 // ---------- 원본 방송 카드 (POK-511) ----------
@@ -535,13 +553,24 @@ export function broadcastLengthLabel(broadcast: LibraryEntry['broadcast']): stri
 }
 
 /**
- * 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」. 구간이 절대 시각이라 기준점(sceneBaseMs)을 빼서 잰다. 구간이 기준점보다 앞서면
- * 위치를 모르는 것이라 null이다: 0으로 깎으면 「0:00 ~ 0:00」을 지어낸다
+ * 편집 구간의 방송 안 위치 — 「1:23:45 ~ 1:24:30」. 이번 방송 시작부터 잰다(POK-562): 다른 방송 안 시각 표기(카드 · 편집기 출처 줄)와
+ * 같은 0초다. 기준점(sceneBaseMs)이 없으면 부르지 않는다(2026-10-31 사용자 결정 — 위치를 안 보인다). 방송 시작보다 앞선 자리는
+ * 0:00이다(2026-11-11 사용자 결정: 음수는 0). 방송 시작을 모르면 null이다
+ *
+ * @param baseMs 서버 시각 기준점(epoch ms, sceneBaseMs). 값은 결과를 바꾸지 않는다(구간을 그 축으로 옮겼다 되돌린다) —
+ *     이 값이 있다는 것이 「기준점이 없으면 장면 위치를 숨긴다」(2026-10-31 사용자 결정)의 관문이다
+ * @param startedAtMs 이번 방송 시작(epoch ms) — entry.broadcast.startedAt
  */
-export function sceneLabel(cut: NonNullable<LibraryEntry['cut']>, baseMs: number): string | null {
-  if (cut.inAtMs < baseMs) return null;
-  const position = (ms: number) => formatUptime((ms - baseMs) / 1000);
-  return `${position(cut.inAtMs)} ~ ${position(cut.outAtMs)}`;
+export function sceneLabel(
+  cut: NonNullable<LibraryEntry['cut']>,
+  baseMs: number,
+  startedAtMs: number | null,
+): string | null {
+  // 구간은 절대 시각이라 기준점 축으로 옮겨 공통 셈(elapsedSinceStartMs)에 넣는다
+  const inMs = elapsedSinceStartMs(cut.inAtMs - baseMs, baseMs, startedAtMs);
+  const outMs = elapsedSinceStartMs(cut.outAtMs - baseMs, baseMs, startedAtMs);
+  if (inMs === null || outMs === null) return null;
+  return `${formatUptime(inMs / 1000)} ~ ${formatUptime(outMs / 1000)}`;
 }
 
 /**

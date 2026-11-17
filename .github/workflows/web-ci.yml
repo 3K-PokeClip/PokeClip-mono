@@ -5,6 +5,9 @@ on:
   pull_request:
     paths:
       - 'web/**'
+      - 'media/internal/playback/testdata/**'
+      - 'media/internal/rewind/testdata/**'
+      - 'services/ledger-timeline/src/test/resources/**'
       - '.github/workflows/web-ci.yml'
 
 jobs:

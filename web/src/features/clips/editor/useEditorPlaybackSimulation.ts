@@ -15,6 +15,10 @@ import { createPlaybackClock, type ClockedPlayback } from './playbackClock';
 const TICK_MS = 100;
 const TICK_SECONDS = TICK_MS / 1000;
 
+function noPick(): null {
+  return null;
+}
+
 function clamp(seconds: number, durationSeconds: number): number {
   return Math.min(durationSeconds, Math.max(0, seconds));
 }
@@ -110,5 +114,8 @@ export function useEditorPlaybackSimulation(options: EditorPlaybackOptions): Clo
     setBounds: useCallback((bounds: PlaybackBounds) => {
       boundsRef.current = bounds;
     }, []),
+    // 목업에는 프레임이 없다 — 찍기 · 끌기는 초로 간다
+    pickAtPlayhead: noPick,
+    pickAtS: noPick,
   };
 }

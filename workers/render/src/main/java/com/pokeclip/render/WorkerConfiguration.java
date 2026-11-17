@@ -1,6 +1,7 @@
 package com.pokeclip.render;
 
 import com.pokeclip.render.job.EnvelopeParser;
+import com.pokeclip.render.media.FfmpegVersion;
 import com.pokeclip.render.media.MediaProbe;
 import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.report.ClipReporter;
@@ -73,16 +74,20 @@ class WorkerConfiguration {
     QueueWorker thumbnailQueueWorker(RenderProperties p, ThumbnailProperties t, SqsClient sqs, S3Client s3,
                                      ObjectMapper mapper) {
         RenderProperties.requireInternalToken("pokeclip.thumbnail.queue-url", p.internalToken());
-        ThumbnailProcessor processor = new ThumbnailProcessor(mapper, new S3Store(s3), new ProcessRunner(),
-                new ThumbnailReporter(p), p.ffmpeg(), p.workDir().resolve("thumbnails"), t.timeout(), Clock.systemUTC());
-        return new QueueWorker("thumbnail", sqs, t.queueUrl(), processor, t.visibilityTimeout(), p.pollWait());
+        ProcessRunner runner = new ProcessRunner();
+        ThumbnailProcessor processor = new ThumbnailProcessor(mapper, new S3Store(s3), runner,
+                new MediaProbe(runner, mapper, p.ffprobe()), new ThumbnailReporter(p), p.ffmpeg(),
+                p.workDir().resolve("thumbnails"), t.timeout(), Clock.systemUTC());
+        return new QueueWorker("thumbnail", sqs, t.queueUrl(), processor, t.visibilityTimeout(), p.pollWait(),
+                FfmpegVersion.firstLine(new ProcessRunner(), p.ffmpeg(), p.workDir()));
     }
 
     /** 줄 주소가 비면 줄을 안 본다. */
     @Bean
     @ConditionalOnExpression("!'${pokeclip.render.queue-url:}'.isBlank()")
     QueueWorker queueWorker(RenderProperties p, SqsClient sqs, JobProcessor processor) {
-        return new QueueWorker(sqs, p.queueUrl(), processor, p.visibilityTimeout(), p.pollWait());
+        return new QueueWorker(sqs, p.queueUrl(), processor, p.visibilityTimeout(), p.pollWait(),
+                FfmpegVersion.firstLine(new ProcessRunner(), p.ffmpeg(), p.workDir()));
     }
 
     /** 두 줄 주소가 다 비면 일 없이 떠 있는다(POK-332). 없으면 기동하자마자 끝나 dev compose가 끝없이 다시 띄운다. */

@@ -39,12 +39,11 @@ const shedEvery = time.Second
 
 // Options 는 처리기의 함수 칸과 수치다. 바깥 호출은 모두 함수 칸이다(시험이 가짜를 끼운다). 빈 칸은 New 가 거부한다.
 type Options struct {
-	Resolve    func(ctx context.Context, token string) (keyresolve.Verdict, error)                    // keyresolve.Client.Resolve
-	Apply      func(ctx context.Context, e session.IntentionalEnd) (session.IntentionalResult, error) // ApplyIntentionalEnd(pool, o) 를 묶은 것
-	Changed    index.PlaybackChanged                                                                  // 표지 — 커밋 결과를 모를 때도 부른다
-	PostIntent func(streamID, sessionID string)                                                       // 계승 해제 요청(IntentInbox.Post)
-	Now        func() time.Time                                                                       // 수신 시각(Media 시계) — StoppedAt 계산
-	Log        *slog.Logger
+	Resolve func(ctx context.Context, token string) (keyresolve.Verdict, error)                    // keyresolve.Client.Resolve
+	Apply   func(ctx context.Context, e session.IntentionalEnd) (session.IntentionalResult, error) // ApplyIntentionalEnd(pool, o) 를 묶은 것
+	Changed index.PlaybackChanged                                                                  // 표지 — 커밋 결과를 모를 때도 부른다
+	Now     func() time.Time                                                                       // 수신 시각(Media 시계) — StoppedAt 계산
+	Log     *slog.Logger
 
 	BodyTimeout    time.Duration // 1s — 처리기 진입부터 본문 끝까지(ResponseController.SetReadDeadline)
 	ResolveTimeout time.Duration // 1s
@@ -58,7 +57,7 @@ type Options struct {
 // validate 는 빈 함수 칸 · 0 이하 시한 · nil 계수기 · nil 로거를 거부한다.
 func (o Options) validate() error {
 	switch {
-	case o.Resolve == nil, o.Apply == nil, o.Changed == nil, o.PostIntent == nil, o.Now == nil:
+	case o.Resolve == nil, o.Apply == nil, o.Changed == nil, o.Now == nil:
 		return errors.New("endsignal: Options 의 함수 칸이 비었다")
 	case o.Log == nil:
 		return errors.New("endsignal: Options.Log 가 비었다")
@@ -218,8 +217,7 @@ func resolveKind(err error) string {
 
 // apply 는 8–10 단계다. 오류여도 커밋 결과를 모를 수 있어 Changed 를 부른다(설계 3절 9 · M6 2.2 규칙 1 — 표지는
 // 재조회라 더 불러도 같은 값이다). 재시도 가능한 미적용(contended)도 503 이다 — 위상 잠금 대기가 Apply 시한을 넘긴
-// 4D 를 202 로 삼키지 않고 플러그인 재시도에 맡긴다(M6 11절). 커밋 전에 접혀 표지는 없다. PostIntent 는 성공으로
-// RevokeSession 을 안 때만이다.
+// 4D 를 202 로 삼키지 않고 플러그인 재시도에 맡긴다(M6 11절). 커밋 전에 접혀 표지는 없다.
 func (r *Receiver) apply(ctx context.Context, sig signal) outcome {
 	actx, cancel := context.WithTimeout(ctx, r.o.ApplyTimeout)
 	defer cancel()
@@ -233,9 +231,6 @@ func (r *Receiver) apply(ctx context.Context, sig signal) outcome {
 	}
 	if res.Effect != "" {
 		r.o.Changed(sig.token)
-	}
-	if res.RevokeSession != "" {
-		r.o.PostIntent(sig.token, res.RevokeSession)
 	}
 	return outcome{status: http.StatusAccepted, reason: "accepted", streamID: sig.token}
 }

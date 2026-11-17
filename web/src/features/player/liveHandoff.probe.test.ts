@@ -41,7 +41,6 @@ function loaded(url: string, firstMs: number, lastEndMs: number, td = 6): Sessio
     firstMs,
     lastEndMs,
     targetDurationS: td,
-    headSpanMs: td * 3_000,
   };
 }
 

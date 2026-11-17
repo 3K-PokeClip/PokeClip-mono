@@ -86,3 +86,32 @@ func TestDefaultOptionsDActAndSealOff(t *testing.T) {
 		t.Errorf("StallSealAfter 기본 = %v, want 0(꺼짐)", o.StallSealAfter)
 	}
 }
+
+// 뷰 뒤처짐에는 봉인하지 않는다 — 머리 다음 행이 뷰에 없는데 장부에는 있으면(view_behind) 캐시가 적재로 그 행을 싣는 중이다.
+// 봉인하면 복구가 서기 전에 회차가 stall_seal 로 끝난다. 뒤처짐을 모르는 no_row 는 그대로 봉인한다. 복구가 서지 않으면 L4
+// ERROR(view_behind)가 남는다(TestLadderAlarmSplitsViewBehindFromNoRow).
+func TestLadderNoSealWhileViewBehind(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		behind bool
+		seal   bool
+	}{
+		{"방송_종료_구간", false, true},
+		{"뷰가_장부보다_뒤처짐", true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pub := newLadderPublisher(&logRecorder{})
+			pub.opt.StallSealAfter = 5500 * time.Millisecond
+			in := ladderInput(stalledRows(), dueOf6.Add(time.Minute))
+			in.Window.HeadSeq = 10 // 행 11 이 뷰에 없다
+			in.PublishedAt = in.Now.Add(-time.Minute)
+			in.ViewBehind = tt.behind
+
+			_, step := pub.EvaluateLadder(t.Context(), LadderState{}, in)
+
+			if step.Seal != tt.seal || step.Gap {
+				t.Errorf("단계 = %+v, want Seal %v · Gap 거짓", step, tt.seal)
+			}
+		})
+	}
+}

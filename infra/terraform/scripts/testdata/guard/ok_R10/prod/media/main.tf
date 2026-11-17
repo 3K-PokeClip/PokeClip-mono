@@ -2,5 +2,6 @@
 module "media_host" {
   source = "../../modules/media_host"
 
+  instances       = var.instances
   rds_resource_id = "db-EXAMPLE"
 }

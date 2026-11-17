@@ -1,5 +1,5 @@
-# segment-indexer 사이드카 · janitor(로컬 ② 정리기) — 멀티스테이지 빌드. 한 이미지에 두 명령이 들고,
-# 기본 ENTRYPOINT 는 사이드카다(janitor 는 compose 의 entrypoint 로 고른다).
+# segment-indexer 사이드카 · janitor(로컬 ② 정리기) · cred-relay(IMDS 대리 창구 — POK-574) — 멀티스테이지 빌드.
+# 한 이미지에 세 명령이 들고, 기본 ENTRYPOINT 는 사이드카다(janitor · cred-relay 는 compose 의 entrypoint 로 고른다).
 # 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.27 로 유지한다.
 # 패치 판까지 고정한다 — 떠다니는 1.27 태그는 빌드 기계에 캐시된 옛 패치 판으로 빌드된다.
 # 1.27.3 = GO-2026-6809(crypto/x509) 수정판. 올릴 때는 셋(Dockerfile · .ingest-auth · .mtxhook)을 함께 고친다.
@@ -18,6 +18,7 @@ RUN echo "90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b  /src
 # CGO_ENABLED=0 = 순수 정적 바이너리. 빌드 이미지의 libc 에 묶이지 않는다.
 RUN CGO_ENABLED=0 go build -trimpath -o /out/segment-indexer ./cmd/segment-indexer
 RUN CGO_ENABLED=0 go build -trimpath -o /out/janitor ./cmd/janitor
+RUN CGO_ENABLED=0 go build -trimpath -o /out/cred-relay ./cmd/cred-relay
 
 # 최종 스테이지를 scratch 가 아니라 alpine 으로 두는 이유:
 # G4(사이드카가 파일을 쓰지도 지우지도 않는다)의 검증이 "touch /recordings/x 가
@@ -31,6 +32,7 @@ RUN apk add --no-cache tzdata ca-certificates
 
 COPY --from=build /out/segment-indexer /usr/local/bin/segment-indexer
 COPY --from=build /out/janitor /usr/local/bin/janitor
+COPY --from=build /out/cred-relay /usr/local/bin/cred-relay
 # root 소유 0644 — USER 10001 이 읽기만 한다. --chmod 로 못 박아 빌드 입력(작업 트리)의 권한과
 # 떼어 놓는다. --chmod 는 COPY 가 새로 만드는 부모 디렉터리에도 0644(실행 비트 없음)를 주므로
 # 디렉터리는 먼저 만든다(755 — 2026-10-22 실측). 이 경로를 쓰게 하는 POSTGRES_SSLROOTCERT 는 배포
@@ -42,5 +44,10 @@ COPY --from=build --chmod=0644 /src/certs/rds-global-bundle.pem /etc/pokeclip/rd
 # 컨테이너가 뚫렸을 때 할 수 있는 일이 한 단계 더 줄어든다.
 RUN adduser -D -H -u 10001 sidecar
 USER 10001:10001
+
+# 이 이미지가 읽고 쓰는 장부 PDT 판 목록(null = 판 NULL) — internal/index readableVersions 와 같아야 한다(시험
+# TestDockerfileTimingLabelEqualsReadableVersions). 상자 시작 스크립트(start-media.sh)가 이 라벨에 2 가 있으면 DB 를
+# 보지 않고 사이드카를 띄우고, 없으면(라벨 없는 출시 이미지 포함) 기동 전 검사(timing-gate-check)로 게이트를 본다.
+LABEL com.pokeclip.timing.readable="null,2"
 
 ENTRYPOINT ["/usr/local/bin/segment-indexer"]

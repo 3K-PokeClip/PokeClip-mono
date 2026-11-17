@@ -269,6 +269,42 @@ func TestApplyInsertStopsAtAMissedSeq(t *testing.T) {
 	}
 }
 
+// 놓친 seq 뒤 push 는 적재를 요구한다(2026-11-16 prod 교착). 다른 상자가 seq 42 를 먼저 썼고 그 행의 ③
+// 이 영구 실패면 42 는 settled 가 되지 않는다. 옛 캐시는 43 · 44 push 를 버리기만 해 뷰가 41 에서 멈췄고, 사다리는 42 를 뷰에서
+// 못 찾아 GAP 을 세우지 못했으며(no_row), 드리프트 대조는 DB 의 42 가 미settled 라 일치로 봤다 — 회차 끝까지 교착이었다.
+// 지금은 빈 seq 뒤 push 가 그 스트림 적재를 요구하고(드리프트 까닭 — 적용되면 cache_drift_repaired(kind=head)), 그동안
+// 캐시는 뷰가 장부보다 뒤처졌음을 안다(Behind — 사다리 L4 ERROR 재료). 적재가 42(③ failed)를 실으면 뒤처짐이 풀린다.
+func TestApplyInsertPastAMissedSeqDemandsLoad(t *testing.T) {
+	c := &cache.Cache{}
+	load(t, c, stream, openedAt40())
+	c.ApplyInsert(stream, 41, seedOf("O", 41, at(7600*time.Millisecond), 4000))
+	if c.Behind(stream) {
+		t.Fatal("빈 seq 전 Behind = 참, want 거짓")
+	}
+	c.ApplyInsert(stream, 43, seedOf("O", 43, at(15600*time.Millisecond), 4000))
+	c.ApplyInsert(stream, 44, seedOf("O", 44, at(19600*time.Millisecond), 4000))
+
+	if !c.Behind(stream) {
+		t.Error("빈 seq 뒤 push 를 받고도 Behind = 거짓, want 참")
+	}
+	d := c.DemandedLoads()
+	if len(d) != 1 || d[0].StreamID != stream || d[0].Hint != nil {
+		t.Fatalf("요구 = %+v, want %s · 힌트 없음 한 건(push 둘이 한 요구로 합쳐진다)", d, stream)
+	}
+	l := openedAt40()
+	l.Rows = append(l.Rows, pendingRun("O", 41, 44, at(7600*time.Millisecond))...)
+	applied, drift := c.CompleteLoad(stream, c.BeginLoad(stream, d[0].Hint), l)
+	if !applied || !drift {
+		t.Errorf("CompleteLoad = (%v, %v), want (참, 참) — 드리프트 까닭 적재", applied, drift)
+	}
+	if got := seqsOf(c.Snapshot(stream).RowsFrom(0)); !reflect.DeepEqual(got, []int64{40, 41, 42, 43, 44}) {
+		t.Errorf("적재 뒤 행 = %v, want [40 41 42 43 44] — 놓친 42 가 실린다", got)
+	}
+	if c.Behind(stream) {
+		t.Error("적재 뒤 Behind = 참, want 거짓")
+	}
+}
+
 // cache_demotes_prev_session_on_open(계획 2.1 upload.go 행 〔r53b〕 · 4.5 B #1 · 판단 J62) — TD 분할 개시 push 는
 // 같은 트랜잭션이 ending 으로 보낸 옛 회차(EndingSessionID)를 싣고, 캐시는 새 회차 축을 세우는 같은 호출에서 그
 // 회차를 ending 으로 둔다. 잡는 결함: 반영을 빼면 한 스트림에 live 회차 둘이 남아 옛 회차의 발행 게이트가 열린

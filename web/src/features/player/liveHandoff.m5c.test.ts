@@ -93,7 +93,6 @@ function watchingAtP(now: number): PlaybackSessionState {
         firstMs: T0,
         lastEndMs: E,
         targetDurationS: 6,
-        headSpanMs: 12_000,
       },
       streamPoll(liveReady(A1, T0, E), X_A, now),
     ],

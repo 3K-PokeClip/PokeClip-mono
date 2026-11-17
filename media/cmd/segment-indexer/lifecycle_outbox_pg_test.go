@@ -152,36 +152,37 @@ func TestRoundWithSplitAndReconnectEnqueuesOneStartedOneEndedD49(t *testing.T) {
 	}
 }
 
-// D55 넷째 갈래 뒤 몫 — T 가 ended 인 회차 R 에 멈춘 뒤 송출 B 가 붙은 다음 4D 가 닿음(round_split). 분리 트랜잭션의 완결
-// 평가로 R ended 1행 · 새 회차 B started 1행. 변이 = 분리 tx 의 완결 호출 제거 → R ended 0 으로 FAIL.
-func TestRoundSplitAfterEndedTailEnqueuesROutboxD55(t *testing.T) {
+// D55 넷째 갈래 뒤 몫(POK-525 r9.3 3-2 에서 forwarded 로) — T 가 ended 인 회차 R 에 멈춘 뒤 송출 L 이 붙어 이미 ended 가
+// 된 다음 4D 가 닿음. forwarded 는 L 에 표식을 걸고 같은 트랜잭션 끝의 회차 닫힘 · 완결 평가로 R ended 1행이다. 회차를
+// 새로 열지 않으므로 started 는 0행이다. 변이 = ending · ended L 의 CloseRound 호출 제거 → R ended 0 으로 FAIL.
+func TestForwardedToEndedLatestEnqueuesROutboxD55(t *testing.T) {
 	pool := newWireTestPool(t)
 	gate := allStreams()
-	const s = "d55-split"
+	const s = "d55-forward"
 	stop := wireBase
 	seedOutboxSession(t, pool, "S-T", s, "ended", "offline", "S-R", "", "frozen", stop.Add(-time.Hour), time.Time{})
 	seedOutboxSegment(t, pool, s, "S-T", 1, stop.Add(-5*time.Second))
-	seedOutboxSession(t, pool, "S-B", s, "live", "", "S-R", "", "none", stop.Add(20*time.Second), time.Time{})
+	seedOutboxSession(t, pool, "S-L", s, "ended", "offline", "S-R", "", "frozen", stop.Add(20*time.Second), time.Time{})
 	publishedStarted(t, pool, "S-R", s)
 	fa := finalizeAssembly{close: outboxClose, enqueue: newEndedEnqueuer(gate)}
-	o := newIntentOptions(slog.New(slog.DiscardHandler), fa.closeRound(), startedEnqueuer(gate))
+	o := newIntentOptions(slog.New(slog.DiscardHandler), fa.closeRound())
 
 	res, err := session.ApplyIntentionalEnd(context.Background(), pool,
 		session.IntentionalEnd{StreamID: s, StoppedAt: stop, ConnStartedAt: stop.Add(-time.Hour)}, o)
 
-	if err != nil || res.Effect != "round_split" {
-		t.Fatalf("결과 = (%+v, %v), want round_split", res, err)
+	if err != nil || res.Effect != "forwarded" {
+		t.Fatalf("결과 = (%+v, %v), want forwarded", res, err)
 	}
 	if n := outboxCount(t, pool, "S-R", broadcast.EventEnded); n != 1 {
 		t.Errorf("R ended %d 행, want 1", n)
 	}
-	if n := outboxCount(t, pool, "S-B", broadcast.EventStarted); n != 1 {
-		t.Errorf("B started %d 행, want 1", n)
+	if n := outboxCount(t, pool, "S-L", broadcast.EventStarted); n != 0 {
+		t.Errorf("L started %d 행, want 0 — forwarded 는 회차를 열지 않는다", n)
 	}
 }
 
-// D55 다섯째 갈래 뒤 몫 — 동결 중 사슬이 늦은 분리로 회차 B 로 통째로 옮겨졌다. phase 4 는 다시 읽은 회차 B 로 완결을
-// 평가해 B ended 1행이다. 변이 = Chain 의 RoundID(R)로 평가 → B ended 0 으로 FAIL.
+// D55 다섯째 갈래 뒤 몫 — 동결 중 사슬이 POK-525 전 판의 늦은 분리로 회차 B 로 통째로 옮겨진 꼴이다(회차 불변 트리거
+// 뒤로는 생기지 않아 장부 꼴로만 심는다). phase 4 는 다시 읽은 회차 B 로 완결을 평가해 B ended 1행이다. 변이 = Chain 의 RoundID(R)로 평가 → B ended 0 으로 FAIL.
 func TestPhaseFourOnMovedChainEnqueuesNewRoundEndedD55(t *testing.T) {
 	pool := newWireTestPool(t)
 	const s = "d55-move"
@@ -218,8 +219,9 @@ func TestRoundScanClosesEndedTailRoundAndEnqueuesD59(t *testing.T) {
 	}
 }
 
-// D61 — 늦은 round_split 뒤 A 를 계승하는 B 는 다른 회차다. 사슬 간선이 같은 round_id 만이라 A 사슬은 B 송출 끝을
-// 기다리지 않고 닫혀 phase 4 에 닿고, R ended 1행이다. 변이 = 간선 CTE 의 round_id 조건 제거 → A 가 닫히지 않아 FAIL.
+// D61 — POK-525 전 늦은 round_split 이 장부에 남긴 꼴: A 를 계승하는 B 가 다른 회차다. 사슬 간선이 같은 round_id
+// 만이라 A 사슬은 B 송출 끝을 기다리지 않고 닫혀 phase 4 에 닿고, R ended 1행이다. 변이 = 간선 CTE 의 round_id 조건
+// 제거 → A 가 닫히지 않아 FAIL.
 func TestChainAcrossRoundEdgeClosesAndEnqueuesRD61(t *testing.T) {
 	pool := newWireTestPool(t)
 	ctx := context.Background()

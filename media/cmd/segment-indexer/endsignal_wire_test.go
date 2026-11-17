@@ -129,7 +129,7 @@ func TestNewResolveClient(t *testing.T) {
 // 클라이언트가 없으면(설정 둘 다 빈 값) 수신부를 만들지 않고 WARN end_signal_disabled reason=no_resolve 다.
 func TestNewEndSignalDisabledWithoutResolver(t *testing.T) {
 	logs, log := newLockedLogger()
-	recv, err := newEndSignal(nil, fakeApply(nil), func(string) {}, func(string, string) {}, log)
+	recv, err := newEndSignal(nil, fakeApply(nil), func(string) {}, log)
 	if recv != nil || err != nil {
 		t.Fatalf("= (%v, %v), want (nil, nil)", recv, err)
 	}
@@ -203,7 +203,7 @@ func newControlFixtureAt(t *testing.T, withRecv bool, hold func(ctx context.Cont
 					hold(ctx)
 				}
 			}),
-			changed: func(string) {}, postIntent: func(string, string) {}, log: log, now: now,
+			changed: func(string) {}, log: log, now: now,
 		})
 		if err != nil {
 			t.Fatalf("newEndSignalReceiver: %v", err)

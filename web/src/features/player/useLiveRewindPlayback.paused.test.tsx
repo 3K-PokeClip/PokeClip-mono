@@ -44,6 +44,7 @@ class FakeHls {
   on(event: string, handler: Handler) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
   }
+  off() {}
   once(event: string, handler: Handler) {
     this.on(event, handler);
   }

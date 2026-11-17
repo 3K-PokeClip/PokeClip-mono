@@ -6,9 +6,11 @@ package broadcast
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
@@ -163,30 +165,50 @@ func TestEndedEnqueueWaitsForStartedAbandon(t *testing.T) {
 	}
 }
 
-// 완결 평가는 media_indexer 권한으로 돈다. started 행을 FOR SHARE 로 잠그므로 outbox UPDATE 권한이 요건이다 — 그것을
-// 거두면 SELECT · INSERT 가 있어도 42501 이다(30_grants.sql 의 outbox UPDATE 가 발행기 문장만의 몫이 아니다).
-// 잡는 결함: 권한 목록에서 outbox UPDATE 를 빼면 회차 닫힘 트랜잭션이 통째로 실패한다. FOR SHARE 를 빼도 뒤 단언이
-// 깨진다 — 그때는 이 요건 문장도 함께 고친다.
-func TestEndedEnqueueNeedsOutboxUpdateGrant(t *testing.T) {
+// 완결 평가는 media_indexer 권한으로 돈다. started 행을 FOR SHARE 로 잠그므로 insertEndedSQL 에는 outbox UPDATE
+// 권한이 요건이다 — 그것을 거두면 SELECT · INSERT 가 있어도 문장은 42501 이다(30_grants.sql 의 outbox UPDATE 가
+// 발행기 문장만의 몫이 아니다). 그래서 켜진 게이트의 판정이 UPDATE 를 묻고, 회수 뒤 완결 평가는 문장 없이
+// (false, nil) · ERROR lifecycle_enqueue_skipped 다.
+// 잡는 결함: 판정에서 UPDATE 를 빼면 회차 닫힘 트랜잭션이 42501 로 통째로 실패한다. FOR SHARE 를 빼면 문장 직접
+// 실행의 42501 단언이 깨진다 — 그때는 판정의 UPDATE 와 이 요건 문장도 함께 고친다.
+func TestEndedEnqueueSkipsWithoutOutboxUpdateGrant(t *testing.T) {
 	pool := newTestPool(t)
 	completeRound(t, pool)
 	role := pgtest.NewMediaIndexerRole(t, pool)
-	enqueue := func() error {
+	sig := &signals{}
+	gate := NewGate([]string{"*"}, slog.New(sig))
+	inRoleTx := func(fn func(context.Context, pgx.Tx) error) error {
 		ctx := context.Background()
 		tx, err := role.Pool.Begin(ctx)
 		if err != nil {
 			return err
 		}
 		defer tx.Rollback(ctx)
-		_, err = EnqueueEndedIfComplete(ctx, tx, openGate(), "S-A")
+		return fn(ctx, tx)
+	}
+	var enqueued bool
+	enqueue := func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		enqueued, err = EnqueueEndedIfComplete(ctx, tx, gate, "S-A")
 		return err
 	}
 
-	if err := enqueue(); err != nil {
-		t.Fatalf("media_indexer 로 완결 평가 = %v, want nil", err)
+	if err := inRoleTx(enqueue); err != nil || !enqueued {
+		t.Fatalf("media_indexer 로 완결 평가 = %v · %v, want true · nil", enqueued, err)
 	}
 	role.Revoke(t, "UPDATE", "broadcast_lifecycle_outbox")
-	if err := enqueue(); !pgtest.IsInsufficientPrivilege(err) {
-		t.Errorf("outbox UPDATE 회수 뒤 완결 평가 = %v, want 42501", err)
+	if err := inRoleTx(enqueue); err != nil || enqueued {
+		t.Errorf("outbox UPDATE 회수 뒤 완결 평가 = %v · %v, want false · nil", enqueued, err)
+	}
+	if n := sig.count(slog.LevelError, "lifecycle_enqueue_skipped",
+		"reason", "privilege", "event_type", EventEnded, "round", "S-A"); n != 1 {
+		t.Errorf("ERROR lifecycle_enqueue_skipped(ended · S-A) = %d, want 1", n)
+	}
+	err := inRoleTx(func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, insertEndedSQL, StartedEventID("S-A"), EndedEventID("S-A"), EventEnded)
+		return err
+	})
+	if !pgtest.IsInsufficientPrivilege(err) {
+		t.Errorf("outbox UPDATE 회수 뒤 insertEndedSQL 직접 실행 = %v, want 42501", err)
 	}
 }

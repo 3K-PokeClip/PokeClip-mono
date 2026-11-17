@@ -2,14 +2,17 @@
 
 # 상자 키 → 구성 판. 처음은 한 대(a)다. 교체 · 설정 반영은 새 키(b)에 올린
 # config_version 을 더한 뒤 runbooks/media-swap.md 를 따른다.
+# 대리 창구(POK-574)는 키마다 켠다 — 예: b = { config_version = "2", cred_relay = true }.
+# 값이 없으면 끔(IMDS 홉 2 — 지금과 같음)이고, 떠 있는 키의 값은 바꾸지 않는다.
 instances = {
   a = { config_version = "1" }
 }
 ingest_active_key = "a"
 http_active_key   = "a"
 
-# kty 확정(2026-10-23) — 네트워크 최적화 Graviton · DVR 1시간 × 30방송 몫
-# (modules/media_host README 「상자 크기」).
+# kty 확정(2026-10-23) — 네트워크 최적화 Graviton · 디스크는 처음에 DVR
+# 1시간 × 30방송 몫으로 정했고, 라이브 창 28초(ADR-102) 뒤로는 녹화 보존이
+# 채운다(modules/media_host README 「상자 크기」).
 instance_type    = "c8gn.large"
 root_volume_size = 150
 
@@ -18,13 +21,16 @@ root_volume_size = 150
 
 # O7c 에서 푸시한 이미지의 다이제스트(runbooks/prod-artifacts.md). 태그가 아니라
 # sha256:<64자리> 다. 응답기(ingest_auth)는 M15 · O8a 에서 채운다 — 비워 두면
-# compose 에 렌더하지 않는다.
+# compose 에 렌더하지 않는다. timing_guard 는 기동 전 검사 핀이다 — c0 하한 이상
+# 사이드카 이미지 다이제스트(runbooks/media-swap.md 「PDT 하한 판정」)이고,
+# 사이드카를 내릴 때도 그대로 둔다. bundle 도 c0 하한 이상만 둔다.
 image_digests = {
   bundle          = "sha256:<MEDIA_HOST_BUNDLE_DIGEST>"
   mediamtx        = "sha256:<MEDIA_MEDIAMTX_DIGEST>"
   nginx           = "sha256:<MEDIA_NGINX_DIGEST>"
   sidecar         = "sha256:<MEDIA_SIDECAR_DIGEST>"
   loopback_sender = "sha256:<MEDIA_LOOPBACK_SENDER_DIGEST>"
+  timing_guard    = "sha256:<MEDIA_TIMING_GUARD_DIGEST>"
 }
 
 # 도구 판(modules/media_host README 「판 고정」 — 출처 · 조회 날짜). compose 판과
@@ -51,3 +57,23 @@ compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad
 
 # 기본 켬. 끄는 것도 설정 반영 교체다.
 # ingest_auth_ip_limit = "on"
+
+# 기본 빈 목록(발행 꺼짐). 응답기 모드에서만 채운다 — 꼴은 26자 Crockford
+# base32 ingestStreamId 또는 "*". 주제 ARN 은 런타임 1단 출력에서 오므로 여기
+# 칸이 없다. 켜기 · 넓히기는 runbooks/media-swap.md 「O8a 당김 교체」 를 따른다.
+# lifecycle_publish_streams = ["<시험 계정 ingestStreamId>"]
+
+# 새 꼴 쓰기 스위치(상자의 sidecar.env). 첫 부팅에만 쓰여 떠 있는 상자는 바뀌지
+# 않는다(plan 의 상자 변경 0) — 다음 상자부터 이 값으로 뜬다.
+# playback_round_keys = true   # POK-525 교체 걸음 4.12(A 회수 4.11 뒤)부터 prod 값 — 결정 9 (가) · 모듈 기본 false
+
+# /dvr 하한 Writer 스위치(기본 끔). 켜면 사이드카가 런타임 1단 KVS 에 회차 하한을
+# 쓴다 — KVS ARN 은 런타임 출력에서 오므로 여기 칸이 없다. user_data 로만
+# 들어가 떠 있는 상자는 바뀌지 않는다(다음 상자부터). POK-525 교체 걸음 4.1 의 값.
+# edge_bounds_writer_enabled = true
+
+# 60일 만료 창구 clip 주소(기본 빈 값 = 만료 끔). 포트는 platform 의 clip 포트와
+# 같아야 한다. 토큰 그릇은 런타임 1단 출력에서 오므로 여기 칸이 없다 — 값을
+# 넣기 전에 채우지 않는다(runbooks/runtime-1a.md 「1단-나 ③」). user_data 로만
+# 들어가 떠 있는 상자는 바뀌지 않는다(다음 상자부터).
+# clip_internal_url = "http://clip.pokeclip.internal:8081"

@@ -94,6 +94,7 @@ export function YoutubeCallbackScreen() {
           tone: 'success',
           title: '유튜브 채널을 연동했어요',
           description: `${linked.channelName} 채널로 클립을 업로드할 수 있어요`,
+          maskDescription: true,
         });
         back();
       })

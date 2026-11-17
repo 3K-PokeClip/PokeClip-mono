@@ -103,6 +103,8 @@ services:
       # 스트림이 404 다 — 바이트까지 보려면 infra/compose/rewind-minio 를 덧붙인다. 자세히는 media/README.md 제어면 절.
       CONTROL_LISTEN: 0.0.0.0:8086
       CONTROL_CORS_ORIGIN: http://localhost:3000
+      # 새 꼴(회차) ③ 키 쓰기 스위치(POK-525). 로컬엔 이 키를 못 읽는 옛 사이드카가 없어 켠다 — prod 는 상자 파일이 정한다
+      PLAYBACK_ROUND_KEYS: "true"
     ports:
       - "127.0.0.1:8086:8086" # 되감기 상태 제어면 — 루프백만
 

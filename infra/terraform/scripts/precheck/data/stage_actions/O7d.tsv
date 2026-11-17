@@ -99,6 +99,29 @@ ec2:CreateTags	ap-northeast-2	*
 # 누락(POK-479).
 ec2:DescribeSecurityGroupRules	ap-northeast-2	*
 
+# clip 치우개 종료 경보(POK-588 — prod/platform reaper_alarms.tf). 알림
+# 주제 · 주제 정책 · 지표 필터 · 경보, 모두 서울. 동작 · 근거는 O7f 묶음의
+# /dvr 하한 경보 덩어리와 같다(provider 소스 · API 원문 대조 2026-11-11 —
+# 생성 요청에 default_tags 태그가 실려 생성 때 TagResource 도 인가). 주제의
+# 정책 읽기(sns:GetTopicAttributes 서울)는 아래 2-3 읽기 덩어리의 행이 맡는다
+# — 같은 (동작, 리전)은 한 행. 판정 K 같은 알림 경로 시험 걸음이 없어
+# TestMetricFilter · SetAlarmState 는 넣지 않는다.
+sns:CreateTopic	ap-northeast-2	*
+sns:SetTopicAttributes	ap-northeast-2	*
+sns:DeleteTopic	ap-northeast-2	*
+sns:TagResource	ap-northeast-2	*
+sns:UntagResource	ap-northeast-2	*
+sns:ListTagsForResource	ap-northeast-2	*
+logs:PutMetricFilter	ap-northeast-2	*
+logs:DescribeMetricFilters	ap-northeast-2	*
+logs:DeleteMetricFilter	ap-northeast-2	*
+cloudwatch:PutMetricAlarm	ap-northeast-2	*
+cloudwatch:DescribeAlarms	ap-northeast-2	*
+cloudwatch:DeleteAlarms	ap-northeast-2	*
+cloudwatch:TagResource	ap-northeast-2	*
+cloudwatch:UntagResource	ap-northeast-2	*
+cloudwatch:ListTagsForResource	ap-northeast-2	*
+
 # 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
 s3:ListBucket	ap-northeast-2	*
 s3:GetObject	ap-northeast-2	*
@@ -119,6 +142,8 @@ s3:GetBucketPolicy	ap-northeast-2	*
 secretsmanager:GetResourcePolicy	ap-northeast-2	*
 ecr:GetRepositoryPolicy	ap-northeast-2	*
 sns:GetTopicAttributes	ap-northeast-2	*
+# 경보 주제(us-east-1 — POK-525 prod/edge)의 정책 읽기(2-3 래퍼).
+sns:GetTopicAttributes	us-east-1	*
 sqs:GetQueueAttributes	ap-northeast-2	*
 ec2:DescribeInstances	ap-northeast-2	*
 ec2:DescribeInstances	us-east-1	*

@@ -16,7 +16,13 @@ package index
 //	  setTxnLimitsSQL              Insert · EndLive 첫 문장             (표 없음 — set_config)
 //	  lockCutoffStreamSQL          Insert 주조 적격 갈래                 (표 없음 — advisory 잠금)
 //	  openedSessionSQL             Insert 개시 갈래                      sessions SELECT
-//	  basePDTSQL                   Insert 귀속 갈래(기저 세션 있음)      segments SELECT
+//	  basePDTSQL                   Insert 귀속 갈래(기저 세션 있음)      segments SELECT(기저 행 + 비귀속 길이 U)
+//	placement.go · timing_decide.go · timing_gate.go(POK-196 PDT c4a)
+//	  lastRowSQL                   Insert 전 갈래(위치 q)                segments SELECT
+//	  anchorSQL                    Insert 귀속 갈래 · q 에 PDT 없음       segments SELECT
+//	  lastAttributedSQL            Insert 비귀속 갈래(판 정하기 3항)      segments · sessions SELECT
+//	  lockTimingGateSharedSQL      Insert 새 회차 · 회차 없는 비귀속      (표 없음 — advisory 공유 잠금)
+//	  timingGateSQL                같은 자리 · ReadTimingGate             gate SELECT
 //	  insertSeedSQL                Insert                               segments INSERT · cutoffs INSERT(ON CONFLICT DO NOTHING)
 //	  cutoffExistsSQL              Insert 적격인데 미주조(진단)          cutoffs SELECT
 //	  updateTailSQL                UpdateTail                           segments UPDATE(+ SELECT)
@@ -29,13 +35,20 @@ package index
 //	  markInitUploadedSQL                     MarkInitUploaded                     sessions SELECT FOR UPDATE · UPDATE
 //	  pending{Archive,Playback,Init}UploadsSQL PendingUploads 축 셋                segments · sessions · cutoffs SELECT
 //	  count{Archive,Playback,Init}BacklogSQL   CountBacklog 축 셋                  segments · sessions · cutoffs SELECT
+//	  playbackHolesSQL · playbackChainRowsSQL  LoadPlaybackHoles · LoadPlaybackChainRows(③ 사슬 복원 — c10a)  segments · sessions · cutoffs SELECT
 //	rewind_read.go
 //	  rewindCutoffSQL · rewindFloorSQL · rewindRowsSQL · rewindSessionsSQL  LoadRewindLedger(읽기 전용 RR)  cutoffs · segments · gaps · sessions SELECT
 //	  rewindWatchSQL                          LoadRewindWatch                      sessions · cutoffs · segments · gaps SELECT
 //	round_playback.go(M6-3a — 역할 시험은 round_playback_role_pg_test.go TestRoundPlaybackReadsRunUnderMediaIndexerRole)
-//	  lookupRoundPlaybackSQL                  LookupRoundPlayback                  sessions · segments SELECT
-//	  loadStreamPlaybackSQL                   LoadStreamPlayback                   sessions · segments SELECT
-//	  loadPlaybackStatesSQL                   LoadPlaybackStates                   sessions · segments SELECT
+//	  lookupRoundPlaybackSQL                  LookupRoundPlayback                  sessions · segments · edge_bounds SELECT
+//	  loadStreamPlaybackSQL                   LoadStreamPlayback                   sessions · segments · edge_bounds SELECT
+//	  loadPlaybackStatesSQL                   LoadPlaybackStates                   sessions · segments · edge_bounds SELECT
+//	edge_bounds.go(POK-525 — 역할 시험은 edge_bounds_pg_test.go TestEdgeBoundsLedgerRunsUnderMediaIndexerRole)
+//	  raiseTxnLimitsSQL                       Raise 문장마다 첫 문장                (표 없음 — set_config)
+//	  raiseSQL                                Raise                                edge_bounds INSERT · UPDATE(ON CONFLICT) · SELECT · sessions SELECT · FOR SHARE(UPDATE 권한)
+//	  closedUnreleasedSQL                     ClosedUnreleased                     edge_bounds · sessions SELECT
+//	  markReleasedSQL                         MarkReleased                         edge_bounds SELECT FOR UPDATE · UPDATE
+//	  deleteReleasedSQL                       DeleteReleased                       edge_bounds DELETE(+ SELECT)
 //
 //	expiry_store.go(M6-4 — 역할 시험은 expiry_store_pg_test.go TestExpiryStatementsRunUnderMediaIndexerRole)
 //	  markExpiredSQL                          MarkExpired                          sessions UPDATE(+ segments SELECT)
@@ -57,7 +70,10 @@ package index
 // 문장(fence · P0 · P2′ · P4 · R3 · R4 · GAP)은 rewind/publish 역할 시험이 잰다. 여기 Insert 는 실물 결정자를
 // 끼우므로 그 문장들도 이 역할로 함께 돈다.
 //
-// FOR UPDATE 주의: 사이드카의 FOR UPDATE 는 stream_sessions(markInitUploadedSQL)에 있고 UPDATE 권한이 필요하다.
+// FOR UPDATE 주의: 사이드카의 FOR UPDATE 는 stream_sessions(markInitUploadedSQL) ·
+// stream_edge_bounds(markReleasedSQL)에 있고 UPDATE 권한이 필요하다. raiseSQL 의 stream_sessions FOR SHARE 도 UPDATE
+// 권한이 있어야 돈다 — 열 하나라도 UPDATE 가 있으면 FOR SHARE · FOR NO KEY UPDATE 가 통과하고(PG 17 실측), 모든 열에서
+// UPDATE 를 거두면 Raise 가 42501 이다.
 // stream_segments 의 FOR UPDATE NOWAIT 은 janitor(local_cleanup.go) 몫이다.
 
 import (
@@ -126,7 +142,7 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 	if err != nil || !split.SessionOpened || split.EndingSessionID != first.SessionID {
 		t.Fatalf("TD 분할 Insert = (%+v, %v), want 새 회차 · 옛 회차 %s ending", split, err, first.SessionID)
 	}
-	if ok, err := store.UpdateTail(ctx, stream, 2, 7100, 2000); err != nil || !ok {
+	if ok, err := store.UpdateTail(ctx, stream, 2, 7100, 2000, nil); err != nil || !ok {
 		t.Fatalf("UpdateTail = (%v, %v), want (true, nil)", ok, err)
 	}
 	cur, err := store.LoadCursor(ctx, stream)
@@ -146,8 +162,14 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 		sessions[1].State != "ending" || *sessions[1].EndReason != "offline" {
 		t.Errorf("회차 = %+v, want [ending(td_exceeded) ending(offline)]", sessions)
 	}
+	// 현 live 가 없는 비귀속 조각 — 판 정하기 3항(마지막 귀속 행의 회차가 열려 있음 → 그 판 · 그 회차).
+	_, unattributed, err := store.Insert(ctx, segAt(stream, 3, base.Add(15*time.Second), 100), Seed{}, currentOnly())
+	if err != nil || unattributed.SessionID != "" || unattributed.TimingRoundID != first.SessionID {
+		t.Fatalf("비귀속 Insert = (%+v, %v), want 비귀속 · 회차 %s", unattributed, err, first.SessionID)
+	}
 	// 현 live 가 없는 조각 — 직전 회차 조회(session 패키지)가 그 회차 끝 조각의 끝 시각(길이 × interval)을 계산한다.
-	_, reopened, err := store.Insert(ctx, segAt(stream, 3, base.Add(15100*time.Millisecond), 4000), Seed{}, liveIngress())
+	// 바로 앞 행이 비귀속(PDT NULL)이라 위치 앵커를 한 줄 더 읽는다.
+	_, reopened, err := store.Insert(ctx, segAt(stream, 4, base.Add(15100*time.Millisecond), 4000), Seed{}, liveIngress())
 	if err != nil || !reopened.SessionOpened {
 		t.Fatalf("종료 뒤 Insert = (%+v, %v), want 새 회차 개시", reopened, err)
 	}
@@ -155,9 +177,53 @@ func TestMediaIndexerRoleRecordsSegments(t *testing.T) {
 		"loadCursorSQL": loadCursorSQL, "existingPathsSQL": existingPathsSQL, "setTxnLimitsSQL": setTxnLimitsSQL,
 		"lockCutoffStreamSQL": lockCutoffStreamSQL, "openedSessionSQL": openedSessionSQL, "basePDTSQL": basePDTSQL,
 		"insertSeedSQL": insertSeedSQL, "cutoffExistsSQL": cutoffExistsSQL, "updateTailSQL": updateTailSQL,
-		"endLiveSQL": endLiveSQL,
+		"endLiveSQL": endLiveSQL, "lastRowSQL": lastRowSQL, "anchorSQL": anchorSQL, "lastAttributedSQL": lastAttributedSQL,
+		"lockTimingGateSharedSQL": lockTimingGateSharedSQL, "timingGateSQL": timingGateSQL,
 	})
 	traps.RequireNotCalled(t)
+}
+
+// 판을 고르는 두 자리(새 회차 개시 · 회차 없는 비귀속 행)와 기동 검사 읽기(ReadTimingGate)가 media_indexer 권한으로
+// 돈다(POK-196 PDT c4a · 설계 9.3 권한). 음성 대조: 게이트 SELECT 를 거두면 새 회차 개시와 기동 검사 읽기가 42501 이다
+// (쓰기자 거부 트리거도 부른 쪽 권한으로 게이트를 읽으므로 w 없는 INSERT 는 어느 갈래든 42501 이다 — c1 몫).
+func TestMediaIndexerRoleReadsTimingGate(t *testing.T) {
+	admin := newTestPool(t)
+	ctx := context.Background()
+	stream, base := "role-gate-read", roleBase()
+
+	t.Run("권한 있음", func(t *testing.T) {
+		role := pgtest.NewMediaIndexerRole(t, admin)
+		t.Cleanup(func() { role.RequireNoneDenied(t) })
+		store := newSessionStore(role.Pool)
+		if _, res, err := store.Insert(ctx, segAt(stream, 0, base, 4000), Seed{}, currentOnly()); err != nil || res.TimingGateRead == nil {
+			t.Fatalf("회차 없는 비귀속 Insert = (%+v, %v), want 게이트를 읽음", res, err)
+		}
+		if _, res, err := store.Insert(ctx, segAt(stream, 1, base.Add(4*time.Second), 4000), Seed{}, liveIngress()); err != nil ||
+			!res.SessionOpened || res.TimingGateRead == nil {
+			t.Fatalf("새 회차 Insert = (%+v, %v), want 개시 · 게이트를 읽음", res, err)
+		}
+		if _, err := ReadTimingGate(ctx, role.Pool); err != nil {
+			t.Fatalf("ReadTimingGate 오류 = %v, want nil", err)
+		}
+		role.RequireSent(t, map[string]string{
+			"lockTimingGateSharedSQL": lockTimingGateSharedSQL, "timingGateSQL": timingGateSQL, "lastAttributedSQL": lastAttributedSQL,
+		})
+	})
+
+	t.Run("게이트 SELECT 회수", func(t *testing.T) {
+		role := pgtest.NewMediaIndexerRole(t, admin)
+		role.Revoke(t, "SELECT", "stream_timing_gate")
+		store := newSessionStore(role.Pool)
+		if _, err := EndLive(ctx, role.Pool, stream, testClose, noopEnqueue); err != nil {
+			t.Fatalf("EndLive 오류 = %v", err)
+		}
+		if _, _, err := store.Insert(ctx, segAt(stream, 2, base.Add(10*time.Minute), 4000), Seed{}, liveIngress()); !pgtest.IsInsufficientPrivilege(err) {
+			t.Errorf("새 회차 Insert 오류 = %v, want 42501", err)
+		}
+		if _, err := ReadTimingGate(ctx, role.Pool); !pgtest.IsInsufficientPrivilege(err) {
+			t.Errorf("ReadTimingGate 오류 = %v, want 42501", err)
+		}
+	})
 }
 
 // 업로드 장부 경로 — 축 셋의 대상 조회 · 잔량 집계와 CAS 여섯 갈래가 media_indexer 권한만으로 돌고 상태가
@@ -217,6 +283,13 @@ func TestMediaIndexerRoleRunsUploadLedger(t *testing.T) {
 	if s := sessionsOf(t, admin, stream); len(s) != 1 || s[0].State != "ending" || *s[0].EndReason != ReasonInitMismatch {
 		t.Errorf("회차 = %+v, want ending(init_mismatch) — init 불일치 결속 CTE", s)
 	}
+	// ③ 사슬 복원의 장부 조회 둘(POK-196 PDT c10a) — seq 0 이 ③ uploaded 라 seq 1 · 2 가 닻 0 의 구멍이다(회차는 ending).
+	if holes, err := LoadPlaybackHoles(ctx, role.Pool, session); err != nil || len(holes) != 2 {
+		t.Errorf("LoadPlaybackHoles = (%d행, %v), want (2행, nil)", len(holes), err)
+	}
+	if rows, err := LoadPlaybackChainRows(ctx, role.Pool, stream, 0, 2); err != nil || len(rows) != 3 {
+		t.Errorf("LoadPlaybackChainRows = (%d행, %v), want (3행, nil)", len(rows), err)
+	}
 	role.RequireSent(t, map[string]string{
 		"markUploadedSQL": markUploadedSQL, "markFailedSQL": markFailedSQL,
 		"markPlaybackUploadedSQL": markPlaybackUploadedSQL, "markPlaybackFailedSQL": markPlaybackFailedSQL,
@@ -224,6 +297,7 @@ func TestMediaIndexerRoleRunsUploadLedger(t *testing.T) {
 		"pendingArchiveUploadsSQL": pendingArchiveUploadsSQL, "pendingPlaybackUploadsSQL": pendingPlaybackUploadsSQL,
 		"pendingInitUploadsSQL": pendingInitUploadsSQL, "countArchiveBacklogSQL": countArchiveBacklogSQL,
 		"countPlaybackBacklogSQL": countPlaybackBacklogSQL, "countInitBacklogSQL": countInitBacklogSQL,
+		"playbackHolesSQL": playbackHolesSQL, "playbackChainRowsSQL": playbackChainRowsSQL,
 	})
 	traps.RequireNotCalled(t)
 }
@@ -326,7 +400,8 @@ func TestMediaIndexerRoleWithoutEachGrantIsDenied(t *testing.T) {
 }
 
 // 음성 대조 — 목록 밖 권한(TRUNCATE · DDL · 하한 표 쓰기)은 처음부터 42501 이다. 사이드카의 DELETE 는 M6 만료 ·
-// outbox 몫으로만 열렸고(ADR-0006 개정 2026-10-26), 표를 통째로 비우거나 스키마를 만들거나(ENSURE_SCHEMA=false)
+// outbox 몫(ADR-0006 개정 2026-10-26)과 /dvr 하한 원장의 해제 유예 지난 행 몫(POK-525 — edge_bounds.go
+// deleteReleasedSQL)으로만 열렸고, 표를 통째로 비우거나 스키마를 만들거나(ENSURE_SCHEMA=false)
 // seq 하한을 내리지는 못한다 — EnsureSchema 를 이 역할로 부르면 막힌다.
 // CREATE TABLE · EnsureSchema 의 42501 은 PG15+ 기본값 전제다 — PG15 부터 public 스키마 CREATE 가 PUBLIC 에서
 // 빠졌다. PG14 이하이거나 그 권한을 되돌린 DB 에서는 이 역할도 표를 만들 수 있다(README 운영 DB 사전 확인).

@@ -17,6 +17,7 @@ locals {
   all_methods      = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
   key_group_ids    = [aws_cloudfront_key_group.this.id]
   live_auth_events = { "viewer-request" = aws_cloudfront_function.live_auth.arn }
+  dvr_floor_events = var.dvr_floor_enabled ? { "viewer-request" = aws_cloudfront_function.dvr_floor.arn } : {}
 
   # 우선순위 순서(앞이 먼저). /live/*.m3u8 은 /live/* 보다 앞이어야 한다 — 한
   # 캐시 정책의 최대 TTL 은 원본 Cache-Control 에도 상한이라 두 TTL 을 한
@@ -59,7 +60,7 @@ locals {
       origin_id                  = local.rewind_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
-      functions                  = {}
+      functions                  = local.dvr_floor_events
       cache_policy_id            = aws_cloudfront_cache_policy.dvr_vod.id
       origin_request_policy_id   = null
       response_headers_policy_id = aws_cloudfront_response_headers_policy.media_cors.id

@@ -18,7 +18,7 @@ import clsx from 'clsx';
 import styles from './GlassPlayer.module.css';
 import { PlayerControlHint } from './PlayerControlHint';
 import { PLAYER_KEY_LABELS } from './playerKeys';
-import { LIVE_EDGE_WORDS, formatBehind, volumeLevel } from './playerMath';
+import { LIVE_EDGE_WORDS, edgeWords, formatBehind, volumeLevel } from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import { ReplayTimeButton } from './ReplayTimeButton';
 import type { PlayerSimulation } from './usePlayerSimulation';
@@ -53,7 +53,6 @@ function keepFocus(event: MouseEvent<HTMLDivElement>) {
 // 하단 버튼줄 — 재생·볼륨·LIVE 복귀(계약3 4절, 지난 방송은 시간 표기) / 클립·(채팅)·미니·설정·전체 화면.
 export function PlayerControls({
   sim,
-  liveHidden = false,
   chatToggle,
   fullscreen = false,
   fullscreenButtonRef,
@@ -66,11 +65,6 @@ export function PlayerControls({
   onSettingsOpenChange,
 }: {
   sim: PlayerSimulation;
-  /**
-   * LIVE 복귀 버튼을 숨긴다(재생 세션의 끝난 방송 다시보기). 시간 표기도 세우지 않는다: 세션 축은 1시간에서 잘려 1시간 넘는
-   * 방송의 총 시간이 틀린다(playbackEdge)
-   */
-  liveHidden?: boolean;
   /**
    * 플레이어 안 채팅 오버레이 토글 — 없으면 버튼을 그리지 않는다.
    * GlassPlayer는 전체 화면일 때만 넘긴다: 기본 상태에선 옆 채팅 패널이 채팅을 맡아 중복이고,
@@ -150,7 +144,7 @@ export function PlayerControls({
           />
         </div>
         {/* 명시적 LIVE 복귀 버튼 — 계약3 4절: 시차는 -MM:SS, 상한 1:00:00. 지난 방송은 끝으로 갈 일이 없어 시간을 적는다(POK-518) */}
-        {liveHidden ? null : sim.replay ? (
+        {sim.replay ? (
           <ReplayTimeButton behindSeconds={sim.behindSeconds} windowSeconds={sim.windowSeconds} />
         ) : (
           <PlayerControlHint label={LIVE_EDGE_WORDS.goToLabel} keys={PLAYER_KEY_LABELS.live.hint}>
@@ -166,8 +160,9 @@ export function PlayerControls({
                 data-at-edge={sim.atEdge || undefined}
                 aria-hidden
               />
+              {/* 방송이 끝났다는 근거가 있으면(소스와 상관없이) 끝은 실시간이 아니라 녹화 끝이다. 단추가 하는 일(실시간으로)은 그대로다 */}
               {sim.atEdge
-                ? LIVE_EDGE_WORDS.atEdge
+                ? edgeWords(sim.recordingEnded === true).atEdge
                 : `${formatBehind(sim.behindSeconds)} · ${LIVE_EDGE_WORDS.goTo}`}
             </button>
           </PlayerControlHint>

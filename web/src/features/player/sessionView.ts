@@ -1,4 +1,10 @@
-import { RESUME_WAIT_MS, type PlaybackSessionState, type SessionButton } from './rewindSwitch';
+import {
+  RESUME_WAIT_MS,
+  loadStoppedNow,
+  type PlaybackSessionState,
+  type SessionButton,
+  type SessionPhase,
+} from './rewindSwitch';
 
 // 재생 세션이 화면에 그릴 것(설계 5.3절 종결 판, POK-200 M5) — 상태기계(rewindSwitch)의 상태에서 덮개 · 버튼 · 띠 · 숨김을 뽑는
 // 순수 함수다. 전이는 rewindSwitch 가 정하고, 여기는 그 상태를 읽기만 한다.
@@ -15,20 +21,58 @@ export interface SessionView {
   banner: { goTo: string } | null;
   /** 받을 목록이 없어 시크바를 숨긴다(live 기원 덮개) */
   seekHidden: boolean;
-  /** LIVE 버튼을 숨긴다(끝난 방송의 VOD) */
-  liveHidden: boolean;
   /** LIVE 를 눌러 지금 방송을 확인하는 중 */
   liveChecking: boolean;
-  /** 「녹화 보기」를 기본 강조로 둔다(명부 ended) */
-  recordEmphasis: boolean;
   /** 「다시보기 준비됨」 — 아직 보는 시청자에게 띠로 */
   vodReady: boolean;
+  /**
+   * 새로 서는 재생기는 받지도 틀지도 않는다(isPlayerStartHeld · POK-528 U2). 재생기 수명
+   * 지시이지 그릴 것이 아니다 — 재생기가 기동할 때 한 번 읽는다
+   */
+  startHeld: boolean;
 }
 
+type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
+
+/**
+ * 새로 서는 재생기(세대가 올라 다시 서는 것 · 리마운트 포함)를 세우지 않는가 — 막힌 끝남
+ * 대기 · 마지막 확인 중인 끝남 대기(POK-528 U2), 그리고 재생이 멎은 다시보기 제안(POK-547 —
+ * 멈춘 화면 위 덮개 단추가 출구다)과 지금 재생기가 받기를 멈춘 다시보기 제안(새 재생기가 낡은
+ * 목록을 다시 받지 않게). 되감기는 404 뒤 목록을 다시 받는 중에도 세운다(다시 받기가
+ * 곧 새 재생기다 — 계획 3-6). 화면에 그릴 것이 아니라 재생기 수명 지시다. 국면 데이터에서
+ * 뽑으므로 세대가 오를 때마다 같은 값을 다시 읽는다
+ */
+export function isPlayerStartHeld(session: PlaybackSessionState): boolean {
+  const { phase } = session;
+  if (phase.kind === 'vod-offered') return phase.stopped !== null || loadStoppedNow(session);
+  return phase.kind === 'ending-wait' && (phase.blocked === true || phase.finalCheck === true);
+}
+
+/**
+ * 받기를 멈춘 되감기 재생기가 고갈을 볼 때인가(POK-547) — 되감기 재생기로 아직 트는 다시보기
+ * 제안이다. 칸이 아니라 함수라 재생기는 다시 그리기를 기다리지 않고 지금 상태로 읽는다
+ */
+export function watchesDrain(session: PlaybackSessionState): boolean {
+  const { phase } = session;
+  return phase.kind === 'vod-offered' && phase.stopped === null && session.source.kind === 'rewind';
+}
+
+/**
+ * 끝남 대기의 덮개 — 막혔거나 마지막 확인 중이면 끝까지 볼 수 없음이 정해졌으니 재접속 대기
+ * 안이어도 「다시보기 준비 중」(POK-528 (나)-5 · W6), 끝에 닿았으면 재접속 대기 동안 「확인 중」 ·
+ * 그 뒤 「준비 중」
+ */
+function endingCover(phase: EndingPhase, waiting: boolean): SessionView['cover'] {
+  if (phase.blocked || phase.finalCheck) return 'preparing';
+  if (!phase.atEnd) return null;
+  return waiting ? 'checking' : 'preparing';
+}
+
+/** 끝남 대기의 단추 — 버튼 규칙이 제안한 것뿐이다. 제안이 없으면 없다(녹화 출구 없음 · POK-547) */
 function offerActions(session: PlaybackSessionState): SessionButton[] {
-  if (session.offer?.kind === 'go-live') return ['record', 'go-live'];
-  if (session.offer?.kind === 'new-broadcast') return ['record', 'new-broadcast'];
-  return ['record'];
+  if (session.offer?.kind === 'go-live') return ['go-live'];
+  if (session.offer?.kind === 'new-broadcast') return ['new-broadcast'];
+  return [];
 }
 
 export function sessionView(session: PlaybackSessionState, now: number): SessionView {
@@ -37,31 +81,30 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
     actions: [],
     banner: session.foreignLive === null ? null : { goTo: session.foreignLive },
     seekHidden: false,
-    liveHidden: false,
     liveChecking: session.liveChecking,
-    recordEmphasis: false,
     vodReady: false,
+    startHeld: isPlayerStartHeld(session),
   };
   const phase = session.phase;
   if (phase.kind === 'ending-wait') {
     const waiting = session.endingSince !== null && now - session.endingSince < RESUME_WAIT_MS;
     return {
       ...base,
-      cover: phase.atEnd ? (waiting ? 'checking' : 'preparing') : null,
+      cover: endingCover(phase, waiting),
       actions: offerActions(session),
       seekHidden: phase.atEnd && phase.origin === 'live',
-      recordEmphasis: session.rosterEnded,
     };
   }
   if (phase.kind === 'vod-offered') {
+    // 끝에 닿았거나 재생이 멎었으면 덮개 단추, 아직 틀면 띠 단추다
+    const covered = phase.atEnd || phase.stopped !== null;
     return {
       ...base,
-      cover: phase.atEnd ? 'vod-ready' : null,
-      actions: ['record', 'vod'],
+      cover: covered ? 'vod-ready' : null,
+      actions: ['vod'],
       seekHidden: phase.atEnd && session.source.kind === 'live',
-      vodReady: !phase.atEnd,
+      vodReady: !covered,
     };
   }
-  if (phase.kind === 'vod') return { ...base, liveHidden: true };
   return base;
 }

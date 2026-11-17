@@ -227,7 +227,7 @@
     opacity 0.22s ease;
 }
 
-/* 접히면 숫자를 접고 점만 남긴다(.bellDot과 같은 신호). 통째로 지우면 낭독에는 「승인
+/* 접히면 숫자를 접고 점만 남긴다(종의 안 읽음 신호처럼 point색). 통째로 지우면 낭독에는 「승인
    대기함 3」이 남는데 화면에는 아무 흔적이 없어, 보는 쪽만 정보를 잃는다.
    font-size 0이 숫자를 접고 접근 트리에는 그대로 남긴다 — 자세한 수는 낭독이 맡는다. */
 .sidebar[data-collapsed='true'] .item {
@@ -404,15 +404,4 @@
 
 .sidebar[data-collapsed='true'] .bellWrap {
   margin-left: 0;
-}
-
-.bellDot {
-  position: absolute;
-  top: calc(5 * var(--u));
-  right: calc(5 * var(--u));
-  width: calc(8 * var(--u));
-  height: calc(8 * var(--u));
-  border-radius: var(--pc-radius-circle);
-  background: var(--pc-color-point);
-  border: 2px solid var(--pc-color-bg-surface);
 }

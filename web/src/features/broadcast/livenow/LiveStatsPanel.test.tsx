@@ -42,11 +42,15 @@ function stats(over: Partial<LiveStatsMockState> = {}): LiveStatsMockState {
   };
 }
 
+/** 서버 기준점이 방송 시작보다 181시간 앞선 방송(POK-562). 핀이 옮기는 자리(초)는 그 축이라 핀의 시각 표기와 다르다 */
+const AHEAD_S = 181 * 3600;
+
 const CARDS: TimelineCard[] = [
   {
     id: 'card-12',
     atMs: T0 + 20 * 60_000,
     timestamp: '0:20:00',
+    seekSeconds: AHEAD_S + 20 * 60,
     label: '#12',
     manual: false,
     reason: '채팅 ×3.2 급증 (120건)',
@@ -55,6 +59,7 @@ const CARDS: TimelineCard[] = [
     id: 'card-15',
     atMs: T0 + 70 * 60_000,
     timestamp: '1:10:00',
+    seekSeconds: AHEAD_S + 70 * 60,
     label: '수동',
     manual: true,
     reason: '수동 마킹',
@@ -150,11 +155,35 @@ describe('LiveStatsPanel: 그래프', () => {
   it('하이라이트 핀을 누르면 그 카드 시점으로 간다 — 자동은 카드 번호, 수동은 「수동」', () => {
     const { onSeekCard } = panel();
     fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #12 — 채팅 ×3\.2 급증/ }));
-    expect(onSeekCard).toHaveBeenCalledWith('0:20:00');
+    // 시각 표기를 되읽지 않고 카드가 실어 준 옮길 자리(서버 기준점 축)로 간다(POK-562)
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60, undefined);
     const manual = screen.getByRole('button', { name: /^하이라이트 수동 — 수동 마킹/ });
     expect(manual).toHaveTextContent('수동');
     fireEvent.click(manual);
-    expect(onSeekCard).toHaveBeenLastCalledWith('1:10:00');
+    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 70 * 60, undefined);
+  });
+
+  it('카드 시각을 모르면(null) 핀 이름에 시각을 싣지 않는다 — 누르면 그래도 옮긴다(POK-562)', () => {
+    const { onSeekCard } = panel({ cards: [{ ...CARDS[0]!, timestamp: null }] });
+    const pin = screen.getByRole('button', {
+      name: '하이라이트 #12 — 채팅 ×3.2 급증 (120건) 시점으로 이동',
+    });
+    fireEvent.click(pin);
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 20 * 60, undefined);
+  });
+
+  it('핀을 누르면 카드의 플레이어용 PDT 도 옮길 자리와 함께 넘긴다(POK-196)', () => {
+    const { onSeekCard } = panel({
+      cards: [
+        { ...CARDS[0]!, playerAtMs: 1_794_426_524_000 },
+        { ...CARDS[1]!, playerAtMs: null },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 #12 — / }));
+    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 20 * 60, 1_794_426_524_000);
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 수동 — / }));
+    expect(onSeekCard).toHaveBeenLastCalledWith(AHEAD_S + 70 * 60, null);
   });
 
   it('막대 아래 후원 줄은 없다: 「후원」은 숫자 줄 한 칸뿐이다', () => {
@@ -377,6 +406,42 @@ describe('LiveStatsPanel: 그래프', () => {
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
     expect(container.querySelector('circle[data-single]')).not.toBeNull();
   });
+
+  /** 시청자 선 path의 마지막 점 x와 그래프 폭 */
+  const lineEnd = (container: HTMLElement) => {
+    const d = container.querySelector(`.${styles.viewerLine}`)!.getAttribute('d')!;
+    const last = d
+      .split(/[MLC ]/)
+      .filter(Boolean)
+      .at(-1)!;
+    const width = Number(container.querySelector(`svg.${styles.svg}`)!.getAttribute('width'));
+    return { x: Number(last.split(',')[0]), width };
+  };
+
+  it('라이브 시청자 선은 마지막 관측에서 「지금」까지 이어진다: 0명이어도 끊기지 않는다', () => {
+    const c = chart(268);
+    // 1분마다 잰 0명. 마지막 관측은 「지금」 40초 전이다
+    const viewers = Array.from({ length: 134 }, (_, k) => ({
+      t: c.t0 + k * 60_000 + 20_000,
+      v: 0,
+    }));
+    const { container } = panel({ stats: stats({ viewers, lastViewers: 0 }) });
+    const { x, width } = lineEnd(container);
+    expect(x).toBeCloseTo(width, 0);
+    // 맥박 점도 끝에 선다
+    expect(Number(container.querySelector(`.${styles.livePulse}`)!.getAttribute('cx'))).toBeCloseTo(
+      width,
+      0,
+    );
+  });
+
+  it('마지막 관측이 3분보다 오래됐으면 「지금」까지 잇지 않는다: 그 뒤는 모른다', () => {
+    const c = chart(268);
+    const viewers = Array.from({ length: 120 }, (_, k) => ({ t: c.t0 + k * 60_000, v: 10 }));
+    const { container } = panel({ stats: stats({ viewers, lastViewers: 10 }) });
+    const { x, width } = lineEnd(container);
+    expect(x).toBeLessThan(width - 10);
+  });
 });
 
 describe('LiveStatsPanel: 열쇠', () => {
@@ -412,9 +477,9 @@ describe('LiveStatsPanel: 열쇠', () => {
     const { rerender, props } = panel({ cards: near(0) });
     rerender(<LiveStatsPanel {...props} cards={near(10_000)} />);
     rerender(<LiveStatsPanel {...props} cards={near(20_000)} />);
-    // 붙은 둘은 묶음 하나(개수 2)로, 떨어진 하나는 따로
+    // 붙은 둘은 묶음 하나(「2장」)로, 떨어진 하나는 따로
     expect(screen.getAllByRole('button', { name: /^하이라이트 / })).toHaveLength(2);
-    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2장$/);
   });
 });
 
@@ -423,14 +488,41 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
   /** #12와 #13이 붙어 있고 수동은 멀리 떨어진 카드 셋 */
   const near: TimelineCard[] = [
     twelve,
-    { ...twelve, id: 'card-13', label: '#13', atMs: twelve.atMs + 60_000, timestamp: '0:21:00' },
+    {
+      ...twelve,
+      id: 'card-13',
+      label: '#13',
+      atMs: twelve.atMs + 60_000,
+      timestamp: '0:21:00',
+      seekSeconds: AHEAD_S + 21 * 60,
+    },
     CARDS[1]!,
   ];
+
+  it('묶음은 묶인 카드들 가운데에 서고, 카드 자리마다 점을 찍는다: 첫 카드 자리에만 서면 카드가 빠져 보였다', () => {
+    const { container } = panel({ cards: near });
+    const marks = [...container.querySelectorAll<HTMLElement>(`.${styles.pinMark}`)];
+    expect(marks).toHaveLength(2);
+    const [a, b] = marks.map((m) => parseFloat(m.style.left));
+    const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
+    expect(a).toBeLessThan(b!);
+    expect(parseFloat(group.style.left)).toBeCloseTo((a! + b!) / 2, 5);
+  });
+
+  it('점은 모든 핀 뒤에 그린다: 같은 층(z-index 1)이라 순서가 알약 테두리 위 · 가장자리 그림자 아래를 정한다(PR #482 2차 리뷰)', () => {
+    const { container } = panel({ cards: near });
+    const pinButtons = screen.getAllByRole('button', { name: /^하이라이트 / });
+    const lastPin = pinButtons.at(-1)!;
+    const marks = [...container.querySelectorAll<HTMLElement>(`.${styles.pinMark}`)];
+    expect(marks.length).toBeGreaterThan(0);
+    for (const mark of marks)
+      expect(lastPin.compareDocumentPosition(mark) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 
   it('겹치는 핀은 개수 하나로 묶고, 떨어진 핀은 하나짜리 그대로다', () => {
     panel({ cards: near });
     const group = screen.getByRole('button', { name: /^하이라이트 2개 묶음/ });
-    expect(group).toHaveTextContent(/^2$/);
+    expect(group).toHaveTextContent(/^2장$/);
     expect(group).toHaveAttribute('aria-expanded', 'false');
     // 묶인 카드는 따로 핀이 없다
     expect(screen.queryByRole('button', { name: /^하이라이트 #12/ })).toBeNull();
@@ -468,9 +560,22 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     const list = screen.getByRole('group', { name: '묶인 하이라이트 2개' });
     fireEvent.click(within(list).getByRole('button', { name: /^하이라이트 #13 — / }));
     expect(onSeekCard).toHaveBeenCalledTimes(1);
-    expect(onSeekCard).toHaveBeenCalledWith('0:21:00');
+    // 시각 표기가 아니라 옮길 자리(서버 기준점 축)로 간다(POK-562)
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 21 * 60, undefined);
     expect(screen.queryByRole('group', { name: '묶인 하이라이트 2개' })).toBeNull();
     expect(group).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('묶음 목록에서 골라도 그 카드의 플레이어용 PDT 를 넘긴다(POK-196)', () => {
+    const { onSeekCard } = panel({
+      cards: near.map((c) => (c.id === 'card-13' ? { ...c, playerAtMs: 1_794_426_587_200 } : c)),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ }));
+    const list = screen.getByRole('group', { name: '묶인 하이라이트 2개' });
+
+    fireEvent.click(within(list).getByRole('button', { name: /^하이라이트 #13 — / }));
+
+    expect(onSeekCard).toHaveBeenCalledWith(AHEAD_S + 21 * 60, 1_794_426_587_200);
   });
 
   it('Esc · 바깥 누르기 · 묶음 다시 누르기로 목록을 닫는다', () => {
@@ -535,7 +640,7 @@ describe('LiveStatsPanel: 겹치는 핀 묶음(POK-500)', () => {
     act(() =>
       resize([{ contentRect: { width: 1000 } } as ResizeObserverEntry], {} as ResizeObserver),
     );
-    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2$/);
+    expect(screen.getByRole('button', { name: /^하이라이트 2개 묶음/ })).toHaveTextContent(/^2장$/);
     act(() =>
       resize([{ contentRect: { width: 1092 } } as ResizeObserverEntry], {} as ResizeObserver),
     );

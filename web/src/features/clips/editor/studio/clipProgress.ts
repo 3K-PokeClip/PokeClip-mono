@@ -43,7 +43,8 @@ export type ClipStatusTone = 'progress' | 'success' | 'danger' | 'warning';
 
 /**
  * 작은 창에서 할 수 있는 일. 앞의 것이 주 버튼이다. 확인 필요는 푸는 곳이 보관함이라 「보관함에서 확인」이고(새 판을 저장했으면
- * 풀 곳이 없어 「보관함에서 보기」), 영상 만들기 실패는 영상 만들기 창을 다시 연다(같은 판이면 저장 없이 다시 요청한다)
+ * 풀 곳이 없어 「보관함에서 보기」), 영상 만들기 실패는 영상 만들기 창을 다시 연다(같은 판이면 저장 없이 다시 요청한다 —
+ * SOURCE_RANGE 실패는 범위를 고쳐야 해서 주지 않는다)
  */
 export type ClipStatusAction = 'youtube' | 'retryUpload' | 'remake' | 'library' | 'libraryCheck';
 
@@ -93,6 +94,18 @@ function uploadedDetail(
   }
   // 옛 서버는 공개 범위를 안 준다. 그때는 늘 비공개였다
   return `${PRIVACY_LABEL[privacy ?? 'private']}로 올라갔어요.`;
+}
+
+/** SOURCE_RANGE 실패의 까닭. 고칠 곳은 화면마다 달라(편집기 · 보관함) 뒷말은 부르는 쪽이 붙인다 */
+export const SOURCE_RANGE_REASON = '고른 범위에 녹화가 비거나 끊긴 곳이 있어 만들 수 없어요.';
+
+/**
+ * 영상 만들기 실패의 안내. SOURCE_RANGE(렌더 일꾼: 조각이 자를 구간을 다 덮지 못하거나 조각 사이가 끊겼다)는 다시
+ * 만들어도 같은 실패라 범위를 다시 정하라고 말한다(POK-196). 다른 코드는 코드를 보이고 다시 만들라고 한다
+ */
+function failedDetail(code: string | undefined): string {
+  if (code === 'SOURCE_RANGE') return `${SOURCE_RANGE_REASON} 범위를 다시 정해 주세요.`;
+  return `영상을 만들지 못했어요(${code ?? '?'}). 다시 만들어 주세요.`;
 }
 
 /**
@@ -171,13 +184,14 @@ export function clipStatusView(
         ...base,
         tone: 'danger',
         title: '영상 만들기 실패',
-        detail: `영상을 만들지 못했어요(${clip.error?.code ?? '?'}). 다시 만들어 주세요.`,
+        detail: failedDetail(clip.error?.code),
         steps: steps(
           ['done', requested],
           ['danger', failedAt(stepClock(clip.updatedAt, now))],
           ['todo', null],
         ),
-        actions: ['remake', 'library'],
+        // SOURCE_RANGE 는 같은 범위로 다시 만들면 같은 실패라 「다시 만들기」 를 주지 않는다 — 범위는 편집기에서 고친다
+        actions: clip.error?.code === 'SOURCE_RANGE' ? ['library'] : ['remake', 'library'],
       };
     case 'rendered': {
       const upload = clip.upload;

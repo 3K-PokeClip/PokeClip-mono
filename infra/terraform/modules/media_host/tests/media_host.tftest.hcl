@@ -75,6 +75,8 @@ variables {
   rds_sg_id          = "sg-0rds0000000000000"
   auth_sg_id         = "sg-0auth000000000000"
   auth_port          = 18086
+  clip_sg_id         = "sg-0clip000000000000"
+  clip_port          = 18087
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -87,6 +89,7 @@ variables {
   mediamtx_image                = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   nginx_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222"
   sidecar_image                 = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  timing_guard_image            = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:6666666666666666666666666666666666666666666666666666666666666666"
   loopback_sender_image         = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-loopback-sender@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   rds_endpoint                  = "pokeclip-prod-db.example.ap-northeast-2.rds.amazonaws.com"
   rds_db_name                   = "pokeclip"
@@ -99,6 +102,8 @@ variables {
   ecr_credential_helper_version = "0.12.0-3.amzn2023"
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
+  broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  edge_bounds_kvs_arn           = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 run "places_instance_in_media_private_subnet_without_public_ip" {
@@ -154,7 +159,8 @@ run "sets_root_volume_throughput" {
   }
 }
 
-# 설계 3-3-1 · 계획 G22: 컨테이너가 인스턴스 역할 자격을 얻도록 hop limit 2.
+# cred_relay 끔(기본)인 키는 지금과 같다 — 컨테이너가 인스턴스 역할 자격을
+# 얻도록 hop limit 2(설계 3-3-1 · 계획 G22). IPv6 엔드포인트는 끔 고정(POK-574).
 run "requires_imdsv2_with_hop_limit_two" {
   command = plan
 
@@ -162,9 +168,45 @@ run "requires_imdsv2_with_hop_limit_two" {
     condition = (
       aws_instance.this["a"].metadata_options[0].http_endpoint == "enabled" &&
       aws_instance.this["a"].metadata_options[0].http_tokens == "required" &&
-      aws_instance.this["a"].metadata_options[0].http_put_response_hop_limit == 2
+      aws_instance.this["a"].metadata_options[0].http_put_response_hop_limit == 2 &&
+      aws_instance.this["a"].metadata_options[0].http_protocol_ipv6 == "disabled"
     )
-    error_message = "IMDS 가 v2 필수 · hop limit 2 가 아니다."
+    error_message = "IMDS 가 v2 필수 · hop limit 2 · IPv6 끔이 아니다."
+  }
+}
+
+# POK-574: 스위치는 키마다다. 켬 키(b)만 hop limit 1 이라 컨테이너가 IMDS 토큰을
+# 받지 못하고, 끔 키(a)는 2 그대로다(스위치가 A 에 걸리면 기록이 멈춘다 — P12).
+run "cred_relay_key_gets_hop_limit_one" {
+  command = plan
+
+  variables {
+    instances = {
+      a = { config_version = "1" }
+      b = { config_version = "2", cred_relay = true }
+    }
+  }
+
+  assert {
+    condition     = aws_instance.this["a"].metadata_options[0].http_put_response_hop_limit == 2
+    error_message = "a(끔)의 IMDS 홉이 2 가 아니다."
+  }
+
+  assert {
+    condition     = aws_instance.this["b"].metadata_options[0].http_put_response_hop_limit == 1
+    error_message = "b(켬)의 IMDS 홉이 1 이 아니다."
+  }
+
+  # 키를 for 식으로 돌리면 실패 진단이 표지 붙은 상자 전체를 찍다가
+  # terraform 1.16.4 가 멈춘다 — 키마다 주소를 그대로 쓴다.
+  assert {
+    condition = (
+      aws_instance.this["a"].metadata_options[0].http_tokens == "required" &&
+      aws_instance.this["a"].metadata_options[0].http_protocol_ipv6 == "disabled" &&
+      aws_instance.this["b"].metadata_options[0].http_tokens == "required" &&
+      aws_instance.this["b"].metadata_options[0].http_protocol_ipv6 == "disabled"
+    )
+    error_message = "a · b 가 IMDSv2 필수 · IPv6 끔이 아니다."
   }
 }
 
@@ -245,8 +287,9 @@ run "media_sg_egress_and_rds_pair" {
       https_any    = "tcp 443 443 - 0.0.0.0/0 -"
       postgres     = "tcp 5432 5432 - - sg-0rds0000000000000"
       auth_resolve = "tcp 18086 18086 - - sg-0auth000000000000"
+      clip_expiry  = "tcp 18087 18087 - - sg-0clip000000000000"
     }
-    error_message = "Media SG 이그레스가 443 → S3 prefix list · 443 → 0.0.0.0/0 · 5432 → rds_sg_id · auth_port → auth_sg_id 가 아니다."
+    error_message = "Media SG 이그레스가 443 → S3 prefix list · 443 → 0.0.0.0/0 · 5432 → rds_sg_id · auth_port → auth_sg_id · clip_port → clip_sg_id 가 아니다."
   }
 
   # kty 21차: RDS 인그레스 ← Media 5432 는 이그레스와 같은 루트의 한 쌍.
@@ -284,6 +327,34 @@ run "media_to_auth_resolve_pair" {
       ingress = { auth_sg_id = "sg-0auth000000000000", port = 18086 }
     }
     error_message = "출력 auth_resolve_rules 가 Media → auth 이그레스 · auth 인그레스 ← Media 의 SG · 포트와 다르다."
+  }
+}
+
+# POK-551 c4: Media → clip(60일 만료 창구) 이그레스와 clip 인그레스 ← Media 는
+# auth 짝과 같은 꼴이다. clip 주소와 상관없이 늘 만든다 — 만료를 켜고 끌 때 SG
+# 차분이 없게 한다(시험 기본값은 주소 빔).
+run "media_to_clip_expiry_pair" {
+  command = plan
+
+  assert {
+    condition = (
+      var.clip_internal_url == "" &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.security_group_id == "sg-0clip000000000000" &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.ip_protocol == "tcp" &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.from_port == 18087 &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.to_port == 18087 &&
+      aws_vpc_security_group_ingress_rule.clip_from_media.cidr_ipv4 == null
+    )
+    error_message = "clip SG 인그레스 ← Media 가 주소 빔에서도 clip_sg_id 의 TCP clip_port 로 있지 않다."
+  }
+
+  # 루트 시험이 platform 출력에서 넘긴 값을 보는 창 — 규칙 자원의 값이어야 한다.
+  assert {
+    condition = output.clip_expiry_rules == {
+      egress  = { clip_sg_id = "sg-0clip000000000000", port = 18087 }
+      ingress = { clip_sg_id = "sg-0clip000000000000", port = 18087 }
+    }
+    error_message = "출력 clip_expiry_rules 가 Media → clip 이그레스 · clip 인그레스 ← Media 의 SG · 포트와 다르다."
   }
 }
 
@@ -326,6 +397,11 @@ run "wires_sg_references_to_media_sg" {
   assert {
     condition     = aws_vpc_security_group_ingress_rule.auth_from_media.referenced_security_group_id == aws_security_group.media.id
     error_message = "auth 인그레스의 출처가 Media SG 가 아니다."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.clip_from_media.referenced_security_group_id == aws_security_group.media.id
+    error_message = "clip 인그레스의 출처가 Media SG 가 아니다."
   }
 
   assert {
@@ -406,9 +482,16 @@ run "instance_role_policy_statements" {
         "arn:aws:rds-db:ap-northeast-2:123456789012:dbuser:db-EXAMPLE0123456789ABCDEFGH/media_janitor",
       ])
       RewindObjects = toset(["arn:aws:s3:::pokeclip-prod-rewind-example/*"])
+      RewindDelete  = toset(["arn:aws:s3:::pokeclip-prod-rewind-example/*"])
       RewindBucket  = toset(["arn:aws:s3:::pokeclip-prod-rewind-example"])
+
+      # 계약9 발행(O8a 당김) — 런타임 1단 주제 하나.
+      BroadcastPublish = toset([var.broadcast_topic_arn])
+
+      # /dvr 하한 Writer(POK-525) — 런타임 1단 KVS 하나.
+      EdgeBoundsKvs = toset([var.edge_bounds_kvs_arn])
     }
-    error_message = "인스턴스 역할 정책의 statement · Resource 가 계획 M9 c1 과 다르다."
+    error_message = "인스턴스 역할 정책의 statement · Resource 가 계획 M9 c1 · O8a 당김 · POK-525 와 다르다."
   }
 
   assert {
@@ -421,8 +504,19 @@ run "instance_role_policy_statements" {
       EcrPull       = toset(["ecr:BatchCheckLayerAvailability", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"])
       DbConnect     = toset(["rds-db:connect"])
       RewindObjects = toset(["s3:GetObject", "s3:PutObject"])
+      RewindDelete  = toset(["s3:DeleteObject"])
       RewindBucket  = toset(["s3:ListBucket"])
       DenylistRead  = toset(["ssm:GetParameter"])
+
+      BroadcastPublish = toset(["sns:Publish"])
+
+      # 판 읽기 · If-Match 묶음 쓰기. GetKey 는 상자에서 부르는 곳이 없어
+      # 뺐고(POK-574), ListKeys · PutKey · DeleteKey 는 Writer 가 쓰지 않아
+      # 주지 않는다.
+      EdgeBoundsKvs = toset([
+        "cloudfront-keyvaluestore:DescribeKeyValueStore",
+        "cloudfront-keyvaluestore:UpdateKeys",
+      ])
     }
     error_message = "인스턴스 역할 정책의 동작이 다르다."
   }
@@ -431,7 +525,7 @@ run "instance_role_policy_statements" {
   assert {
     condition = alltrue([
       for statement in data.aws_iam_policy_document.media.statement :
-      contains(["EcrAuth", "RewindObjects"], statement.sid) ||
+      contains(["EcrAuth", "RewindObjects", "RewindDelete"], statement.sid) ||
       alltrue([for resource in statement.resources : !strcontains(resource, "*")])
     ])
     error_message = "GetAuthorizationToken · rewind 객체 밖의 문에 와일드카드 Resource 가 있다."

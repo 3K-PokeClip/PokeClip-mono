@@ -39,6 +39,10 @@ type Row struct {
 	PlaybackUploaded bool
 	// IsGap 은 (stream_id, seq) 가 발행된 GAP 원장(stream_published_gaps)에 있는가다(SQL 의 is_gap).
 	IsGap bool
+	// TimingVersion 은 timing_version(그 행의 PDT 규약 판 — 계약-세그먼트인덱스 6-6)이다. 0 이면 NULL(판 NULL ·
+	// 옛 규약)이다. 경계는 읽지 않고 목록 렌더의 판 태그(계약3 7-6)가 읽는다. 장부에 0 이 적힌 행은 없다(쓰는 판은
+	// 게이트 값 2 뿐) — 있어도 판 태그 값 0 과 같은 뜻(판 NULL)이라 영값과 겹쳐도 어긋나지 않는다.
+	TimingVersion int16
 }
 
 // Snapshot 은 한 스트림의 경계 계산 입력이다 — 장부·GAP 원장·컷오프를 읽기만 하는 창이다.

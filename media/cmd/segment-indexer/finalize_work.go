@@ -1,6 +1,6 @@
 package main
 
-// 정산 · 상태 전달 · 계승 해제 차선 작업의 몸체(POK-196 M6-3b 커밋 ③ — 설계 M6 3.2 「차선 계약」). 작업은 입력 값만 받아
+// 정산 · 상태 전달 차선 작업의 몸체(POK-196 M6-3b 커밋 ③ — 설계 M6 3.2 「차선 계약」). 작업은 입력 값만 받아
 // 차선 고루틴에서 돌고 결과를 값으로 돌려준다 — 캐시 · 루프 메모리를 만지지 않는다(D2 · 기존 Lanes 계약). 운영 몸체는
 // index 종료 문장과 발행자 동결 메서드를 묶고, 시험은 함수 칸을 가짜로 바꾼다(laneWork 와 같은 꼴 — 새 인터페이스 없음).
 
@@ -15,28 +15,34 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
 )
 
-// revokeNoPublisher 는 발행 몫이 없어(꺼짐 · 강등) 계승 해제를 하지 않은 사유다 — Head 를 볼 수 없다.
-const revokeNoPublisher = "no_publisher"
-
 // finalizeScanLimit 은 정산 · 회차 스캔의 쪽 크기다(설계 3.2 — 50).
 const finalizeScanLimit = 50
 
-// finalizeWork 는 정산 몫 차선 작업의 몸체다.
+// finalizeWork 는 정산 몫 차선 작업의 몸체다. stepChain 은 step 과 같되 VOD 동결을 회차 판정 없이 사슬 범위로 한다 —
+// 회차 경로에서 물러선 적 있는 세션에 루프가 낸다(POK-549 설계 r4 2.4 물러섬 기억). nil 대체 경로가 없다(운영 조립이 채운다).
 type finalizeWork struct {
-	scan     func(ctx context.Context, after index.ScanCursor) finalScan
-	load     func(ctx context.Context, sessionID string) finalLoad
-	step     func(ctx context.Context, s index.EndingSession, d finalize.Decision) finalStep
-	playback func(ctx context.Context, streamID string) playbackRead
-	revoke   func(ctx context.Context, streamID, sessionID string) publish.RevokeOutcome
+	scan      func(ctx context.Context, after index.ScanCursor) finalScan
+	load      func(ctx context.Context, sessionID string) finalLoad
+	step      func(ctx context.Context, s index.EndingSession, d finalize.Decision) finalStep
+	stepChain func(ctx context.Context, s index.EndingSession, d finalize.Decision) finalStep
+	playback  func(ctx context.Context, streamID string) playbackRead
 }
 
-// finalScan 은 스캔 한 번의 결과다 — 정산 스캔 행 · 다음 커서 · 쪽이 가득 찼는가 · 이번에 닫은 회차의 스트림.
+// finalScan 은 스캔 한 번의 결과다 — 정산 스캔 행 · 다음 커서 · 쪽이 가득 찼는가 · 이번에 닫은 회차의 스트림 · 그 회차의
+// 깨우기 대상.
 type finalScan struct {
 	rows   []index.EndingSession
 	next   index.ScanCursor
 	full   bool
 	closed []string
+	wake   []roundWake
 	err    error
+}
+
+// roundWake 는 회차 round(스트림 stream)의 마지막 사슬을 다시 판정할 이유가 생겼다는 깨우기다(POK-549 설계 r4 2.4) — session 이
+// 회차 최신 ending 세션이다. 빈 값이면 깨울 대상이 없다(round 는 깨우기 질의 오류 신호에 싣는다).
+type roundWake struct {
+	stream, round, session string
 }
 
 // finalLoad 는 빠른 길 행 읽기의 결과다.
@@ -48,7 +54,9 @@ type finalLoad struct {
 }
 
 // finalStep 은 정산 걸음 하나의 결과다. progressed 는 장부가 다음 상태로 갔다(곧바로 그 행을 다시 읽어 다음 걸음을 낸다) ·
-// notify 는 상태 전달 값이 바뀌었다(회차 완결 — PlaybackChanged) · hold 는 걸음이 장부에서 찾은 보류 사유다.
+// notify 는 상태 전달 값이 바뀌었다(회차 완결 — PlaybackChanged) · hold 는 걸음이 장부에서 찾은 보류 사유다. wake 는 이 걸음의
+// 사슬 종국 · ended 가 깨우는 회차 마지막 사슬이고 wakeErr 는 그 깨우기 질의의 오류다(걸음 결과와 무관 — 루프는 WARN 뒤 스캔에
+// 맡긴다).
 type finalStep struct {
 	row        index.EndingSession
 	d          finalize.Decision
@@ -58,6 +66,8 @@ type finalStep struct {
 	notify     bool
 	hold       string
 	err        error
+	wake       roundWake
+	wakeErr    error
 }
 
 // playbackRead 는 상태 전달 읽기 한 번의 결과다.
@@ -66,12 +76,6 @@ type playbackRead struct {
 	st       index.PlaybackState
 	ok       bool
 	err      error
-}
-
-// revokeResult 는 계승 해제 작업 한 번의 결과다.
-type revokeResult struct {
-	sessionID string
-	out       publish.RevokeOutcome
 }
 
 // newFinalizeWork 는 운영 몸체다 — 종료 문장은 pool(인덱서 풀)로, S3 걸음은 발행자 pub 로 간다. pub 이 nil 이면(꺼짐 ·
@@ -88,21 +92,20 @@ func newFinalizeWork(pool *pgxpool.Pool, pub *publish.Publisher, o index.CloseOp
 		step: func(ctx context.Context, s index.EndingSession, d finalize.Decision) finalStep {
 			return runFinalStep(ctx, finalDeps{pool: pool, pub: pub, close: o, enqueue: enqueue}, s, d)
 		},
+		stepChain: func(ctx context.Context, s index.EndingSession, d finalize.Decision) finalStep {
+			return runFinalStep(ctx, finalDeps{pool: pool, pub: pub, close: o, enqueue: enqueue, chainOnly: true}, s, d)
+		},
 		playback: func(ctx context.Context, stream string) playbackRead {
 			st, ok, err := index.LoadStreamPlayback(ctx, pool, stream)
 			return playbackRead{streamID: stream, st: st, ok: ok, err: err}
-		},
-		revoke: func(ctx context.Context, stream, id string) publish.RevokeOutcome {
-			if pub == nil {
-				return publish.RevokeOutcome{Reason: revokeNoPublisher}
-			}
-			return pub.RevokeInheritance(ctx, stream, id)
 		},
 	}
 }
 
 // scanFinalize 는 스캔 한 번이다 — 정산 스캔 한 쪽과, 닫힘 조건이 참인 회차를 모두 닫는다(회차 스캔은 커서가 없다 — 고른
 // 회차는 이 걸음에서 닫혀 다음 스캔에서 빠진다). 회차 하나가 실패해도 나머지는 닫는다(첫 오류를 돌려준다 — 다음 스캔에 다시).
+// 닫은 회차의 최신 세션이 ending 이면 깨우기 대상이다(깨우기 3) — 잠금 전에 읽은 최신이라 그 사이 합류가 있었으면 옛 최신을
+// 깨울 수 있는데, 그 걸음은 사슬 범위 · StepWait 로 무해하게 끝난다(설계 2.4).
 func scanFinalize(ctx context.Context, pool *pgxpool.Pool, after index.ScanCursor, o index.CloseOptions, enqueue index.EndedEnqueuer) finalScan {
 	rows, next, err := index.ListEndingSessions(ctx, pool, after, finalizeScanLimit, o)
 	if err != nil {
@@ -122,19 +125,24 @@ func scanFinalize(ctx context.Context, pool *pgxpool.Pool, after index.ScanCurso
 		if closed {
 			out.closed = append(out.closed, r.StreamID)
 		}
+		if closed && r.LatestState == "ending" {
+			out.wake = append(out.wake, roundWake{stream: r.StreamID, round: r.RoundID, session: r.LatestSessionID})
+		}
 	}
 	return out
 }
 
-// finalDeps 는 걸음 몸체가 쓰는 것이다.
+// finalDeps 는 걸음 몸체가 쓰는 것이다. chainOnly 면 VOD 동결이 회차 판정 없이 사슬 범위다(FreezeChainVOD).
 type finalDeps struct {
-	pool    *pgxpool.Pool
-	pub     *publish.Publisher
-	close   index.CloseOptions
-	enqueue index.EndedEnqueuer
+	pool      *pgxpool.Pool
+	pub       *publish.Publisher
+	close     index.CloseOptions
+	enqueue   index.EndedEnqueuer
+	chainOnly bool
 }
 
 // runFinalStep 은 판정 d 의 걸음을 한 번 한다. 장부 문장의 오류는 재시도(다음 걸음 · 다음 스캔)이고 오류 칸에 싣는다.
+// 사슬 VOD 종국(동결 섰음 · FailVOD · 빈 동결)과 phase 4 가 서면 회차 마지막 사슬 깨우기를 싣는다(깨우기 1 · 2).
 func runFinalStep(ctx context.Context, deps finalDeps, s index.EndingSession, d finalize.Decision) finalStep {
 	res := finalStep{row: s, d: d, out: finalize.OutcomeDone}
 	switch d.Step {
@@ -157,26 +165,45 @@ func runFinalStep(ctx context.Context, deps finalDeps, s index.EndingSession, d 
 			res.hold = finalize.HoldPublishDegraded
 			return res
 		}
-		res.freeze = deps.pub.FreezeVOD(ctx, c, d.Abandon)
+		freeze := deps.pub.FreezeVOD
+		if deps.chainOnly {
+			freeze = deps.pub.FreezeChainVOD
+		}
+		res.freeze = freeze(ctx, c, d.Abandon)
 		res.out = outcomeOf(res.freeze)
 		res.progressed = res.out == finalize.OutcomeDone || res.out == finalize.OutcomeFailed
-		return res
+		return res.wakeIf(ctx, deps, c, res.out == finalize.OutcomeDone)
 	case finalize.StepEmptyFreezeVOD:
 		ok, err := index.FreezeEmptyVOD(ctx, deps.pool, c, deps.close)
 		if err == nil && !ok {
 			res.hold = finalize.HoldPublishOffWithTrace // 사슬 구성원에 ③ 흔적이 있다
 		}
-		return res.ledger(ok, err)
+		return res.ledger(ok, err).wakeIf(ctx, deps, c, ok && err == nil)
 	case finalize.StepFailVOD:
 		ok, err := index.FailChainVOD(ctx, deps.pool, c, deps.close)
-		return res.ledger(ok, err)
+		return res.ledger(ok, err).wakeIf(ctx, deps, c, ok && err == nil)
 	case finalize.StepMarkEnded:
 		n, err := index.MarkChainEnded(ctx, deps.pool, c, deps.close, deps.enqueue)
 		res = res.ledger(n > 0, err)
 		res.notify = n > 0
-		return res
+		return res.wakeIf(ctx, deps, c, n > 0 && err == nil)
 	}
 	return res
+}
+
+// wakeIf 는 when 이면 사슬 c 의 회차에서 깨울 마지막 사슬(회차 최신 ending 세션 · c 밖)을 싣는다. 회차가 없는 사슬(M6 전)은
+// 묻지 않는다(K14). 질의 오류는 wakeErr 에만 싣는다 — 걸음 결과는 그대로다.
+func (r finalStep) wakeIf(ctx context.Context, deps finalDeps, c index.Chain, when bool) finalStep {
+	if !when || c.RoundID == "" {
+		return r
+	}
+	r.wake = roundWake{stream: c.StreamID, round: c.RoundID}
+	id, ok, err := index.RoundLatestEnding(ctx, deps.pool, c.StreamID, c.RoundID, c.SessionIDs)
+	if ok {
+		r.wake.session = id
+	}
+	r.wakeErr = err
+	return r
 }
 
 // runDVRStep 은 phase 1 의 S3 걸음이다. 3단(FailDVR)과 좌초 회수의 「실패」는 장부를 freeze_failed 로 쓴 종국이라 섰다로 센다.
@@ -214,12 +241,12 @@ func (r finalStep) ledger(ok bool, err error) finalStep {
 	return r
 }
 
-// outcomeOf 는 발행 층 결과를 판정의 결과로 줄인다 — 정산 대기(unsettled)는 장애 재시도와 가른다.
+// outcomeOf 는 발행 층 결과를 판정의 결과로 줄인다 — 정산 · 회차 대기(publish.IsSettleWait)는 장애 재시도와 가른다.
 func outcomeOf(o publish.FreezeOutcome) finalize.Outcome {
 	switch {
 	case o.Result == publish.ResultFrozen, o.Result == publish.ResultFrozenWithGaps, o.Result == publish.ResultEmpty:
 		return finalize.OutcomeDone
-	case o.Retry && o.Reason == publish.ReasonUnsettled:
+	case o.Retry && publish.IsSettleWait(o.Reason):
 		return finalize.OutcomeUnsettled
 	case o.Retry:
 		return finalize.OutcomeRetry

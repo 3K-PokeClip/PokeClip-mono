@@ -10,6 +10,8 @@ import type { CropRect } from './cropMath';
 // 재생 중에만 영상 프레임마다 그린다(requestVideoFrameCallback, 없으면 rAF). 멈춘 영상은 그림이 안 바뀌므로 장면이 바뀌는 일이
 // 있을 때 한 번만 그린다: 옮기기 끝(seeked) · 첫 장면(loadeddata) · 크롭 변경 · 칸 크기 변경. 칸마다 프레임을 돌리면 멈춘 편집기가
 // 쉬지 못한다. 크기는 ResizeObserver로 잡아 둔다: 그릴 때마다 clientWidth를 읽으면 프레임마다 레이아웃을 강제한다.
+// 멈춘 영상을 옮기면 seeked 때 한 번, 착지한 프레임의 콜백에서 한 번 더 그린다 — WebKit 은 seeked 때 묵은 그림을 줄 수 있다
+// (source/seekGuard ③). 콜백은 옮기기 시작(seeking)에 건다: seeked 안에서 걸면 Chrome 은 이미 칠한 프레임이라 안 온다.
 
 const FULL_FRAME: CropRect = { x: 0, y: 0, w: 1, h: 1 };
 
@@ -92,6 +94,15 @@ export function VideoSurface({ video, crop }: { video: HTMLVideoElement; crop?: 
         stopFrames = () => cancelAnimationFrame(raf);
       }
     };
+    let seekFrame: number | null = null;
+    const onSeeking = () => {
+      if (typeof video.requestVideoFrameCallback !== 'function') return;
+      if (stopFrames !== null || seekFrame !== null) return;
+      seekFrame = video.requestVideoFrameCallback(() => {
+        seekFrame = null;
+        paint();
+      });
+    };
     const pauseFrames = () => {
       stopFrames?.();
       stopFrames = null;
@@ -105,6 +116,7 @@ export function VideoSurface({ video, crop }: { video: HTMLVideoElement; crop?: 
     video.addEventListener('play', startFrames);
     video.addEventListener('pause', onStopped);
     video.addEventListener('ended', onStopped);
+    video.addEventListener('seeking', onSeeking);
     video.addEventListener('seeked', paint);
     video.addEventListener('loadeddata', paint);
     // 재생 중에 도구를 바꿔 새로 붙은 칸은 play 이벤트를 못 듣는다
@@ -112,10 +124,12 @@ export function VideoSurface({ video, crop }: { video: HTMLVideoElement; crop?: 
 
     return () => {
       pauseFrames();
+      if (seekFrame !== null) video.cancelVideoFrameCallback(seekFrame);
       observer?.disconnect();
       video.removeEventListener('play', startFrames);
       video.removeEventListener('pause', onStopped);
       video.removeEventListener('ended', onStopped);
+      video.removeEventListener('seeking', onSeeking);
       video.removeEventListener('seeked', paint);
       video.removeEventListener('loadeddata', paint);
       paintRef.current = noop;

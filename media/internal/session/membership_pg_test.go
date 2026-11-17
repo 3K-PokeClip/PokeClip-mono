@@ -122,7 +122,7 @@ func strOf(p *string) string {
 }
 
 // holdRow 는 다른 연결에서 트랜잭션을 열어 세션 행을 FOR NO KEY UPDATE 로 잡고 stmt 를 실행한 채 둔다(커밋 전).
-// 돌려준 함수가 커밋한다. 경쟁 쓰기(4D 분리 · 표식 · 회차 닫힘)의 흉내다.
+// 돌려준 함수가 커밋한다. 경쟁 쓰기(표식 · 회차 닫힘)의 흉내다.
 func holdRow(t *testing.T, pool *pgxpool.Pool, sessionID, stmt string, args ...any) (commit func()) {
 	t.Helper()
 	ctx := context.Background()
@@ -379,12 +379,14 @@ func TestClosedRoundOrChainIsNotJoinedOrInherited(t *testing.T) {
 	}
 }
 
-// D69 (가) — TD 분할 판정 직후 경쟁 4D 가 live X 를 새 회차 B 로 옮기고 커밋 → 개시 재개 → C 는 B 회차.
-func TestOpenFreshAfterConcurrentRoundMoveFollowsNewRound(t *testing.T) {
+// D69 (가) — TD 분할 판정 직후 경쟁 쓰기가 live X 의 행을 쥐었다가 커밋 → 개시 재개 → C 는 X 의 회차. POK-525 전에는
+// 경쟁 4D(round_split)가 X 를 새 회차로 옮길 수 있었지만, 이제 round_id 는 INSERT 뒤 바뀌지 않아(회차 불변 트리거)
+// 경쟁 쓰기는 행 잠금만 쥔다 — 회차는 INSERT 때 정한 S-X 그대로다.
+func TestOpenFreshAfterConcurrentLockFollowsLiveRound(t *testing.T) {
 	pool := newTestPool(t)
 	r, _ := newRoundRegistry()
-	seedLedger(t, pool, ledgerRow{id: "S-X", streamID: "demo", state: "live", roundID: "S-R", startedAt: wall.Add(-time.Hour)})
-	commit := holdRow(t, pool, "S-X", `UPDATE stream_sessions SET round_id = 'S-X' WHERE session_id = 'S-X'`)
+	seedLedger(t, pool, ledgerRow{id: "S-X", streamID: "demo", state: "live", roundID: "S-X", startedAt: wall.Add(-time.Hour)})
+	commit := holdRow(t, pool, "S-X", "")
 
 	res := decideOpenAsync(pool, r, Input{StreamID: "demo", Seq: 2, StartWallUTC: wall, DurationMS: 9000, Op: OpenOrCurrent})
 	waitLockWaiter(t, pool)
@@ -393,7 +395,7 @@ func TestOpenFreshAfterConcurrentRoundMoveFollowsNewRound(t *testing.T) {
 
 	c := newestSession(t, pool, "demo")
 	if got := roundOf(t, pool, c); c == "S-X" || strOf(got.roundID) != "S-X" {
-		t.Errorf("새 세션 %s round_id = %s, want S-X(옮긴 뒤 회차)", c, strOf(got.roundID))
+		t.Errorf("새 세션 %s round_id = %s, want S-X(X 의 회차)", c, strOf(got.roundID))
 	}
 }
 

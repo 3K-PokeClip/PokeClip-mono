@@ -352,6 +352,65 @@ func TestRemuxStampsPosAndPreservesAVPhase(t *testing.T) {
 
 const audioTickNS = int64(time.Second) / 44100
 
+// withMtxiDTS 는 실물 조각의 mtxi 누적 DTS 만 dts 로 바꾼 조각이다(본문은 그대로).
+func withMtxiDTS(t *testing.T, raw []byte, dts time.Duration) []byte {
+	t.Helper()
+	return withHeader(t, raw, func(ini *fmp4.Init) {
+		m, ok := ini.UserData[0].(*mtxiBox)
+		if !ok {
+			t.Fatalf("픽스처 udta 첫 상자가 mtxi 가 아니다(%T)", ini.UserData[0])
+		}
+		edited := *m
+		edited.DTS = int64(dts)
+		ini.UserData[0] = &edited
+	})
+}
+
+// TestRemuxAudioLeadFirstSegment 는 소리가 영상보다 먼저 시작한 회차 첫 조각을 본다(POK-550).
+//
+// 새 연결에서 소리가 먼저 시작하면 녹화기는 그 조각의 mtxi 를 음수로 적는다(prod 실측 −44ms ·
+// 소리 첫 tfdt 0 · 영상 첫 tfdt 3960). 그 mtxi 를 그대로 도장으로 쓰면 생산자가 거부해야 하고
+// (도장은 뒤로 가지 않는다), 인덱서가 하한으로 연 도장 0 이면 입력 tfdt 를 그대로 남겨 위상이
+// 보존돼야 한다. 픽스처는 운영 형상(1v+6a) 실물이며 영상 첫 tfdt 는 8136 이다 — 생산자는 tfdt
+// 값으로 갈래를 타지 않으므로 3960 으로 바꾸지 않고 「소리가 앞선다」는 전제만 단언한다.
+// 잡는 결함: 음수 pos 를 이름 없는 오류로 돌려 업로더가 사다리를 태운다(D10) / 음수 pos 를 0 으로
+// 깎아 조용히 산출한다(D 대안 기각 — 회차 보정값과 어긋난다).
+func TestRemuxAudioLeadFirstSegment(t *testing.T) {
+	const video, audio = 1, 2
+	const lead = 44 * time.Millisecond
+	input := withMtxiDTS(t, readFixture(t, fixture1v6a), -lead)
+	if m, err := ReadMtxi(bytes.NewReader(input)); err != nil || m.DTS != -lead {
+		t.Fatalf("조립한 조각의 mtxi = %v (%v), want %v(전제)", m.DTS, err, -lead)
+	}
+	_, inBody := splitRecording(t, input)
+	inFirst := parsedParts(t, inBody)[0]
+	inVideo, inAudio := baseOf(t, inFirst, video), baseOf(t, inFirst, audio)
+	if inAudio != 0 || inVideo == 0 {
+		t.Fatalf("픽스처 첫 tfdt = 영상 %d · 소리 %d, want 소리 0 · 영상 > 0(소리가 앞선다 — 전제)", inVideo, inAudio)
+	}
+
+	t.Run("mtxi 그대로의 음수 도장은 거부", func(t *testing.T) {
+		out, err := Remuxer{}.Produce(context.Background(), Request{Input: bytes.NewReader(input), PlaybackPos: -lead})
+
+		if !errors.Is(err, ErrNegativePos) {
+			t.Errorf("err = %v, want ErrNegativePos", err)
+		}
+		if len(out.Init)+len(out.Seg) != 0 {
+			t.Errorf("산출 = %d+%d바이트, want 0 — 실패에는 부분 산출이 없다", len(out.Init), len(out.Seg))
+		}
+	})
+	t.Run("하한으로 연 도장 0 은 입력 tfdt 그대로", func(t *testing.T) {
+		_, parts := parseOutput(t, produce(t, input, 0))
+
+		if got := baseOf(t, parts[0], audio); got != inAudio {
+			t.Errorf("소리 첫 tfdt = %d, want %d(입력 그대로)", got, inAudio)
+		}
+		if got := baseOf(t, parts[0], video); got != inVideo {
+			t.Errorf("영상 첫 tfdt = %d, want %d(입력 그대로 — 소리보다 늦게 시작하는 위상 보존)", got, inVideo)
+		}
+	})
+}
+
 // phaseNS 는 영상 시작(90kHz 틱)과 소리 시작(44.1kHz 틱)의 차이를 나노초로 돌려준다.
 func phaseNS(videoTicks, audioTicks uint64) int64 {
 	return int64(videoTicks)*int64(time.Second)/90000 - int64(audioTicks)*int64(time.Second)/44100
@@ -500,21 +559,26 @@ func TestRemuxRejectsCorruptedInput(t *testing.T) {
 
 // TestRemuxRejectsInvalidRequest 는 요청 경계 검사를 본다. 입력 핸들이 없으면 워커 goroutine 이
 // 패닉으로 죽고, 음수 pos 는 정수 나눗셈 절삭으로 도장을 틀리게 만든다(계획 4.2-R RE: ns ≥ 0 전제).
+// 음수 pos 는 이름 붙은 오류값이어야 한다 — 업로더가 errors.Is 로 재시도 사다리에서 뺀다.
 func TestRemuxRejectsInvalidRequest(t *testing.T) {
 	raw := readFixture(t, fixture4s)
 	tests := []struct {
 		name string
 		req  Request
+		want error // nil 이면 오류이기만 하면 된다
 	}{
-		{"입력 핸들 없음", Request{}},
-		{"음수 pos", Request{Input: bytes.NewReader(raw), PlaybackPos: -time.Nanosecond}},
+		{"입력 핸들 없음", Request{}, nil},
+		{"음수 pos", Request{Input: bytes.NewReader(raw), PlaybackPos: -time.Nanosecond}, ErrNegativePos},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out, err := Remuxer{}.Produce(context.Background(), tt.req)
 
 			if err == nil {
-				t.Errorf("Produce(%+v) = %d+%d바이트, want 오류", tt.req, len(out.Init), len(out.Seg))
+				t.Fatalf("Produce(%+v) = %d+%d바이트, want 오류", tt.req, len(out.Init), len(out.Seg))
+			}
+			if tt.want != nil && !errors.Is(err, tt.want) {
+				t.Errorf("err = %v, want %v", err, tt.want)
 			}
 		})
 	}

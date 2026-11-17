@@ -139,6 +139,8 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 	}
 	pendingCount = len(pending)
 	holes = ix.reportHoles(streamID, cur.Tail, pending)
+	// 막힌 조각이 장부에 있거나 지워졌으면 표지를 내린다 — 남은 막힌 조각은 아래 순서 처리가 먼저 다시 읽는다(timing_read.go).
+	ix.dropVanishedBlocks(streamID, pending)
 	if len(pending) == 0 {
 		return nil
 	}

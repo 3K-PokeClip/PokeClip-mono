@@ -61,6 +61,14 @@ load_netns_facts() {
 $(harness::log_tail "${rendered}.err")"
     return 1
   fi
+  # 사이드카의 required env_file(compose 파일 옆 sidecar.env) — 없으면 config
+  # 가 실패한다.
+  if ! render::template "${MEDIA_HOST_DIR}/sidecar.env.tmpl" \
+    "${RENDER_VARS_FILE}" "${scratch}/sidecar.env" 2>"${rendered}.err"; then
+    netns_reason="sidecar.env.tmpl 렌더 실패: \
+$(harness::log_tail "${rendered}.err")"
+    return 1
+  fi
   if ! prod_netns="$(netns_facts "${rendered}")"; then
     netns_reason="렌더한 prod compose 를 읽지 못함: \
 $(harness::log_tail "${scratch}/config.err")"

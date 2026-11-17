@@ -10,30 +10,41 @@ import {
   mediaTimeAt,
   programDateAt,
   rewindWindowSeconds,
+  type DatedFragment,
 } from './dvrWindow';
+import { watchDvrDrain } from './dvrDrainWatch';
+import { LIVE_PTS_CORRECTION, datedFragments, type StartOf } from './fragmentTiming';
 import {
   isPlaybackForbidden,
   recoverForbiddenRecording,
   reportPlaybackForbidden,
 } from '@/api/playbackAccess';
 import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
-import { isPlaylistLoadError } from './hlsErrors';
+import { consumeDvrSegmentGone, isFirstListFailure, isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
-import { armStart, createSwapPause, trackLoadFrom } from './hlsStart';
+import { armStart, createSwapPause, startConfig, trackLoadFrom } from './hlsStart';
 import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import {
   endStalled,
   loadedList,
   sessionAxis,
+  startCut,
   type LoadedList,
   type SessionAxis,
 } from './playbackEdge';
 import { nextLivePosition, playedRunMs, type LivePosition } from './livePosition';
+import { applySound, playFirst, type PlayerSound } from './playbackSound';
 import { trackPlaybackStartOnce } from './playbackStarts';
 import { guardRewindFloor } from './rewindFloor';
 import { useSourcePosition, type PositionHooks } from './sourcePosition';
-import { SESSION_NOTICES, type PlaybackSource, type SeekView } from './rewindSwitch';
+import {
+  SESSION_NOTICES,
+  type DvrSegment,
+  type PlaybackSource,
+  type SeekView,
+} from './rewindSwitch';
 import { useControlsAutoHide } from './useControlsAutoHide';
+import { trackVideoStarts, type VideoStarts } from './videoStarts';
 import {
   CLIP_MARK_MS,
   PLAYER_QUALITIES,
@@ -64,10 +75,31 @@ const HAVE_CURRENT_DATA = 2;
 const DEFAULT_LIVE_LAG_MS = 3_000;
 /** 창 하한으로 옮긴 뒤 이 배수 × TD 안에 또 옮기면 알리지 않는다(숨은 탭의 밀린 갱신이 한꺼번에 올 때 — 5.3.1절) */
 const FLOOR_NOTICE_QUIET_TD = 2;
+/**
+ * 되감기 재생기의 첫 목록에서 시작을 창 하한으로 잘랐나 — armStart 가 첫 LEVEL_LOADED 에서 같은 조각 ·
+ * 같은 함수(startCut)로 자리를 정하므로 결과가 같다. 첫 LEVEL_UPDATED 는 기동 처리기보다 먼저 돌아 그 값을
+ * 읽을 수 없어 한 번 더 부른다(POK-528 계획 3-3 (2)). 되감기가 아니거나 시작 요청 · 시각 표시가 없으면 칸 없음
+ */
+function firstStartCut(
+  kind: PlaybackSource['kind'],
+  startAtMs: number | null,
+  details: LevelDetails,
+): { startFloorCut?: boolean } {
+  if (kind !== 'rewind' || startAtMs === null) return {};
+  const cut = startCut(details.fragments, startAtMs, kind, details.targetduration, details.live);
+  return cut === null ? {} : { startFloorCut: cut.floorCut };
+}
+
+/** 영상 시작 기록이 없는 재생기(스위치 OFF 라이브 · 재생기가 서기 전)의 startOf — 판 2 조각도 해체 전처럼 센다 */
+function noVideoStart(): null {
+  return null;
+}
 
 /** 재생기가 로드한 목록 하나(세션의 observedEndMs · roundRewindUrls 재료) */
 export interface LoadedPlaylist extends LoadedList {
   url: string;
+  /** 되감기 재생기의 첫 목록에서 시작을 창 하한으로 잘랐다(POK-528 — firstStartCut) */
+  startFloorCut?: boolean;
 }
 
 /**
@@ -102,6 +134,50 @@ export interface PlaybackHooks extends PositionHooks {
   holdPlay?: boolean;
   /** 시크바 왼쪽 끝(되감기 범위 첫 시각). 라이브 재생기의 시크바가 라이브 창 밖까지 넓어진다 */
   axisLowerMs?: number | null;
+  /**
+   * 방송이 끝났다는 근거가 있다(recordingEndedOf). 되감기 축의 끝을 로드한 목록 끝으로 재고, 재생기가 그대로 내놓아 끝
+   * 문구가 「녹화 끝」 이 된다(소스가 라이브여도 — 라이브 축은 이 값을 읽지 않는다). 없으면 거짓(방송 중)
+   */
+  recordingEnded?: boolean;
+  /**
+   * 되감기 재생기가 /dvr 미디어 조각 404 를 받아 받기를 멈췄다(POK-528). 인자는 그 404 를 낸 재생기의 세대(세션이
+   * 옛 재생기의 늦은 404 를 버린다)와 받지 못한 조각이다. 없으면 가로채지 않는다(지금 동작)
+   */
+  onDvrSegmentGone?: (generation: number, segment: DvrSegment) => void;
+  /**
+   * 그 세대 재생기의 조각이 세션이 아는 목록 안 구멍(이미 한 번 다시 받게 한 조각)인가(POK-528 후속) — 세션에 묻는다.
+   * 참이고 hls.js 가 그 조각을 틈으로 넘기기로 했으면 재생기는 404 를 가로채지 않는다(consumeDvrSegmentGone)
+   */
+  isKnownDvrHole?: (generation: number, segment: DvrSegment) => boolean;
+  /**
+   * 새로 서는 재생기는 hls.js 를 만들지 않는다(받지도 틀지도 않음 · POK-528 U2). 재생기가 설 때(세대가 오를 때) 한 번
+   * 읽는다 — 풀리는 전이는 세대를 올리므로 그때 정상 기동한다
+   */
+  startHeld?: boolean;
+  /**
+   * 지금 세션 상태로 셈한 「세우지 않음」(POK-547) — 재생기가 설 때와 hls.js 를 읽은 뒤에 읽는다. 렌더 값(startHeld)은
+   * 다시 그린 뒤에야 바뀌어, 그사이 404 · 리마운트가 끼면 낡은 값을 읽는다. 둘 가운데 하나라도 참이면 세우지 않는다
+   */
+  isStartHeld?: () => boolean;
+  /** 이 재생기가 404 로 받기를 멈췄다 — 가로챈 순간 · 사람이 멈춘 동안이어도 부른다(POK-547). 인자는 이 재생기의 세대 */
+  onDvrLoadStopped?: (generation: number) => void;
+  /**
+   * 받기를 멈춘 되감기 재생기가 받은 버퍼를 다 틀고 멎었다(drained 참) · 다시 나아갔다(거짓 — POK-547). atPdtMs 는 그
+   * 자리를 지금 목록 축으로 본 실제 시각(모르면 null)
+   */
+  onDvrDrain?: (generation: number, drained: boolean, atPdtMs: number | null) => void;
+  /** 지금 세션이 고갈을 보라고 하나 — 받기를 멈춘 순간 지금 세션 상태로 읽는다(POK-547) */
+  watchesDrain?: () => boolean;
+  /**
+   * 새 영상 노드의 첫 소리 상태 — 다시보기로 넘길 때 옛 노드에서 읽은 값, 다시 서는 다시보기 재생기는 부른 쪽이 기억한 값
+   * (onSoundChange — POK-547). 재생기가 설 때 한 번 읽는다. 없으면 지금 기본(무음 · 70)이다
+   */
+  initialSound?: PlayerSound | null;
+  /**
+   * 영상 노드의 소리 상태가 바뀌었다(volumechange — 사람의 조작 · 무음 대체 모두 · POK-547). 다시보기 재생기가 다시 설 때 그
+   * 값으로 서게 부른 쪽이 기억한다
+   */
+  onSoundChange?: (sound: PlayerSound) => void;
 }
 
 export type { LivePosition } from './livePosition';
@@ -137,12 +213,30 @@ export function useHlsPlayback(
   seekToLiveEdge: () => void;
   /** 사람이 멈춰 있으면 다음에 갈아 끼울 재생기를 스스로 틀지 않게 한다(세션의 넘김 되돌림) */
   keepPausedOnSwap: () => void;
+  /** 지금 프레임에서 멈추되 사람의 멈춤으로 적지 않는다(세션의 hold-frame · POK-528) */
+  holdFrame: () => void;
+  /** 사람 멈춤 자리 기록을 버린다 — 복구 자리는 세션이 정했다(세션의 drop-pause-mark · POK-528) */
+  dropPauseMark: () => void;
+  /**
+   * 선 재생기의 갈래 — hls.js · 브라우저 기본 HLS. 둘 다 없어 이 브라우저에서 틀 수 없으면 none 이다. 서기 전(읽는 중 ·
+   * 세우지 않음)이면 null
+   */
+  engine: 'hlsjs' | 'native' | 'none' | null;
+  /**
+   * 재생 위치(currentTime)를 지금 로드한 목록 축으로 본 실제 시각(PDT · epoch ms) — 다시보기 재생기(useVodPlayback)가 읽는다.
+   * 화면에 영상이 붙었는지(readyState)는 보지 않는다. 영상 노드 · 목록(목록 전 · 재생기를 내린 뒤 · 기본 HLS) · 시각 표시가
+   * 없으면 null
+   */
+  currentProgramDateMs: () => number | null;
 } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
-  // 자동재생 정책상 muted로 시작한다 (시뮬레이션의 muted=false와 다른 점)
-  const [muted, setMuted] = useState(true);
-  const [volume, setVolumeState] = useState(70);
+  // 넘겨받은 소리 상태(설 때 한 번 읽는다). 없으면 자동재생 정책상 muted로 시작한다 (시뮬레이션의 muted=false와 다른 점)
+  const [initialSound] = useState(() => hooks.initialSound ?? null);
+  const [muted, setMuted] = useState(initialSound?.muted ?? true);
+  const [volume, setVolumeState] = useState(initialSound?.volume ?? 70);
+  // 넘겨받은 소리가 켜짐이면 이 재생기의 첫 재생 하나만, 막힐 때 소리를 끄고 다시 튼다. 라이브 · 세션 재생기는 지금 그대로다
+  const soundFallbackRef = useRef(initialSound?.muted === false);
   const [behindSeconds, setBehind] = useState(0);
   // 매니페스트 로드 전엔 되감을 곳이 없다 — 0이면 시크바가 엣지에 붙는다 (POK-32)
   const [windowSeconds, setWindowSeconds] = useState(0);
@@ -158,6 +252,8 @@ export function useHlsPlayback(
   const [stopped, setStopped] = useState<{ src: string; why: keyof typeof STOPPED_NOTES } | null>(
     null,
   );
+  /** 선 재생기의 갈래 — 재생기를 세울 때 정하고 소스가 바뀌면 비운다 */
+  const [engine, setEngine] = useState<'hlsjs' | 'native' | 'none' | null>(null);
   // 키가 늦게 와도 재생기를 다시 세우지 않는다(효과는 src에만 걸린다): 오류가 난 그때의 키를 읽는다
   const mediaKeyRef = useRef(mediaKey);
   mediaKeyRef.current = mediaKey;
@@ -189,6 +285,14 @@ export function useHlsPlayback(
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
+  /** 재생기의 조각별 영상 시작 — 되감기 · 다시보기 재생기(라이브는 구성 시차 스위치를 켰을 때)가 선 동안만 적는다(설계 r7 3.3절) */
+  const startOfRef = useRef<StartOf>(noVideoStart);
+  /** 시각 환산에 넘길 목록 조각 — 판 2 는 영상 축 조각이다(설계 r7 3.5절). 목록을 모르면 빈 배열 */
+  const fragmentsOf = useCallback(
+    (details: LevelDetails | null | undefined): readonly DatedFragment[] =>
+      details ? datedFragments(details.fragments, sourceRef.current.kind, startOfRef.current) : [],
+    [],
+  );
   const clipTimer = useRef<number>(undefined);
 
   // 방송 경과는 스트림 메타데이터에 없다 — 시뮬레이션처럼 시드+티커로 표시만 유지한다.
@@ -202,11 +306,14 @@ export function useHlsPlayback(
   useEffect(() => () => window.clearTimeout(clipTimer.current), []);
 
   // 초기 볼륨은 마운트 1회만 — src 전환(?stream= 변경) 이펙트에 두면 사용자가 만진
-  // 볼륨이 스트림을 바꿀 때마다 70으로 되돌아간다.
+  // 볼륨이 스트림을 바꿀 때마다 70으로 되돌아간다. 넘겨받은 소리 상태는 무음까지 여기서 싣는다: <video muted> 정적 속성보다
+  // 뒤이고 첫 play()(아래 재생기 효과)보다 앞이다
   useEffect(() => {
     const video = videoRef.current;
-    if (video) video.volume = 0.7;
-  }, [videoRef]);
+    if (!video) return;
+    if (initialSound) applySound(video, initialSound);
+    else video.volume = 0.7;
+  }, [videoRef, initialSound]);
 
   /** 세션 모드의 시각 축(설계 5.2절). 목록 · 라이브 끝을 모르면 null */
   const readAxis = useCallback((): SessionAxis | null => {
@@ -218,17 +325,26 @@ export function useHlsPlayback(
     const sync = hlsRef.current?.liveSyncPosition ?? null;
     const axis = sessionAxis({
       kind,
-      fragments: details.fragments,
+      live: details.live,
+      fragments: fragmentsOf(details),
       targetDurationS: details.targetduration,
       currentTime: video.currentTime,
       liveEdgeTime: kind === 'live' && range ? liveEdgePosition(range, sync) : null,
       nowMs: Date.now(),
       lagMs: lagMsRef.current,
       axisLowerMs: hooksRef.current.axisLowerMs ?? null,
+      recordingEnded: hooksRef.current.recordingEnded === true,
     });
     if (axis !== null && kind === 'live') lagMsRef.current = Math.max(0, Date.now() - axis.edgeMs);
     return axis;
-  }, [videoRef]);
+  }, [videoRef, fragmentsOf]);
+
+  const currentProgramDateMs = useCallback((): number | null => {
+    const video = videoRef.current;
+    const details = hlsRef.current?.latestLevelDetails;
+    if (!video || !details) return null;
+    return programDateAt(fragmentsOf(details), video.currentTime);
+  }, [videoRef, fragmentsOf]);
 
   /** 세션 모드: 목표 실제 시각을 세션에 넘긴다. 축을 모르면 false */
   const requestSeek = useCallback(
@@ -275,9 +391,18 @@ export function useHlsPlayback(
     [videoRef, onSeek, readAxis, requestSeek, sessionActive],
   );
 
+  // 맨 왼쪽(Home · 비율 0)은 세션 모드에서 막대 왼쪽 끝을 바로 요청한다 — 그린 뒤 자란 창이면 React 의 창 폭이 낡았고,
+  // 창 폭은 1시간에서 잘려 「끝 − 폭」 이 왼쪽 끝에 닿지 않는다(POK-573)
   const seekToFraction = useCallback(
-    (fraction: number) => seekToBehind(behindFromSeekFraction(fraction, windowSeconds)),
-    [seekToBehind, windowSeconds],
+    (fraction: number) => {
+      if (fraction <= 0 && sessionActive()) {
+        const axis = readAxis();
+        if (axis !== null) requestSeek(axis.barLowerMs);
+        return;
+      }
+      seekToBehind(behindFromSeekFraction(fraction, windowSeconds));
+    },
+    [seekToBehind, windowSeconds, sessionActive, readAxis, requestSeek],
   );
 
   const seekBy = useCallback(
@@ -286,7 +411,20 @@ export function useHlsPlayback(
       if (!video) return;
       if (sessionActive()) {
         const axis = readAxis();
-        if (axis !== null) seekToBehind(axis.behindSeconds + deltaSeconds);
+        if (axis === null) return;
+        if (axis.atMs === null) {
+          // 왼쪽 끝을 넘는 이동은 막대 왼쪽 끝 요청이다(Home 과 같은 자리 — POK-573)
+          if (axis.behindSeconds + deltaSeconds >= axis.windowSeconds) {
+            requestSeek(axis.barLowerMs);
+          } else {
+            seekToBehind(axis.behindSeconds + deltaSeconds);
+          }
+          return;
+        }
+        // 재생 위치의 실제 시각에서 잰다 — 시차 · 창 폭은 표시 상한 1시간에서 잘려, 창이 그보다 넓으면 왼쪽 끝 근처의
+        // 이동이 잘린 만큼 어긋난다(POK-573). 막대 왼쪽 끝 · 끝 밖은 그 끝이다
+        const targetMs = Math.min(axis.edgeMs, axis.atMs - deltaSeconds * 1000);
+        requestSeek(Math.max(axis.barLowerMs, targetMs));
         return;
       }
       const range = dvrRange(video.seekable);
@@ -296,7 +434,7 @@ export function useHlsPlayback(
           deltaSeconds,
       );
     },
-    [videoRef, seekToBehind, readAxis, sessionActive],
+    [videoRef, seekToBehind, readAxis, requestSeek, sessionActive],
   );
 
   // 실제 시각으로 옮긴다(라이브 카드, POK-326). 그 시각을 품은 조각의 시각 표시로 영상 시각을 셈하고, 시크는 같은 한 길
@@ -312,28 +450,28 @@ export function useHlsPlayback(
         const axis = readAxis();
         const ask = hooksRef.current.onSeekRequest;
         if (axis === null || ask === undefined) return 'unknown';
-        // 되감기가 준비됐으면 그 목록의 첫 시각까지다. 아니면 지금 목록의 첫 조각까지만(시크바 왼쪽 끝과 같은 하한). 창 하한 여유
-        // 안쪽은 세션이 하한으로 옮기고 알린다. 카드 초는 정각 초로 내린 값이라 1초까지는 봐준다(경계의 카드가 실제로는 창 안이다)
-        const lowerMs = Math.min(hooksRef.current.axisLowerMs ?? Infinity, axis.list.firstMs);
-        if (epochMs + CARD_SECOND_SLACK_MS < lowerMs) return 'outside';
+        // 되감기 · 다시보기는 시크바 왼쪽 끝(첫 내용 조각 — POK-573)까지다. 라이브는 되감기가 준비됐으면 그 목록의 첫
+        // 시각까지, 아니면 지금 목록의 첫 조각까지만이다. 창 하한 여유 안쪽은 세션이 하한으로 옮기고 알린다. 카드 초는 정각 초로
+        // 내린 값이라 1초까지는 봐준다(경계의 카드가 실제로는 창 안이다). 이 문턱이 곧 시크바 왼쪽 끝(barLowerMs)이다
+        if (epochMs + CARD_SECOND_SLACK_MS < axis.barLowerMs) return 'outside';
         ask(epochMs, axis.view);
         return 'moved';
       }
       const range = dvrRange(video.seekable);
-      const target = mediaTimeAt(hlsRef.current?.latestLevelDetails?.fragments ?? [], epochMs);
+      const target = mediaTimeAt(fragmentsOf(hlsRef.current?.latestLevelDetails), epochMs);
       if (!range || target === null) return 'unknown';
       if (target + CARD_SECOND_SLACK_MS / 1000 < range.start) return 'outside';
       const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
       seekToBehind(live - target);
       return 'moved';
     },
-    [videoRef, seekToBehind, readAxis, sessionActive],
+    [videoRef, seekToBehind, readAxis, sessionActive, fragmentsOf],
   );
 
   const seekToMs = useCallback(
     (atMs: number) => {
       const video = videoRef.current;
-      const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
+      const fragments = fragmentsOf(hlsRef.current?.latestLevelDetails);
       if (!video) return;
       const axis = readAxis();
       const range = dvrRange(video.seekable);
@@ -350,13 +488,28 @@ export function useHlsPlayback(
       }
       onSeek?.();
     },
-    [videoRef, readAxis, onSeek],
+    [videoRef, readAxis, onSeek, fragmentsOf],
   );
 
   const keepPausedOnSwap = useCallback(
     () => swap.keepIfUserPaused(sourceRef.current.generation),
     [swap],
   );
+
+  const dropPauseMark = useCallback(() => {
+    pausedAtMsRef.current = null;
+    pausedHandledRef.current = false;
+  }, []);
+
+  // 앱이 건 멈춤은 사람 멈춤 표 · 자리 기록에 남기지 않는다 — 다음 재생기의 재개 시크 · 멈춘 채 갈아 끼우기가
+  // 이 멈춤으로 서지 않게(계획 4-1). 이미 멈춰 있으면 pause 사건이 나지 않으니 표시를 세우지 않는다
+  const holdFrame = useCallback(() => {
+    dropPauseMark();
+    const video = videoRef.current;
+    if (!video || video.paused) return;
+    swap.appPausing();
+    video.pause();
+  }, [videoRef, swap, dropPauseMark]);
 
   const seekToLiveEdge = useCallback(() => {
     const video = videoRef.current;
@@ -423,11 +576,26 @@ export function useHlsPlayback(
     if (!video) return;
     // 세대가 오를 때 다시 서는 재생기 하나의 소스(종류 · 시작 시각). 효과는 종류 · 주소 · 세대에만 걸린다(설계 5.4절)
     const { kind, startAtMs, strictStart, generation } = sourceRef.current;
+    // 세우지 않음은 이 재생기가 설 때 읽는다(POK-528 U2) — 풀리면 세대가 올라 효과가 다시 돈다. 렌더 값과 지금 세션
+    // 상태를 함께 본다(POK-547)
+    const heldNow = () =>
+      hooksRef.current.startHeld === true || hooksRef.current.isStartHeld?.() === true;
+    const held = heldNow();
 
     // StrictMode 이중 이펙트·동적 import 경합 방어 — 클린업 후 도착한 인스턴스를 버린다
     let disposed = false;
+    // 이 재생기의 영상 시작 기록(설계 r7 3.3절). 재생기를 내리는 모든 자리(정리 · 시작 잘림 · 403 · 라이브 닫힘 ·
+    // 복구 불가)에서 hls.destroy() 앞에 놓는다 — 처리기를 떼고 기록을 비우며 환산을 기록 없는 재생기로 돌린다
+    let videoStarts: VideoStarts | null = null;
+    const releaseVideoStarts = () => {
+      videoStarts?.dispose();
+      videoStarts = null;
+      startOfRef.current = noVideoStart;
+    };
     // 재생기 하나의 사건 상태: ENDLIST 를 올렸나 · 목록이 마지막으로 자란 때 · 끝 도달을 올렸나
     let endlistSent = false;
+    // 첫 목록에서만 시작 잘림을 싣는다(POK-528 — 세션의 하한 알림 판정)
+    let firstList = true;
     let lastEndMs: number | null = null;
     let lastGrowAt = Date.now();
     let endSent = false;
@@ -435,6 +603,12 @@ export function useHlsPlayback(
     // 되감기 창 하한 지키기(5.3.1절)의 상태: 기동 전 받기 위치 장부(hlsStart) · 옮겨 알린 때
     const load = trackLoadFrom(video);
     let floorNoticeAt: number | null = null;
+    // 재생기가 스스로 거는 재생(목록 읽음 · 기본 HLS 소스 붙임). 소리 대체는 이 훅의 첫 재생 하나에만 건다
+    const autoplay = () => {
+      const soundFallback = soundFallbackRef.current;
+      soundFallbackRef.current = false;
+      playFirst(video, soundFallback);
+    };
     const reachEnd = () => {
       if (endSent) return;
       endSent = true;
@@ -446,10 +620,32 @@ export function useHlsPlayback(
     const rearmEnd = () => {
       const details = hlsRef.current?.latestLevelDetails;
       if (!endSent || !details || lastEndMs === null) return;
-      const atMs = programDateAt(details.fragments, video.currentTime);
+      const atMs = programDateAt(fragmentsOf(details), video.currentTime);
       if (atMs === null || atMs >= lastEndMs) return;
       endSent = false;
       waiting = false;
+    };
+    // 사람이 멈춘 동안의 되감기 조각 404 는 받기만 멈추고 세션에 올리지 않는다 — 다시 틀 때(onPlay) 올린다(POK-528 c9 ·
+    // 계획 4-3). 사람 멈춤 = 멈춰 있고 멈춘 자리 기록이 있다(앱이 건 멈춤은 기록을 남기지 않는다). 붙잡은 값은 받지 못한
+    // 조각이다. 재생기 하나의 상태라 세대가 바뀌면 옛 재생기와 함께 버린다
+    let goneWhilePaused: DvrSegment | null = null;
+    // 받기 중단은 멈춤과 상관없이 404 순간에 올린다 — 멈춘 동안 리마운트가 끼어도 새 재생기가 낡은 목록을 다시 받지
+    // 않게(POK-547). 404 통지만 사람 멈춤 뒤로 미룬다
+    const reportGone = (
+      gone: (generation: number, segment: DvrSegment) => void,
+      segment: DvrSegment,
+    ) => {
+      hooksRef.current.onDvrLoadStopped?.(generation);
+      if (video.paused && pausedAtMsRef.current !== null) {
+        goneWhilePaused = segment;
+        return;
+      }
+      gone(generation, segment);
+      armDrain();
+    };
+    // 고갈 감시는 받기를 멈춘 순간의 세션 상태로 무장한다(POK-547 — 감시는 아래 리스너 등록 뒤에 선다)
+    const armDrain = () => {
+      if (hooksRef.current.watchesDrain?.() === true) drain.arm();
     };
     let recoveredNetwork = false;
     let recoveredMedia = false;
@@ -472,6 +668,7 @@ export function useHlsPlayback(
     setWindowSeconds(0);
     // 이전 스트림의 자리도 남기지 않는다: 새 스트림 채팅이 앞 방송 시각을 따른다
     measure(generation, () => null);
+    setEngine(null);
 
     const onPlay = () => {
       setPlaying(true);
@@ -480,6 +677,19 @@ export function useHlsPlayback(
       pausedAtMsRef.current = null;
       // 사용자가 다시 틀었다 — 멈춘 채 넘긴 것이 교체로 이어지지 않았어도 다음 재생기의 자동 재생을 막지 않는다
       swap.userPlayed();
+      // 멈춘 동안 붙잡은 404 가 있으면 이 목록은 낡았다 — 하한 안팎을 보지 않고 세션에 올려 그때 국면의 404 행으로
+      // 잇게 한다(되감기면 다시 받는 중이 아니고 처음 보는 조각일 때 같은 목록 다시 받기 · 다시 받는 중(화면 전)이거나
+      // 이미 다시 받은 조각이면 막힘 — 넘길 조각은 애초에 붙잡지 않는다 · 끝남 대기면
+      // 녹화로 정하기 전이면 막힘 · 정한 뒤면 마지막 확인 · 다시보기 제안이면 받기를 멈춘 채 남은 버퍼를 튼다). 옛 자리
+      // 시크 · 제자리 다시 받기(startLoad)는 하지 않는다(계획 4-3). 고갈 감시는 이때 무장한다 — 멈춘 채 버퍼 밖으로
+      // 옮겼으면 무장이 곧바로 알린다(POK-547)
+      if (goneWhilePaused !== null) {
+        const segment = goneWhilePaused;
+        goneWhilePaused = null;
+        hooksRef.current.onDvrSegmentGone?.(generation, segment);
+        armDrain();
+        return;
+      }
       const axis = sessionActive() ? readAxis() : null;
       if (pausedAtMs !== null && axis !== null && pausedAtMs < axis.view.lowerMs) {
         hooksRef.current.onSeekRequest?.(pausedAtMs, axis.view);
@@ -497,6 +707,10 @@ export function useHlsPlayback(
       hooksRef.current.onPlaying?.();
     };
     const onPause = () => {
+      if (swap.takeAppPause()) {
+        setPlaying(false);
+        return;
+      }
       swap.userPaused();
       setPlaying(false);
       if (!sessionActive()) return;
@@ -520,7 +734,7 @@ export function useHlsPlayback(
       if (moved.kind === 'reload') load.set(moved.to);
       // 멈춘 채 옮겼으면 재개 판정도 옮긴 자리로 한다 — 옛 자리로 세션에 다시 넘겨 알림이 겹치지 않게
       if (video.paused && pausedAtMsRef.current !== null) {
-        pausedAtMsRef.current = programDateAt(details.fragments, moved.to);
+        pausedAtMsRef.current = programDateAt(fragmentsOf(details), moved.to);
       }
       const now = Date.now();
       const quietMs = FLOOR_NOTICE_QUIET_TD * details.targetduration * 1000;
@@ -529,8 +743,10 @@ export function useHlsPlayback(
       hooksRef.current.onNotice?.(SESSION_NOTICES.oldest);
     };
     const onVolumeChange = () => {
-      setMuted(video.muted);
-      setVolumeState(Math.round(video.volume * 100));
+      const sound = { muted: video.muted, volume: Math.round(video.volume * 100) };
+      setMuted(sound.muted);
+      setVolumeState(sound.volume);
+      hooksRef.current.onSoundChange?.(sound);
     };
     // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 라이브의 멈춘 자리(5.3.1절)도 여기서
     // 본다
@@ -566,14 +782,16 @@ export function useHlsPlayback(
     const checkStall = () => {
       const details = hlsRef.current?.latestLevelDetails;
       if (endSent || !hooksRef.current.onEndReached || !details) return;
-      const list = loadedList(details.fragments, details.targetduration);
-      const atMs = programDateAt(details.fragments, video.currentTime);
+      const fragments = fragmentsOf(details);
+      const list = loadedList(fragments, details.targetduration);
+      const atMs = programDateAt(fragments, video.currentTime);
       if (list === null || atMs === null) return;
       if (endStalled({ list, atMs, waiting, sinceGrowMs: Date.now() - lastGrowAt })) reachEnd();
     };
     // 시차는 정수 초로 반올림돼 있어 같은 값이면 setState가 리렌더를 건너뛴다
     const paint = () => {
       checkStall();
+      drain.check();
       if (sessionActive()) {
         paintSession();
         return;
@@ -592,7 +810,7 @@ export function useHlsPlayback(
       if (video.readyState < HAVE_CURRENT_DATA) return;
       // 시각은 조각 목록으로 센다(programDateAt) — 같은 초 · 같은 시차 · 같은 재생 여부면
       // 앞 값을 둔다(nextLivePosition)
-      const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
+      const fragments = fragmentsOf(hlsRef.current?.latestLevelDetails);
       const at = programDateAt(fragments, video.currentTime);
       const edge = programDateAt(fragments, liveEdgePosition(range, sync));
       const run = playedRunMs(video.played, video.currentTime);
@@ -613,6 +831,21 @@ export function useHlsPlayback(
     video.addEventListener('timeupdate', load.notePlayhead);
     video.addEventListener('seeked', load.notePlayhead);
     video.addEventListener('ended', reachEnd);
+    // 받기를 멈춘 되감기 재생기의 고갈 감시(POK-547). 위 리스너보다 뒤에 서야 같은 waiting 사건에서 onWaiting 이 먼저
+    // waiting 을 세운다 — 끝 셈(settleEnd)이 그 값으로 목록 끝 정체를 본다. 무장하기 전에는 아무것도 셈하지 않는다
+    const drain = watchDvrDrain(video, {
+      settleEnd: () => {
+        checkStall();
+        return endSent;
+      },
+      epoch: () => hooksRef.current.positionEpoch?.() ?? 0,
+      onChange: (drained, atTime) =>
+        hooksRef.current.onDvrDrain?.(
+          generation,
+          drained,
+          programDateAt(fragmentsOf(hlsRef.current?.latestLevelDetails), atTime),
+        ),
+    });
     // 일시정지 중엔 timeupdate가 멎지만 라이브 엣지는 계속 흐른다 — 시차 표시용 보조 틱
     const paintTimer = window.setInterval(paint, 1000);
 
@@ -628,30 +861,42 @@ export function useHlsPlayback(
         return;
       }
       if (disposed) return;
+      // 받지도 틀지도 않는다 — hls.js 생성 · 받기 · 자동 재생 · 기본 HLS 의 src 가 모두 이 뒤다. 기다리는 사이 세션이
+      // 받기 중단을 적었을 수 있어 한 번 더 읽는다(POK-547)
+      if (held || heldNow()) return;
 
       if (HlsCtor.isSupported()) {
+        setEngine('hlsjs');
         const base = kind === 'live' ? HLS_LIVE_CONFIG : HLS_REWIND_CONFIG;
         // 시작 시각이 있으면 자동 시작을 끄고 첫 목록에서 그 자리를 한 번만 정한다(RC-7 · R15). 라이브는 기동 문지기가
-        // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13)
-        const hls = new HlsCtor(startAtMs === null ? base : { ...base, autoStartLoad: false });
+        // 정하고, 잘린 시작은 틀지 않고 내린 뒤 세션에 알린다(POK-200 c13). 다시보기는 시작 시각이 없어도 정한다 — 맨 앞
+        // GAP 을 건너 첫 내용 조각에서 받는다(POK-573 · startConfig)
+        const hls = new HlsCtor(startConfig(base, { kind, startAtMs }));
         hlsRef.current = hls;
+        // 라이브는 구성 시차 스위치를 켰을 때만 단다(5.4절)
+        videoStarts =
+          kind === 'live' && !LIVE_PTS_CORRECTION ? null : trackVideoStarts(hls, HlsCtor.Events);
+        startOfRef.current = videoStarts?.startOf ?? noVideoStart;
         armStart(hls, HlsCtor.Events, { kind, startAtMs, strictStart }, load, () => {
           if (disposed) return;
+          releaseVideoStarts();
           hls.destroy();
           hlsRef.current = null;
           hooksRef.current.onStartTruncated?.();
         });
         hls.on(HlsCtor.Events.LEVEL_UPDATED, (...[, data]) => {
           if (kind === 'rewind') keepRewindFloor(hls, data.details);
-          const list = loadedList(data.details.fragments, data.details.targetduration);
+          const list = loadedList(fragmentsOf(data.details), data.details.targetduration);
           if (list !== null) {
             if (lastEndMs === null || list.lastEndMs > lastEndMs) {
               lastGrowAt = Date.now();
               endSent = false;
             }
             lastEndMs = list.lastEndMs;
-            hooksRef.current.onListLoaded?.({ url: src, ...list });
+            const cut = firstList ? firstStartCut(kind, startAtMs, data.details) : {};
+            hooksRef.current.onListLoaded?.({ url: src, ...list, ...cut });
           }
+          firstList = false;
           // ENDLIST 는 「조각이 더 붙지 않는다」뿐이다 — 끝 도달과 따로 올린다(cx H1)
           if (!data.details.live && !endlistSent) {
             endlistSent = true;
@@ -659,6 +904,27 @@ export function useHlsPlayback(
           }
         });
         hls.on(HlsCtor.Events.ERROR, (_event, data) => {
+          // 되감기 조각 404 는 세션 고리가 있으면 첫 비치명에서 가로챈다 — hls.js 가 예약한 다시 받기를 끊고 세션에
+          // 올린다(POK-528 · 사람이 멈춘 동안이면 다시 틀 때 — reportGone). 고리가 없으면 지금 동작 그대로다. 세션이 아는
+          // 구멍을 hls.js 가 틈으로 넘기면 가로채지 않는다 — 그 판정은 붙잡기(reportGone)보다 앞이다(POK-528 후속)
+          const gone = hooksRef.current.onDvrSegmentGone;
+          const onGone =
+            gone === undefined ? undefined : (segment: DvrSegment) => reportGone(gone, segment);
+          const passHole = (segment: DvrSegment) =>
+            hooksRef.current.isKnownDvrHole?.(generation, segment) === true;
+          if (
+            kind === 'rewind' &&
+            consumeDvrSegmentGone(
+              hls,
+              data,
+              HlsCtor.ErrorTypes,
+              HlsCtor.ErrorDetails,
+              onGone,
+              passHole,
+            )
+          ) {
+            return;
+          }
           if (!data.fatal) return;
           // 403은 출입증 쿠키가 없다는 뜻이다(만료 · 다른 탭이 쿠키 한도를 넘겨 지워짐). 다시 불러도 또 403이라 한 번 더 해 보지
           // 않고 출입증을 버린다: 라이브 화면이 1분 안에 다시 받고 재생기를 새로 세운다(POK-410)
@@ -674,6 +940,7 @@ export function useHlsPlayback(
               reportPlaybackForbidden(key);
               setStopped({ src, why: 'forbidden' });
             }
+            releaseVideoStarts();
             hls.destroy();
             hlsRef.current = null;
             return;
@@ -681,7 +948,8 @@ export function useHlsPlayback(
           // 라이브 목록 404 = 라이브 닫힘(끝 도달로 친다) · 400 = 송출 재시작 뒤 옛 _HLS_msn
           // (bluenviron/mediamtx#4320) — 세션이 재생기를 새로 세운다. hls.js 는 4xx 를 다시 해
           // 보지 않는다(RC-16). 목록 오류만 본다: 조각 404 도 hls.js 재시도를 다 쓰면 치명으로 오지만 목록은 살아
-          // 있을 수 있어 아래의 한 번 다시 받기로 보낸다(cx H1)
+          // 있을 수 있어 아래의 한 번 다시 받기로 보낸다(cx H1 — 세션에 묶인 되감기 재생기의 미디어 조각 404 는
+          // 위에서 첫 비치명 때 가로채므로 여기 오지 않는다)
           const code = data.response?.code;
           const { onLiveClosed, onLive400 } = hooksRef.current;
           const liveGone = code === 404 ? onLiveClosed : code === 400 ? onLive400 : undefined;
@@ -692,16 +960,39 @@ export function useHlsPlayback(
             listError &&
             liveGone
           ) {
+            releaseVideoStarts();
             hls.destroy();
             hlsRef.current = null;
             liveGone();
             return;
           }
+          // 다시보기 · 되감기의 첫 목록 치명은 곧바로 끊김이다(POK-528 c8). 첫 목록이 없으면 변이가 없어 아래 한 번 다시
+          // 받기가 아무것도 다시 청하지 않는다(isFirstListFailure). 라이브는 넣지 않는다 — 목록 404 · 400 은 위 갈래가 세션에
+          // 올리고, 그 밖 코드는 지금 동작 그대로다(범위 밖)
+          if (
+            kind !== 'live' &&
+            isFirstListFailure(data, HlsCtor.ErrorTypes, HlsCtor.ErrorDetails)
+          ) {
+            console.error('[player] 첫 목록을 받지 못했어요:', data.details, data.response?.code);
+            setStopped({ src, why: 'broken' });
+            releaseVideoStarts();
+            hls.destroy();
+            hlsRef.current = null;
+            return;
+          }
           // 최소 복구: 각 1회만 시도, 재발 시 정리하고 영상 위에 알린다
           if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && !recoveredNetwork) {
             recoveredNetwork = true;
+            // 기동 전이면 정해 둔 받기 위치(load)에서 다시 받는다 — 인자 없는 startLoad 는 재생점 0 에서 hls.js 가 자리를
+            // 고르게 해(다시보기면 영상 0초) 맨 앞 GAP 다시보기가 다시 GAP 에서 멎는다. 기동 뒤에는 장부가 비어 지금처럼
+            // hls.js 가 재생점에서 받는다
+            const restartAt = load.current();
             load.rememberPlayhead();
-            hls.startLoad();
+            if (restartAt === null) {
+              hls.startLoad();
+            } else {
+              hls.startLoad(restartAt);
+            }
             return;
           }
           if (data.type === HlsCtor.ErrorTypes.MEDIA_ERROR && !recoveredMedia) {
@@ -712,6 +1003,7 @@ export function useHlsPlayback(
           // 화면은 마지막 프레임에서 멎는다: 영상 위 덮개로 알리고(playbackError) 원인은 로그로 남긴다
           console.error('[player] 복구 불가 hls.js 오류:', data.type, data.details);
           setStopped({ src, why: 'broken' });
+          releaseVideoStarts();
           hls.destroy();
           hlsRef.current = null;
         });
@@ -722,12 +1014,13 @@ export function useHlsPlayback(
           // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번)
           if (swap.holds(generation)) return;
           // 자동재생 거부는 reject로 온다 — playing=false로 남아 재생 버튼이 노출된다
-          video.play().catch(() => {});
+          autoplay();
         });
         hls.attachMedia(video);
         // index.m3u8의 302(세션 파라미터)는 기본 로더가 따라간다 — 커스텀 loader 금지 (.env.example 참조)
         hls.loadSource(src);
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        setEngine('native');
         // Safari 네이티브 HLS — liveSyncPosition이 없어 엣지 스냅은 백오프 경로를 탄다
         // <video>는 응답 코드를 못 읽어 첫 바이트를 물어 403인지 본다(다시보기와 같은 길). 403이면 출입증을 버리고 다시 받아 둔다:
         // 라이브 화면이 1분 안에 재생기를 새로 세운다. 기본 재생은 스스로 다시 해 보므로 error가 왔으면 멎은 것이다(PR #347 codex)
@@ -750,8 +1043,9 @@ export function useHlsPlayback(
         video.addEventListener('error', onNativeError);
         video.addEventListener('loadeddata', onHealed);
         video.src = src;
-        video.play().catch(() => {});
+        autoplay();
       } else {
+        setEngine('none');
         console.warn('[player] HLS 재생 불가 — hls.js 미지원 + 네이티브 HLS 없음 (Chrome 권장)');
       }
     })();
@@ -759,6 +1053,7 @@ export function useHlsPlayback(
     return () => {
       disposed = true;
       window.clearInterval(paintTimer);
+      drain.dispose();
       video.removeEventListener('play', onPlay);
       video.removeEventListener('playing', onPlaying);
       video.removeEventListener('pause', onPause);
@@ -771,13 +1066,24 @@ export function useHlsPlayback(
       video.removeEventListener('ended', reachEnd);
       if (onNativeError !== null) video.removeEventListener('error', onNativeError);
       video.removeEventListener('loadeddata', onHealed);
+      releaseVideoStarts();
       hlsRef.current?.destroy();
       hlsRef.current = null;
       // src 제거만으로는 네트워크·디코더가 붙어 있다 — load()까지 해야 리소스가 해제된다
       video.removeAttribute('src');
       video.load();
     };
-  }, [videoRef, source.kind, src, source.generation, readAxis, sessionActive, swap, measure]);
+  }, [
+    videoRef,
+    source.kind,
+    src,
+    source.generation,
+    readAxis,
+    sessionActive,
+    swap,
+    measure,
+    fragmentsOf,
+  ]);
 
   return {
     playing,
@@ -802,9 +1108,12 @@ export function useHlsPlayback(
     seekToMs,
     seekToLiveEdge,
     keepPausedOnSwap,
+    holdFrame,
+    dropPauseMark,
     // 화질은 표시용: 렌디션이 하나라 고를 것이 없어 메뉴를 안 보인다(POK-253)
     settingsMenu: false,
     replay: false,
+    recordingEnded: hooks.recordingEnded === true,
     playbackError: stopped !== null && stopped.src === src ? STOPPED_NOTES[stopped.why] : null,
     setQuality,
     // 표시 전용: lowLatencyMode는 Hls 생성자 전용 옵션이라 실반영엔 인스턴스 재생성이
@@ -813,5 +1122,7 @@ export function useHlsPlayback(
     markClip,
     wake,
     sleep,
+    engine,
+    currentProgramDateMs,
   };
 }

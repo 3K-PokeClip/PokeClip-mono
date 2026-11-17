@@ -57,9 +57,12 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 // resetTables 는 케이스 사이에 표를 비운다. M2 신설 표와 M6 표 둘(하한 · outbox)까지 함께 비운다 — 여섯 표를
 // 한 문장에 넣으면 상호 FK(segments→sessions)에 CASCADE 없이도 통과한다. TRUNCATE 는 행 DELETE 트리거를 부르지
 // 않아 하한이 따라 생기지 않는다 — 하한 표를 빼면 앞 케이스가 남긴 하한에 다음 케이스 고정물 INSERT 가 23514 로 걸린다.
+// PDT 게이트(한 행)는 지우지 않고 스위치 · 래치를 NULL 로 되돌린다 — 앞 케이스가 세운 래치가 남으면 칸 없는 고정물 INSERT 가
+// 23514 legacy_writer_refused 로 걸린다. 표를 비운 뒤라 판 2 행이 없어 래치 낮추기가 거부되지 않는다.
 func resetTables(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx,
-		"TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions, stream_seq_floors, broadcast_lifecycle_outbox")
+		"TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions, stream_seq_floors, broadcast_lifecycle_outbox;"+
+			" UPDATE stream_timing_gate SET new_round_version = NULL, highest_version = NULL, changed_at = NULL, changed_by = NULL")
 	return err
 }
 

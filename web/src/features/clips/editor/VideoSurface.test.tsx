@@ -148,6 +148,24 @@ describe('VideoSurface', () => {
     expect(drawImage).toHaveBeenCalledTimes(3);
   });
 
+  it('멈춘 영상을 옮기면 옮기기 시작에 프레임 콜백을 걸어 착지한 프레임을 한 번 더 그린다: WebKit 은 seeked 때 묵은 그림일 수 있다', () => {
+    const { resize } = stubResizeObserver();
+    const { node, request, videoFrame } = videoNode();
+    render(<VideoSurface video={node} />);
+    resize({ width: 320, height: 180 });
+    drawImage.mockClear();
+
+    node.dispatchEvent(new Event('seeking'));
+    node.dispatchEvent(new Event('seeking'));
+    node.dispatchEvent(new Event('seeked'));
+    const afterSeeked = drawImage.mock.calls.length;
+    videoFrame();
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(afterSeeked).toBe(1);
+    expect(drawImage).toHaveBeenCalledTimes(2);
+  });
+
   it('멈춘 동안 크롭을 바꾸면 새 자리로 한 번 그린다', () => {
     const { resize } = stubResizeObserver();
     const { node } = videoNode();

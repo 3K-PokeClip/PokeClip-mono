@@ -1,6 +1,8 @@
 package com.pokeclip.clip.render;
 
+import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.recipe.Recipe;
 import com.pokeclip.clip.recipe.RecipeDocument;
@@ -11,11 +13,10 @@ import com.pokeclip.clip.render.RenderErrors.MessageTooLargeException;
 import com.pokeclip.clip.render.RenderErrors.RecipeNotRenderableException;
 import com.pokeclip.clip.render.RenderErrors.RenderUnavailableException;
 import com.pokeclip.clip.render.RenderErrors.SourceNotReadyException;
+import com.pokeclip.clip.render.RenderErrors.SourceUnrenderableException;
+import com.pokeclip.clip.segment.CutDecision;
+import com.pokeclip.clip.segment.LedgerCutPlanner;
 import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
-import com.pokeclip.clip.segment.SegmentSource;
-import com.pokeclip.clip.segment.SegmentWindow;
-import com.pokeclip.clip.segment.SegmentWindowAssembler;
-import com.pokeclip.clip.segment.StreamSegmentReader;
 import com.pokeclip.clip.upload.ClipUploadRepository;
 import com.pokeclip.clip.upload.UploadAutoStarter;
 import com.pokeclip.clip.upload.UploadErrors;
@@ -64,19 +65,12 @@ public class RenderRequestService {
 
     private static final Logger log = LoggerFactory.getLogger(RenderRequestService.class);
 
-    /**
-     * 이웃 조각 사이에 허용하는 재생 시각 구멍. 조립기는 <b>번호 연속</b>만 보는데, 송출이 끊겼다 이어지면 번호는 이어져도
-     * 재생 시각이 건너뛴다 — 그대로 주문하면 일꾼이 가운데가 빈 영상을 조용히 만든다(PR #188 1판 codex P1). 정상 조각도
-     * 시각이 딱 맞지는 않는다(실측 2026-09-13 방송: 4,000ms 조각의 시작 간격 4,110ms) — 그 흔들림은 통과시키고 1초 넘는 구멍만 거절한다.
-     */
-    static final long MAX_PLAYBACK_GAP_MS = 1_000;
-
     private final ObjectProvider<RenderQueueClient> queue;
     private final RenderProperties properties;
     private final BroadcastAccessGuard guard;
     private final BroadcastRepository broadcasts;
     private final RecipeRepository recipes;
-    private final StreamSegmentReader segments;
+    private final LedgerCutPlanner cuts;
     private final ClipInserter inserter;
     private final ClipRepository clips;
     private final RenderJobRepository jobs;
@@ -93,7 +87,7 @@ public class RenderRequestService {
 
     RenderRequestService(ObjectProvider<RenderQueueClient> queue, RenderProperties properties,
                          BroadcastAccessGuard guard, BroadcastRepository broadcasts, RecipeRepository recipes,
-                         StreamSegmentReader segments, ClipInserter inserter, ClipRepository clips,
+                         LedgerCutPlanner cuts, ClipInserter inserter, ClipRepository clips,
                          RenderJobRepository jobs, RenderPublisher publisher, ClipUploadRepository uploads,
                          TransactionTemplate transactions, ObjectMapper mapper,
                          ObjectProvider<UploadQueueClient> uploadQueue, ObjectProvider<UploadThumbnailStore> thumbnailStore,
@@ -103,7 +97,7 @@ public class RenderRequestService {
         this.guard = guard;
         this.broadcasts = broadcasts;
         this.recipes = recipes;
-        this.segments = segments;
+        this.cuts = cuts;
         this.inserter = inserter;
         this.clips = clips;
         this.jobs = jobs;
@@ -151,6 +145,7 @@ public class RenderRequestService {
      * @throws RenderUnavailableException 렌더 주문줄이 꺼져 있다 (503, 갈래 c)
      * @throws RecipeNotRenderableException 구간이 없는 템플릿이다 (400 {@code cut}, 갈래 c)
      * @throws SourceNotReadyException 구간의 조각이 아직 다 안 올라왔다 (409, 갈래 c)
+     * @throws SourceUnrenderableException 구간이 녹화 밖이거나 영상 조각이 없다 — 다시 물어도 같다 (422, 갈래 c)
      * @throws MessageTooLargeException 주문서가 상한을 넘는다 (422, 갈래 c)
      */
     public Requested request(String requesterSubject, String streamId, long recipeId, String requestJson,
@@ -253,7 +248,8 @@ public class RenderRequestService {
     }
 
     /**
-     * 렌더 주문(지금까지의 길). 순서: 주문줄 켜짐(503) → 구간(400) → 조각 준비(409) → 선점 + 주문 기록(+ 의도)이 한 트랜잭션 → 커밋 뒤 발행.
+     * 렌더 주문(지금까지의 길). 순서: 주문줄 켜짐(503) → 구간(400) → 만료(410) → 컷 판정(409 · 422) → 선점 + 주문 기록(+ 의도)이 한
+     * 트랜잭션 → 커밋 뒤 발행.
      *
      * @param intent 「렌더 뒤 업로드」 의도. 없으면 {@code null}(렌더만)
      */
@@ -271,24 +267,15 @@ public class RenderRequestService {
         if (Boolean.TRUE.equals(broadcasts.isVodExpired(streamId))) {
             throw new VodExpiredException();
         }
-        // 조각이 「연속 uploaded」로 구간을 다 덮어야 주문한다. 조립기의 판정 그대로다(POK-117) — 축만 재생 축이다.
-        // 조각 장부는 물리 키로 찾는다(POK-233). 자격 판정을 지났으니 줄은 있다
-        String ingestKey = broadcasts.findIngestKeyByStreamId(streamId).orElse(streamId);
-        List<SegmentSource> overlapping = segments.findOverlappingByPlaybackTime(
-                ingestKey, recipe.getCutInAtMs(), recipe.getCutOutAtMs());
-        SegmentWindow window = SegmentWindowAssembler.assemble(
-                overlapping.stream().map(SegmentSource::asRow).toList(), recipe.getCutInAtMs(), recipe.getCutOutAtMs());
-        if (!window.complete()) {
-            throw new SourceNotReadyException();
-        }
-        List<SegmentSource> taken = overlapping.stream()
-                .filter(s -> window.segments().stream().anyMatch(r -> r.seq() == s.seq())).toList();
-        if (hasPlaybackGap(taken)) {
-            throw new SourceNotReadyException();
-        }
-
+        // 컷을 회차 귀속 행 위 계획으로 옮긴다(POK-196 · 설계 r7 9.2). 조각 장부는 방송의 물리 키로 읽는다(POK-233).
+        // 자격 판정을 지났으니 줄은 있다 — 그 사이 지워지는 경합(스트리머 정리)도 자격 판정과 같은 404 다(500 으로 새지 않게)
+        Broadcast broadcast = broadcasts.findByStreamId(streamId)
+                .orElseThrow(() -> new AccessErrors.NotViewableException("broadcast_not_found"));
         RecipeDocument document = RecipeDocument.fromStored(mapper, recipe);
-        String trackManifest = broadcasts.findByStreamId(streamId).map(b -> b.getTrackManifest()).orElse(null);
+        CutDecision.Ready plan = readyOrThrow(cuts.plan(broadcast, recipe.getId(), recipe.getCutInAtMs(),
+                recipe.getCutOutAtMs(), document.subtitles() == null ? List.of() : document.subtitles().segments(),
+                Instant.now()));
+        String trackManifest = broadcast.getTrackManifest();
 
         // 선점 + 주문 기록(+ 의도)이 한 트랜잭션. 선점에 졌으면 진행 중인 것을 돌려준다. 의도가 있으면 갈래 (a)·(b)와 같은 길
         // (joinExisting)로 간다: 막던 영상 줄을 잠그고 다시 본다. 의도는 선점 <b>뒤에</b> 쓴다: 먼저 쓰면 의도 줄 → 영상 줄 순서로 잠가
@@ -322,7 +309,7 @@ public class RenderRequestService {
             }
             UUID jobId = UUID.randomUUID();
             String payload = RenderEnvelope.build(mapper, jobId, clipId, streamId, recipe.getRecipeVersion(),
-                    document, taken, properties.segmentBucket(), properties.outputBucket(), trackManifest,
+                    document, plan, properties.segmentBucket(), properties.outputBucket(), trackManifest,
                     Instant.now());
             if (payload.getBytes(StandardCharsets.UTF_8).length > properties.maxMessageBytes()) {
                 // 트랜잭션이 통째로 되감긴다 — 선점한 줄도 사라진다.
@@ -345,6 +332,15 @@ public class RenderRequestService {
             }
         }
         return requested;
+    }
+
+    /** 아직(409)과 종국 거절(422)은 예외로, 계획은 그대로 돌려준다. 거절 사유는 닫힌 목록이다(설계 r7 9.5). */
+    private static CutDecision.Ready readyOrThrow(CutDecision decision) {
+        return switch (decision) {
+            case CutDecision.Ready ready -> ready;
+            case CutDecision.NotReady notReady -> throw new SourceNotReadyException();
+            case CutDecision.Unrenderable rejected -> throw new SourceUnrenderableException(rejected.reason().wire());
+        };
     }
 
     /** 본문에서 {@code upload} 칸을 꺼낸다. 없거나 {@code null}이면 렌더만이다. multipart인데 없으면 400이다. */
@@ -411,18 +407,6 @@ public class RenderRequestService {
         } catch (IOException e) {
             throw new UploadErrors.ThumbnailStoreUnavailableException(e);
         }
-    }
-
-    /** 이웃 조각의 재생 시각이 {@link #MAX_PLAYBACK_GAP_MS}보다 벌어진 자리가 있으면 true. 번호가 이어져도 시각이 건너뛴 방송이다. */
-    static boolean hasPlaybackGap(List<SegmentSource> taken) {
-        for (int i = 1; i < taken.size(); i++) {
-            SegmentSource prev = taken.get(i - 1);
-            long expectedStart = prev.startAtMs() + prev.durationMs();
-            if (taken.get(i).startAtMs() - expectedStart > MAX_PLAYBACK_GAP_MS) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** @throws ClipNotFoundException 그 방송에 그 번호의 영상이 없다 (404) */

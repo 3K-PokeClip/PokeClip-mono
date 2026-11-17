@@ -6,3 +6,19 @@
   height: 100%;
   object-fit: cover;
 }
+
+/* 자리표시(placeholder)를 준 칸만: 다 받기 전에는 숨겼다가 서서히 나타난다. 받는 동안 위에서부터 끊겨 그려지지 않게.
+   placeholder는 앞 형제라 이 img(absolute)가 그 위에 쌓이고, 나타나는 동안 아래에 남는다. 시간을 바꾸면 ThumbnailImage.tsx의 FADE_MS도 */
+.img {
+  transition: opacity 0.2s ease;
+}
+
+.img[data-pending] {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .img {
+    transition: none;
+  }
+}

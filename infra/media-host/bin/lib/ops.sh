@@ -1,9 +1,10 @@
 # shellcheck shell=bash
 #
 # Media 상자 운영 스크립트(loopback-health · paths-count · paths-list ·
-# secret-count · ingest-auth-deny-sync · ingest-auth-ip-limit)가 함께 쓰는
-# 부품 — 상한 시간이 있는 실행 · 스크래치 디렉터리 · compose 서비스 컨테이너
-# 찾기 · Secrets Manager 비밀 읽기 · 응답기만 재생성.
+# secret-count · ingest-auth-deny-sync · ingest-auth-ip-limit ·
+# sidecar-round-keys)가 함께 쓰는 부품 — 상한 시간이 있는 실행 · 스크래치
+# 디렉터리 · compose 서비스 컨테이너 찾기 · Secrets Manager 비밀 읽기 · 응답기만
+# 재생성 · 사이드카만 재생성.
 #
 # 이 파일은 source 해서 쓴다(실행하지 않는다). 상자(AL2023 · bash 5)와 kty
 # 로컬(macOS · bash 3.2) 양쪽에서 돈다 — bash 3.2 문법과 두 계열에 공통인 도구
@@ -16,9 +17,10 @@
 #                           스크립트와 같은 기본값).
 #   MEDIA_COMPOSE_FILE      compose 파일(절대 경로). 기본
 #                           /etc/pokeclip-media/compose.yml(시작 스크립트와
-#                           같은 기본값). 응답기 재생성만 쓴다.
-#   MEDIA_OPS_HEALTH_WAIT   응답기 재생성 뒤 healthy 를 기다리는 상한(초,
-#                           1–600). 기본 120. 응답기 재생성만 쓴다.
+#                           같은 기본값). 응답기 · 사이드카 재생성만 쓴다.
+#   MEDIA_OPS_HEALTH_WAIT   재생성 뒤 기다리는 상한(초, 1–600). 기본 120.
+#                           응답기 재생성은 healthy 를, 사이드카 스위치
+#                           스크립트는 새 컨테이너의 기동 신호 줄을 기다린다.
 
 readonly OPS_DEFAULT_TIMEOUT=30
 readonly OPS_MAX_TIMEOUT=600
@@ -39,6 +41,8 @@ readonly OPS_SERVICE_LABEL='label=com.docker.compose.service='
 readonly OPS_DEFAULT_HEALTH_WAIT=120
 # 송출 인증 응답기의 compose 서비스 이름.
 readonly OPS_INGEST_AUTH_SERVICE='ingest-auth'
+# 세그먼트 인덱서 사이드카의 compose 서비스 이름.
+readonly OPS_SIDECAR_SERVICE='sidecar'
 
 ops_scratch=""
 ops_child_pid=""
@@ -285,4 +289,31 @@ ops::recreate_ingest_auth() {
     sleep 1
   done
   return 2
+}
+
+#######################################
+# 사이드카만 재생성한다(--no-deps — mediamtx · nginx 와 시작 스크립트의 부착 up
+# 은 그대로). env_file 은 컨테이너를 만들 때만 읽히므로 restart 가 아니라
+# 재생성이다. 사이드카에는 healthcheck 가 없어 기다리지 않는다 — 기동 확인은
+# 부르는 쪽이 새 컨테이너 저널로 한다. 새 컨테이너는 상태와 무관하게(재시작
+# 중이어도) 서비스의 컨테이너 하나이고 앞 ID 와 달라야 한다. compose 출력은
+# 표준 오류로 보낸다(표준 출력은 판정 줄 자리).
+# Arguments:
+#   compose 파일, 명령 한 번의 상한(초), 재생성 전 컨테이너 ID.
+# Outputs:
+#   새 컨테이너 ID(성공했을 때만).
+# Returns:
+#   0 재생성됨 / 1 재생성 실패 · 상한 초과 · 새 컨테이너가 하나가 아님 · ID 가
+#   그대로.
+#######################################
+ops::recreate_sidecar() {
+  local file="$1" limit="$2" before="$3" project ids
+  project="$(ops::project)"
+  ops::bounded "${limit}" docker compose -p "${project}" -f "${file}" \
+    up -d --no-deps --force-recreate "${OPS_SIDECAR_SERVICE}" \
+    </dev/null >&2 || return 1
+  ids="$(ops::containers "${OPS_SIDECAR_SERVICE}" all "${limit}")" || return 1
+  [[ -n "${ids}" && "${ids}" != *$'\n'* && "${ids}" != "${before}" ]] \
+    || return 1
+  printf '%s\n' "${ids}"
 }

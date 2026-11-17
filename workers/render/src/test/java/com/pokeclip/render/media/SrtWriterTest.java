@@ -5,6 +5,7 @@ import com.pokeclip.render.recipe.Recipe.SubtitleSegment;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,5 +45,23 @@ class SrtWriterTest {
     void 컷_안에_하나도_없으면_빈_문자열() {
         assertThat(SrtWriter.clipped(List.of(new SubtitleSegment(0, 1_000, "밖")), cut)).isEmpty();
         assertThat(SrtWriter.render(List.of())).isEmpty();
+    }
+
+    /**
+     * 새 꼴: 결과 µs 두 끝을 둘 다 ms 로 내린다. 번인(libass)이 프레임 시각을 ms 로 내려 비교하므로, 프레임 자리에 놓인 끝을
+     * 올리면 그 프레임까지 자막이 하나 더 보인다.
+     */
+    @Test
+    void 결과_µs_두_끝을_ms_로_내린다() {
+        assertThat(SrtWriter.onResult(533_333, 1_066_667, "가"))
+                .contains(new SubtitleSegment(533, 1_066, "가"));
+        assertThat(SrtWriter.onResult(0, 9_000_000, "끝까지"))
+                .contains(new SubtitleSegment(0, 9_000, "끝까지"));
+    }
+
+    @Test
+    void 내린_길이가_0_인_자막과_빈_글자_자막은_뺀다() {
+        assertThat(SrtWriter.onResult(1_000_100, 1_000_900, "가")).isEqualTo(Optional.empty());
+        assertThat(SrtWriter.onResult(0, 1_000_000, " \n ")).isEqualTo(Optional.empty());
     }
 }

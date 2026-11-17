@@ -45,19 +45,30 @@ public final class Composition {
     /** 흐린 바탕은 1/4 크기에서 흐리고 키운다 — 흐린 그림은 해상도가 필요 없고, 1080×1920에서 바로 흐리면 몇 배 느리다. */
     private static final int BLUR_DOWNSCALE = 4;
 
+    /** 두 입력 합성을 먼저 끝난 입력에서 끝내는 framesync 옵션(새 꼴 최종 단계 — {@link #plan(Output, int, int, String, int)}). */
+    private static final String SHORTEST = "shortest=1";
+
     private Composition() {
     }
 
-    /** 영상 필터 입력으로 쓸 그림 한 장. 필터의 입력 번호는 원본(0) 다음부터 이 목록 순서다. */
+    /** 영상 필터 입력으로 쓸 그림 한 장. 필터의 입력 번호는 {@link Plan#firstImageInput}부터 이 목록 순서다. */
     public record Image(String name, BufferedImage image) {
     }
 
     /**
      * @param graph  {@code [0:v:0]}에서 시작해 <b>출력 이름표 없이 끝나는</b> 필터. 부르는 쪽이 {@code ,subtitles=…}이나 {@code [vout]}을
      *               바로 잇는다
-     * @param images 필터가 {@code [1:v]}, {@code [2:v]}…로 읽는 그림. 부르는 쪽이 작업 폴더에 쓰고 {@code -loop 1 -i}로 넣는다
+     * @param images 필터가 {@code [firstImageInput:v]}, 그다음 번호…로 읽는 그림. 부르는 쪽이 작업 폴더에 쓰고
+     *               {@code -loop 1 -i}로 넣는다
+     * @param firstImageInput 첫 그림의 ffmpeg 입력 번호. 옛 꼴은 원본 바로 뒤라 1, 새 꼴 최종 단계는 영상 이음 목록(0)과
+     *                        소리 묶음 입력 뒤라 1 + 묶음 수다. 부르는 쪽이 그림을 정확히 이 번호부터 넣어야 한다
      */
-    public record Plan(String graph, List<Image> images) {
+    public record Plan(String graph, List<Image> images, int firstImageInput) {
+
+        /** 옛 꼴 — 그림이 원본(0) 바로 뒤 입력이다. */
+        public Plan(String graph, List<Image> images) {
+            this(graph, images, 1);
+        }
     }
 
     /**
@@ -65,13 +76,38 @@ public final class Composition {
      * @throws com.pokeclip.render.job.RenderFailure 층의 자르는 자리와 놓일 자리의 비율이 1% 넘게 다르면(VALIDATION)
      */
     public static Plan plan(Output output, int srcW, int srcH, String prefix) {
+        return build(output, srcW, srcH, prefix, 1, false);
+    }
+
+    /**
+     * 새 꼴 최종 단계의 필터. 그림 입력 번호를 {@code firstImageInput}부터 센다. 원본 영상은 늘 입력 0({@code [0:v:0]})이다.
+     *
+     * <p>새 꼴 최종 단계에는 출력 길이 창({@code -t})이 없다. 그림은 {@code -loop 1}로 끝없이 이어지고, 두 입력 합성
+     * ({@code overlay} · {@code alphamerge} — framesync)은 기본값이 먼저 끝난 입력을 마지막 프레임으로 늘이는 것이라 원본이
+     * 끝나도 출력이 끝나지 않는다. 그래서 모든 두 입력 합성에 {@code shortest=1}을 줘 먼저 끝난 입력(원본에서 나온 쪽)에서
+     * 끝낸다. 옛 꼴({@link #plan(Output, int, int, String)})은 출력 {@code -t}가 길이를 막아 이 옵션이 없다.
+     *
+     * @throws IllegalArgumentException {@code firstImageInput}이 1보다 작으면(원본 자리를 그림으로 읽게 된다)
+     */
+    public static Plan plan(Output output, int srcW, int srcH, String prefix, int firstImageInput) {
+        if (firstImageInput < 1) {
+            throw new IllegalArgumentException("first image input must follow the source input: " + firstImageInput);
+        }
+        return build(output, srcW, srcH, prefix, firstImageInput, true);
+    }
+
+    /** @param endWithShortest 두 입력 합성을 먼저 끝난 입력에서 끝낼지(새 꼴) */
+    private static Plan build(Output output, int srcW, int srcH, String prefix, int firstImageInput,
+                              boolean endWithShortest) {
+        String overlayEnding = endWithShortest ? ":" + SHORTEST : "";
+        String mergeEnding = endWithShortest ? "=" + SHORTEST : "";
         int outW = output.aspect().width();
         int outH = output.aspect().height();
         if (output.isPlainSingle()) {
             CropGeometry.Pixels crop = CropGeometry.toPixels(output.layers().getFirst().crop(), output.aspect().ratio(),
                     srcW, srcH);
             return new Plan("[0:v:0]setsar=1," + crop.filter() + ",scale=" + outW + ":" + outH
-                    + ":flags=lanczos,setsar=1", List.of());
+                    + ":flags=lanczos,setsar=1", List.of(), firstImageInput);
         }
 
         List<Layer> layers = output.layers();
@@ -99,22 +135,24 @@ public final class Composition {
             int line = frame == null ? 0 : (int) Math.round(frame.width() * outW);
             if (radius > 0) {
                 images.add(new Image(prefix + "l" + i + "_mask.png", mask(at.w, at.h, radius)));
-                graph.append(",format=yuva420p[l").append(i).append("r];[").append(images.size())
-                        .append(":v]format=gray[l").append(i).append("m];[l").append(i).append("r][l").append(i)
-                        .append("m]alphamerge");
+                graph.append(",format=yuva420p[l").append(i).append("r];")
+                        .append(lastImage(images, firstImageInput)).append("format=gray[l").append(i)
+                        .append("m];[l").append(i).append("r][l").append(i).append("m]alphamerge")
+                        .append(mergeEnding);
             }
             graph.append("[l").append(i).append(']');
 
             if (frame != null && frame.shadow()) {
                 Shadow shadow = shadow(at.w, at.h, radius, outW);
                 images.add(new Image(prefix + "l" + i + "_shadow.png", shadow.image));
-                current = overlay(graph, current, "[" + images.size() + ":v]", at.x - shadow.pad, at.y - shadow.pad,
-                        "l" + i + "s");
+                current = overlay(graph, current, lastImage(images, firstImageInput), at.x - shadow.pad,
+                        at.y - shadow.pad, overlayEnding, "l" + i + "s");
             }
-            current = overlay(graph, current, "[l" + i + "]", at.x, at.y, "l" + i + "o");
+            current = overlay(graph, current, "[l" + i + "]", at.x, at.y, overlayEnding, "l" + i + "o");
             if (line > 0) {
                 images.add(new Image(prefix + "l" + i + "_ring.png", ring(at.w, at.h, radius, line, frame.color())));
-                current = overlay(graph, current, "[" + images.size() + ":v]", at.x, at.y, "l" + i + "b");
+                current = overlay(graph, current, lastImage(images, firstImageInput), at.x, at.y, overlayEnding,
+                        "l" + i + "b");
             }
         }
 
@@ -126,7 +164,12 @@ public final class Composition {
             graph.append(",drawbox=x=0:y=").append(y).append(":w=iw:h=").append(thickness)
                     .append(":color=").append(ffColor(divider.color())).append(":t=fill");
         }
-        return new Plan(graph.toString(), List.copyOf(images));
+        return new Plan(graph.toString(), List.copyOf(images), firstImageInput);
+    }
+
+    /** 방금 목록에 더한 그림의 입력 이름표. */
+    private static String lastImage(List<Image> images, int firstImageInput) {
+        return "[" + (firstImageInput + images.size() - 1) + ":v]";
     }
 
     /** 원본을 결과 크기로 흐리게 깔거나, 원본 프레임을 따라가는 단색 판을 만든다. */
@@ -152,9 +195,11 @@ public final class Composition {
                 + ffColor(color) + ":t=fill";
     }
 
-    private static String overlay(StringBuilder graph, String base, String top, int x, int y, String label) {
+    /** @param ending 자리 뒤에 붙일 끝내기 옵션({@code :}{@link #SHORTEST} 또는 빈 문자열) */
+    private static String overlay(StringBuilder graph, String base, String top, int x, int y, String ending,
+                                  String label) {
         graph.append(';').append(base).append(top).append("overlay=x=").append(x).append(":y=").append(y)
-                .append("[").append(label).append(']');
+                .append(ending).append("[").append(label).append(']');
         return "[" + label + "]";
     }
 

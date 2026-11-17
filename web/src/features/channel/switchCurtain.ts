@@ -19,6 +19,11 @@ export interface SwitchCurtain {
   /** 이 전환이 그 채널에서 스스로 나가서 일어났다: 그 채널의 끊김 경고를 띄우지 않는다(ChannelScope) */
   leftStreamerId?: number;
   /**
+   * 전환하고 갈 주소(알림을 눌러 그 채널로 바꾼 뒤 갈 화면). 방송에 묶인 화면에서 바꿔도 ChannelScope가 홈 대신 여기로 보낸다:
+   * 안 그러면 홈으로 보내는 일과 그 화면으로 가는 일이 부딪쳐 홈에 떨어진다(PR #481 리뷰)
+   */
+  destination?: string;
+  /**
    * 걷힐 때 포커스를 돌려줄 자리: 그 요소의 `data-switch-return` 값. 덮기 전 요소(계정 전환 창의 줄·트리거)는 전환에 채널
    * 화면과 함께 다시 그려져 사라지므로 새로 선 요소를 이 표식으로 찾는다
    */

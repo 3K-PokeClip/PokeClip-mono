@@ -1,0 +1,14 @@
+table,file,at,event,want,want_by,want_dur
+t9vm_t9clkB_table.csv,2026-11-02_04-33-09-990780.mp4,row,서버 시계 −2초 경계(같은 표식 · 소리 머리),continue,,
+t9vm_t9clkB_table.csv,2026-11-02_04-33-09-990780.mp4,next_compared,서버 시계 −2초 뒤 첫 견줄 조각(n33 영상 머리),new_chapter_overlap,overlap_cap,
+t9vm_t9slow98_table.csv,2026-11-02_04-51-45-553188.mp4,row,같은 표식 5초 재설정(소리 머리),continue,,
+t9vm_t9slow98_table.csv,2026-11-02_04-51-45-553188.mp4,next_compared,5초 재설정 뒤 첫 견줄 조각(n62 영상 머리),new_chapter_gap,,
+t9vm_t9slow96_table.csv,2026-11-02_04-44-05-817765.mp4,row,재시작 뒤 짧은 인스턴스(영상 400ms · 마지막 표본 0.011ms),new_chapter_gap,,401
+t9vm_t9slow96_table.csv,2026-11-02_04-44-13-522075.mp4,row,짧은 인스턴스 뒤 두 번째 재시작,new_chapter_gap,,
+t9vm_t9slowP2_table.csv,2026-11-02_05-15-21-876781.mp4,row,영상 없는 인스턴스(소리 225ms · 길이 = mvhd),new_chapter_gap,,225
+rec_t9P05_table.csv,2026-11-02_03-28-10-683827.mp4,row,DTS 도약 0.5초(같은 표식 · 소리 머리),continue,,
+rec_t9P2_table.csv,2026-11-02_03-28-08-810287.mp4,row,DTS 도약 2초(같은 표식 · 소리 머리),continue,,
+rec_t9P6_table.csv,2026-11-02_03-28-09-319162.mp4,row,리셋 경계 +2575ms(새 녹화 첫 조각),new_chapter_overlap,overlap_cap,
+rec_t9R6_table.csv,2026-11-02_03-28-15-285858.mp4,row,재시작(도착도 빔 · 구멍 9490ms),new_chapter_gap,,
+tovl2_vt_table.csv,2026-11-03_06-10-41-965841.mp4,row,T-ovl 2차 VT(B 0) 자연 겹침 Δ −512(영상 머리 · 999 안에서 한 번에 w),new_chapter_overlap,w,
+tovl2_vtb_table.csv,2026-11-03_06-52-20-185176.mp4,row,T-ovl 2차 VT(B 2) 자연 겹침 Δ −212(영상 머리 · build.log N 첫 겹침),new_chapter_overlap,w,

@@ -11,3 +11,7 @@ azs = ["<AZ_1>", "<AZ_2>"]
 # 나가는 트래픽이 AZ 를 건너지 않는다.
 media_az = "<MEDIA_AZ>"
 nat_az   = "<MEDIA_AZ>"
+
+# 인터페이스 엔드포인트의 private DNS(기본 true). 평소에는 두지 않는다 —
+# README 「되돌리기 1단계」 에서만 아래 줄을 살리고, 「다시 켜기」 에서 지운다.
+# interface_endpoint_private_dns = false

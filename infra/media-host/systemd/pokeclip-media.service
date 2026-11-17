@@ -11,8 +11,12 @@
 #   시작 스크립트는 CDN 비밀 조회(aws CLI)에 시간 상한을 걸지 않아, 걸려 있는
 #   동안에는 aws CLI 가 스스로 끝나야 다음 시도로 넘어간다. 그동안 저널에
 #   「MEDIA PREREQ FAIL」 · 「MEDIA START BLOCKED」 가 되풀이된다.
-# - RDS 장애는 이 유닛의 재시도 경로가 아니다. 사이드카가 엔진 재시작
-#   (on-failure)으로 그 컨테이너만 다시 뜬다.
+# - RDS 장애는 대개 이 유닛의 재시도 경로가 아니다. 사이드카가 엔진 재시작
+#   (on-failure)으로 그 컨테이너만 다시 뜬다. 예외는 사이드카 라벨에 판 2 가
+#   없는 이미지(출시 이미지)다 — 기동 전 검사가 게이트를 DB 에서 읽어야 해서,
+#   DB 를 못 읽으면 「MEDIA START BLOCKED … check=4」 로 compose 를 올리지 않고
+#   이 유닛이 20초마다 다시 시도한다(런북 media-swap 「허용된 복귀도 DB 를 못
+#   읽으면 막힙니다」).
 # - systemctl stop 은 다시 띄우지 않는다. ExecStop 이 compose 를 내리고,
 #   ExecStopPost 가 끝난 방식과 상관없이 한 번 더 compose 를 내린 뒤 tmpfs 의
 #   렌더 파일(비밀)을 지운다.

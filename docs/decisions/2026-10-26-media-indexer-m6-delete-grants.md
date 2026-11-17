@@ -99,3 +99,26 @@ M6 가 이 전제를 바꾼다.
         `40_verify.sql` 이 stream_* 의 TRUNCATE 없음을 단언하고, SET 권한은
         10 · 30 이 주지 않는다. 비우기를 거부하는 트리거는 넣지 않았다 — 장부
         정리는 DELETE 로만 한다.
+
+## 추기 — PDT 판 게이트 SELECT (2026-11-11 · POK-196 PDT)
+
+PDT 판 2 생산자(POK-196 PDT PR)가 게이트 표 `stream_timing_gate`(한 행 —
+새 회차의 판 스위치 · 판 2 래치)를 더했다. `media_indexer` 의 몫은
+**SELECT 하나**다(`30_grants.sql` · `role.go` `mediaIndexerGrants` ·
+`40_verify.sql` 권한 행렬 — 시험이 셋의 일치를 강제한다).
+
+*   **읽는 자리**: 새 회차 개시 · 회차 없는 비귀속 행의 판 고르기, 기동
+    검사, 기동 전 검사 명령(`timing-gate-check`). 쓰기자 거부 트리거도
+    INSERT 하는 계정(`media_indexer`) 권한으로 게이트를 읽는다.
+*   **UPDATE 를 주지 않는다.** 회차 개시와 래치 낮추기의 직렬화는 행 잠금
+    (`SELECT … FOR SHARE` — 그 표의 UPDATE 권한을 요구한다)이 아니라
+    advisory 열쇠 `pc_timing_gate` 의 공유 잠금이다. UPDATE 를 주면 스위치를
+    손 SQL 밖에서 바꿀 길이 생긴다. 게이트 UPDATE 는 마스터가 `SET ROLE
+    media_owner` 로 한다(런타임 1단-가 런북 「PDT 판 게이트 손 SQL」).
+*   **잔여 위험 — 전역 열쇠.** advisory 열쇠는 PUBLIC 기본이라 접속 계정
+    아무나 `pc_timing_gate` 를 세션 잠금으로 쥘 수 있다. 쥐는 동안 모든
+    상자 · 상자 안 모든 스트림의 회차 개시 · 회차 없는 비귀속 행이 잠금
+    대기 상한(5초)에서 끊겨 재시도하고, 상한을 다 쓰면 사이드카가 끝나
+    재기동을 되풀이한다. 컷오프 열쇠(스트림 하나)와 같은 위협 부류로 K7
+    (가)(`50_advisory_probe.sql` 머리 — 회수하지 않음)에서 받아들인 것이고,
+    피해 범위가 스트림 하나에서 전체로 넓어진다.

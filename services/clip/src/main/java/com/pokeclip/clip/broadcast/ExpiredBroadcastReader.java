@@ -39,6 +39,26 @@ import java.util.List;
 public class ExpiredBroadcastReader {
 
     /**
+     * 같은 물리 키의 바로 앞 방송 {@code prev}. {@code p} 는 {@code id} · {@code ingest_key} · {@code pos}(방송 자리) 칸이 있는 방송
+     * 줄이다. 아래 구간 시작 식의 재료라, 만료 목록과 한 방송 구간 시작이 같은 조각을 쓴다.
+     */
+    private static final String PREVIOUS_BROADCAST = """
+              LEFT JOIN LATERAL (
+                    SELECT o.id, o.ended_at
+                      FROM broadcasts o
+                     WHERE COALESCE(o.ingest_stream_id, o.stream_id) = p.ingest_key
+                       AND (COALESCE(o.started_at, o.ended_at, o.created_at), o.id) < (p.pos, p.id)
+                     ORDER BY COALESCE(o.started_at, o.ended_at, o.created_at) DESC, o.id DESC
+                     LIMIT 1) prev ON true
+            """;
+
+    /** 장부 구간 시작 식(클래스 머리 그림의 앞 끝). 앞 방송이 없으면 NULL 이다. */
+    private static final String SEGMENTS_FROM = """
+            CASE WHEN prev.id IS NULL THEN NULL
+                 WHEN prev.ended_at IS NULL THEN p.pos - INTERVAL '2 minutes'
+                 ELSE GREATEST(prev.ended_at, p.pos - INTERVAL '2 minutes') END""";
+
+    /**
      * 이어받기는 (기한, 줄 번호)로 한다. 기한은 마이크로초까지 같은지 봐야 해서 epoch 마이크로초로 받는다(ms로 내리면 같은 ms의 다른
      * 기한이 경계에서 빠지거나 겹친다). 첫 장은 기한 −∞ · 줄 번호 0이다.
      */
@@ -58,21 +78,14 @@ public class ExpiredBroadcastReader {
             )
             SELECT p.id, p.stream_id, p.ingest_key, p.started_at, p.ended_at, p.vod_expires_at,
                    (EXTRACT(EPOCH FROM p.vod_expires_at) * 1000000)::bigint AS expires_micros,
-                   CASE WHEN prev.id IS NULL THEN NULL
-                        WHEN prev.ended_at IS NULL THEN p.pos - INTERVAL '2 minutes'
-                        ELSE GREATEST(prev.ended_at, p.pos - INTERVAL '2 minutes') END AS segments_from,
+            """ + SEGMENTS_FROM + """
+             AS segments_from,
                    CASE WHEN nxt.id IS NULL THEN COALESCE(p.ended_at, p.pos) + INTERVAL '10 minutes'
                         WHEN nxt.started_at IS NULL THEN LEAST(COALESCE(p.ended_at, p.pos) + INTERVAL '10 minutes',
                                                               nxt.pos - INTERVAL '2 minutes')
                         ELSE nxt.pos - INTERVAL '2 minutes' END AS segments_until
               FROM page p
-              LEFT JOIN LATERAL (
-                    SELECT o.id, o.ended_at
-                      FROM broadcasts o
-                     WHERE COALESCE(o.ingest_stream_id, o.stream_id) = p.ingest_key
-                       AND (COALESCE(o.started_at, o.ended_at, o.created_at), o.id) < (p.pos, p.id)
-                     ORDER BY COALESCE(o.started_at, o.ended_at, o.created_at) DESC, o.id DESC
-                     LIMIT 1) prev ON true
+            """ + PREVIOUS_BROADCAST + """
               LEFT JOIN LATERAL (
                     SELECT o.id, o.started_at, COALESCE(o.started_at, o.ended_at, o.created_at) AS pos
                       FROM broadcasts o
@@ -82,6 +95,21 @@ public class ExpiredBroadcastReader {
                      LIMIT 1) nxt ON true
              ORDER BY p.vod_expires_at, p.id
             """;
+
+    /**
+     * 한 방송의 장부 구간 시작(POK-196 · 설계 r7 9.1 읽기 5) — 만료 목록의 {@code segments_from} 과 같은 식이다. 물음표 하나(방송
+     * 번호)를 받아 줄 하나(앞 방송이 없으면 NULL · 방송이 없으면 줄 없음)를 내는 부분 질의라, 장부 읽기가 같은 왕복에 끼워 구간 경계를
+     * 조회 단계에 건다 — 만료된 앞 방송 몫의 조각은 읽지 않는다(계약-세그먼트인덱스 5-2 소비자 규약).
+     */
+    public static final String SECTION_START = """
+            SELECT
+            """ + SEGMENTS_FROM + """
+             AS segments_from
+              FROM (SELECT b.id, COALESCE(b.ingest_stream_id, b.stream_id) AS ingest_key,
+                           COALESCE(b.started_at, b.ended_at, b.created_at) AS pos
+                      FROM broadcasts b
+                     WHERE b.stream_id = ?) p
+            """ + PREVIOUS_BROADCAST;
 
     private final JdbcTemplate jdbc;
 

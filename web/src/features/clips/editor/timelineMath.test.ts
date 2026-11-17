@@ -13,8 +13,10 @@ import {
   rangeLengthSeconds,
   resolveRangeEdge,
   rulerLabel,
+  rulerMarks,
   rulerTicks,
   secondsFromPointer,
+  secondsSinceStart,
   secondsToFraction,
   secondsToViewOffset,
   zoomedView,
@@ -153,6 +155,47 @@ describe('창 환산', () => {
     expect(rulerLabel(4907.25, 60)).toBe('1:21:47');
     expect(rulerLabel(4907.25, 2)).toBe('1:21:47.2');
     expect(rulerLabel(4907.99, 2)).toBe('1:21:47.9');
+  });
+
+  it('보이는 초는 편집기 초에서 방송 시작의 자리를 뺀 것이다: 기준점이 254시간 앞이면 2분째 카드가 2:00 이다', () => {
+    expect(secondsSinceStart(914_771, 914_651)).toBe(120);
+    expect(rulerLabel(secondsSinceStart(914_771, 914_651), 60)).toBe('2:00');
+    expect(secondsSinceStart(60, 0)).toBe(60);
+  });
+
+  it('방송 시작보다 앞선 편집기 초는 0초로 보인다 — 눈금에 음수 자리가 찍히지 않는다', () => {
+    expect(secondsSinceStart(914_600.5, 914_651)).toBe(0);
+    expect(rulerLabel(secondsSinceStart(914_600.5, 914_651), 2)).toBe('0:00.0');
+  });
+
+  it('방송 시작보다 앞선 눈금은 글자를 비운다 — 여러 눈금이 모두 0:00 으로 겹치지 않고 자리는 균등 분할 그대로다', () => {
+    const marks = rulerMarks({ startSeconds: 914_600, endSeconds: 914_675 }, 914_651.37);
+    expect(marks.map((mark) => mark.seconds)).toEqual(
+      rulerTicks({ startSeconds: 914_600, endSeconds: 914_675 }),
+    );
+    expect(marks.map((mark) => mark.label)).toEqual(['', '', '', '', '0:08', '0:23']);
+  });
+
+  it('방송 시작과 같은 자리의 눈금은 0:00 을 적는다 — 비우는 것은 시작보다 앞선 눈금뿐이다', () => {
+    const marks = rulerMarks({ startSeconds: 100, endSeconds: 175 }, 115);
+    expect(marks.map((mark) => mark.label)).toEqual(['', '0:00', '0:15', '0:30', '0:45', '1:00']);
+  });
+
+  it('방송 시작과 1ms 안의 눈금은 앞선 눈금이 아니다 — 눈금 자리가 ms 로 반올림된 만큼 시작도 ms 로 맞춰 견준다', () => {
+    const marks = rulerMarks({ startSeconds: 100, endSeconds: 175 }, 115.0004);
+    expect(marks.slice(0, 2).map((mark) => mark.label)).toEqual(['', '0:00']);
+  });
+
+  it('창이 통째로 방송 시작 앞이면 첫 눈금에만 0:00 을 적는다 — 눈금자가 비지 않는다', () => {
+    const marks = rulerMarks({ startSeconds: 100, endSeconds: 175 }, 914_651.37);
+    expect(marks.map((mark) => mark.label)).toEqual(['0:00', '', '', '', '', '']);
+  });
+
+  it('방송 시작이 편집기 0초면 눈금 글자는 지금과 같다 — 모든 눈금에 적는다', () => {
+    const view = { startSeconds: 4900, endSeconds: 4975 };
+    expect(rulerMarks(view, 0).map((mark) => mark.label)).toEqual(
+      rulerTicks(view).map((tick) => rulerLabel(tick, 75)),
+    );
   });
 
   it('15초 경계를 넘나들어도 같은 눈금의 초 자리가 안 바뀐다: 초 표기와 0.1초 표기가 같은 내림이다(로컬 리뷰 3라운드)', () => {

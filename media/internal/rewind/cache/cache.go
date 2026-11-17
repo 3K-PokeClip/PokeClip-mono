@@ -19,7 +19,6 @@ package cache
 import (
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
@@ -89,6 +88,12 @@ type stream struct {
 	noCutoff bool
 	// load 는 진행 중인 적재다. nil 이면 적재 중이 아니다.
 	load *load
+	// driftBackoff 는 같은 빈자리(holeAt)에서 뒤처짐을 풀지 못한 드리프트 적재가 몇 번 이어졌는가다(많아야 driftBackoffMax) —
+	// 드리프트 요구의 연속 불일치 문턱이 2 << backoff() 다. 뷰를 갈아 끼워도 남는다. 뒤처짐이 풀리면(어느 적재든 · 감시가
+	// 일치를 봄) 0 이고, 뷰 끝이 holeAt 을 떠나면(push 가 빈자리를 이음) 효력이 없다(backoff).
+	driftBackoff int
+	// holeAt 은 백오프를 세운 빈자리 — 그 드리프트 적재 뒤 뷰의 다음 seq 다.
+	holeAt int64
 }
 
 // load 는 진행 중인 적재 하나다.
@@ -114,11 +119,16 @@ type view struct {
 	rows []boundary.Row
 	// sessions 는 회차 축이다(session_id → 회차).
 	sessions map[string]Session
-	// mismatched 는 직전 감시의 드리프트 대조가 불일치였는가다 — 가드 단위는 스트림이다(장부 421 P-4). 적재가 뷰를
+	// misses 는 드리프트 대조가 연속으로 불일치한 감시 수다 — 가드 단위는 스트림이다(장부 421 P-4). 적재가 뷰를
 	// 갈아 끼우면 새로 센다.
-	mismatched bool
-	// driftDue 는 드리프트 대조가 이 뷰의 적재를 요구했다는 표지다 — 다음 BeginLoad 가 적재로 옮긴다(장부 421 P-5).
+	misses int
+	// driftDue 는 드리프트 대조가 이 뷰의 적재를 요구했다는 표지다 — 다음 BeginLoad 가 적재로 옮긴다(장부 421 P-5). 빈 seq
+	// 뒤 push 가 연 요구도 같다(ApplyInsert — 뷰 머리가 장부보다 뒤처진 드리프트다).
 	driftDue bool
+	// ledgerNext 는 캐시가 아는 장부 쪽 다음 seq 의 하한이다 — 이 seq 앞의 행이 장부에 있다(빈 seq 뒤 push · 드리프트 대조의
+	// H+1 행과 장부 마지막 seq · 빈자리에서 멈춘 적재가 알린다 · 0 = 모른다). 뷰 끝이 여기 못 미치면 뷰가 장부보다
+	// 뒤처졌다(Behind). 적재가 뷰를 갈아 끼우면 새로 센다.
+	ledgerNext int64
 }
 
 // Session 은 캐시가 드는 회차 한 행이다 — 장부의 여덟 열과 회차 최소 seq(index.RewindSession). 회차 최소 seq 는
@@ -160,7 +170,9 @@ func (c *Cache) BeginLoad(streamID string, hint *int64) LoadToken {
 // 없을 때만 표식이 남는다).
 //
 // drift 는 적용한 적재가 드리프트 대조가 연 적재였는가다 — 발행 층의 로그 래퍼가 그때
-// cache_drift_repaired(kind=head)를 남긴다(장부 421 P-5 — 감지가 아니라 적용이 교정이다).
+// cache_drift_repaired(kind=head)를 남긴다(장부 421 P-5 — 감지가 아니라 적용이 교정이다). 적재가 뷰를 장부 끝까지 실었으면
+// 까닭과 상관없이 백오프를 풀고, 드리프트 적재가 빈자리에서 멈췄으면 그 빈자리의 다음 드리프트 요구를 늦춘다(retuneBackoff)
+// — 재생보다 먼저 정해, 재생되는 빈 seq 뒤 push 도 그 백오프를 따른다.
 func (c *Cache) CompleteLoad(streamID string, token LoadToken, l index.RewindLedger) (applied, drift bool) {
 	st := c.lookup(streamID)
 	if st == nil || st.load == nil || st.load.token != token {
@@ -169,6 +181,7 @@ func (c *Cache) CompleteLoad(streamID string, token LoadToken, l index.RewindLed
 	ld := st.load
 	st.load = nil
 	st.reload(l)
+	st.retuneBackoff(ld.drift)
 	for _, p := range ld.log {
 		p()
 	}
@@ -177,7 +190,8 @@ func (c *Cache) CompleteLoad(streamID string, token LoadToken, l index.RewindLed
 
 // reload 는 적재분 l 로 뷰를 통째로 갈아 끼운다 — 부르는 곳은 CompleteLoad 하나다(계획 4.5 A3 결정 2 — 뷰를
 // 바꾸는 입구의 열거를 컴파일이 보증한다). 행은 하한부터 1씩 이어진 데까지만 싣는다. 장부는 seq 를 비우지
-// 않으므로 끊긴 입력은 읽기 결함이고, 끊긴 뒤를 실으면 경계가 빈자리를 모르고 넘어간다.
+// 않으므로 끊긴 입력은 읽기 결함이고, 끊긴 뒤를 실으면 경계가 빈자리를 모르고 넘어간다. 빈자리 뒤에 행이 있었으면
+// 뷰가 장부보다 뒤처졌음을 적는다(Behind).
 func (st *stream) reload(l index.RewindLedger) {
 	if !l.HasCutoff {
 		st.v, st.noCutoff = nil, true
@@ -185,6 +199,9 @@ func (st *stream) reload(l index.RewindLedger) {
 	}
 	v := &view{cutoff: l.CutoffSeq, floor: max(l.FloorSeq, l.CutoffSeq), sessions: map[string]Session{}}
 	for _, r := range l.Rows {
+		if r.Seq > v.nextSeq() {
+			v.sawLedger(l.Rows[len(l.Rows)-1].Seq)
+		}
 		if r.Seq != v.nextSeq() {
 			break
 		}
@@ -244,10 +261,15 @@ func (c *Cache) DemandedLoads() []LoadDemand {
 // 들어온다. 그 밖의 push 는 할 일이 없다(뷰가 생기면 적재가 그 행을 싣는다). 뷰가 있는 스트림의 주조 표시는
 // 뜻이 없다 — 컷오프는 적재가 준다.
 //
-// 이 행이 뷰의 다음 seq 가 아니면 아무것도 바꾸지 않는다 — 캐시가 장부 행을 놓쳤다(단일 쓰기자 전제가
-// 깨져 다른 쓰기자가 그 seq 를 먼저 쓴 국면 — 인덱서의 seq 충돌 재적재). 놓친 뒤로는 뷰가 거기서 멈추고,
-// 머리가 장부보다 뒤처지므로 정합성 감시(설계 4.1 (a) 캐시 드리프트)가 적재로 되돌린다. 빈자리를
-// 두고 이어 붙이면 경계가 빈자리를 모르고 넘어가 목록 안 seq 가 끊긴다.
+// 이 행이 뷰의 다음 seq 보다 뒤면 뷰에 싣지 않고 적재를 요구한다 — 캐시가 그 사이 장부 행을 놓쳤다(단일
+// 쓰기자 전제가 깨져 다른 쓰기자가 그 seq 를 먼저 쓴 국면 — 인덱서의 seq 충돌 재적재). 빈자리를 두고 이어
+// 붙이면 경계가 빈자리를 모르고 넘어가 목록 안 seq 가 끊긴다. 요구의 까닭은 드리프트이고(적용되면
+// cache_drift_repaired(kind=head)), 적재가 뷰를 갈아 끼울 때까지 캐시는 뷰가 장부보다 뒤처졌음을 안다(Behind).
+// 정합성 감시를 기다리지 않는다 — 감시가 H+1 settled 대조 하나뿐이면 놓친 행의 ③ 이 영구 실패일 때 감시가
+// 일치로 보고, 사다리는 뷰에 없는 행에 GAP 을 세우지 못해 회차 끝까지 교착이다(2026-11-16 prod 가 그
+// 모양이었다). 지금 감시는 장부 마지막 seq 도 견주어 push 없이도 잡지만, 감시 두 번(약 60초)을 기다린다. 다음 seq 보다 앞인
+// 행(이미 실린 seq)은 아무것도 바꾸지 않는다. 뷰 끝이 아직 드리프트 적재가 못 넘은 그 빈자리에 있으면(backoff — 장부
+// 빈자리) 바로 요구하지 않고 감시의 늦춘 문턱을 기다린다 — push 마다 적재가 되풀이되지 않게.
 func (c *Cache) ApplyInsert(streamID string, seq int64, res index.InsertCommit) {
 	p := func() { c.ApplyInsert(streamID, seq, res) }
 	if c == nil || c.logged(streamID, p) {
@@ -259,6 +281,14 @@ func (c *Cache) ApplyInsert(streamID string, seq int64, res index.InsertCommit) 
 		return
 	}
 	v := st.v
+	if seq > v.nextSeq() {
+		v.sawLedger(seq)
+		if st.backoff() == 0 {
+			v.driftDue = true
+			c.demand(streamID, nil)
+		}
+		return
+	}
 	if seq != v.nextSeq() {
 		return
 	}
@@ -280,8 +310,17 @@ func (c *Cache) ApplyInsert(streamID string, seq int64, res index.InsertCommit) 
 	}
 	v.rows = append(v.rows, boundary.Row{
 		Seq: seq, SessionID: res.SessionID, DurationMS: res.DurationMS,
-		PlaybackPDT: res.PlaybackPDT, PlaybackS3Key: res.PlaybackS3Key,
+		PlaybackPDT: res.PlaybackPDT, PlaybackS3Key: res.PlaybackS3Key, TimingVersion: timingVersion(res.TimingVersion),
 	})
+}
+
+// timingVersion 은 커밋 결과의 판(nil = 판 NULL)을 행의 판(0 = 판 NULL — boundary.Row.TimingVersion)으로 옮긴다. push 가
+// 판을 버리면 라이브 목록에는 판 태그가 없는데 같은 행을 장부에서 적재한 목록(재기동 · 감사 재렌더)에는 있다.
+func timingVersion(v *int16) int16 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // loadViewless 는 뷰가 없는 스트림(st 는 nil 일 수 있다)의 INSERT push 를 받는다(계획 4.5 A3 결정 6 ⑤) — 주조 push 는
@@ -427,69 +466,6 @@ func (c *Cache) Forget(streamID string, lastEnd, now time.Time, window time.Dura
 	}
 	delete(c.streams, streamID)
 	return true
-}
-
-// DriftProbes 는 30초 감시의 드리프트 대조 입력이다 — 뷰가 있고 적재 중이 아닌 스트림마다 캐시 머리 H 의 다음
-// seq(H+1)다(스트림 순 · 설계 4.1 (a) · 판단 J39). 적재 중 · 부정 표식 스트림은 대조하지 않는다(계획 4.5 A3 결정 5 —
-// 적재 중 뷰는 「모른다」 상태 · 표식은 주조 push 가 푼다). 루프가 감시 작업에 싣는다(커밋 7).
-func (c *Cache) DriftProbes() []index.WatchProbe {
-	if c == nil {
-		return nil
-	}
-	var out []index.WatchProbe
-	for id := range c.streams {
-		if v := c.readable(id); v != nil {
-			out = append(out, index.WatchProbe{StreamID: id, NextSeq: v.head() + 1})
-		}
-	}
-	slices.SortFunc(out, func(a, b index.WatchProbe) int { return strings.Compare(a.StreamID, b.StreamID) })
-	return out
-}
-
-// AuditDrift 는 (a) 드리프트 대조다(설계 4.1 (a) · 계획 부기 43 · 판단 J39) — 감시 결과의 drift 행마다 그 스트림의
-// 뷰와 견준다. 불일치는 DB 컷오프 ≠ 캐시 컷오프(DB 에 없음 포함) 또는 DB 의 H+1 행이 settled 다(판정은
-// boundary.Settled 한 곳). 캐시가 settled 로 아는 행은 DB 에서도 settled 라(push 는 커밋 뒤에만 · settled 단조 —
-// A3 Q2) 캐시 머리가 뒤처졌는지는 H+1 한 행이 가른다. 결과가 닿은 시점의 캐시 머리가 그 H+1 이상이면 머리 쪽은
-// 일치다 — 입력을 뜬 뒤 push 가 닿은 경합을 불일치로 세지 않는다(〔r53b — Q-2〕).
-//
-// 가드 단위는 스트림이다(장부 421 P-4) — 같은 스트림이 연속 두 감시에서 불일치면 요구 ③ 을 등재하고(까닭 드리프트
-// · 로그 0 — P-5) 후보 seq 가 달라도 그렇다. 일치하면 연속이 풀린다. 감시가 실패한 틱에는 루프가 이 메서드를 부르지
-// 않아 세지도 풀지도 않는다. 적재 중 · 뷰가 없는 스트림은 건너뛴다(A3 결정 5).
-func (c *Cache) AuditDrift(rows []index.WatchDrift) {
-	for _, r := range rows {
-		v := c.readable(r.StreamID)
-		if v == nil {
-			continue
-		}
-		if !v.drifted(r) {
-			v.mismatched = false
-			continue
-		}
-		if v.mismatched {
-			v.driftDue = true
-			c.demand(r.StreamID, nil)
-		}
-		v.mismatched = true
-	}
-}
-
-// drifted 는 감시 결과 r 이 이 뷰와 어긋나는가다(AuditDrift 의 불일치).
-func (v *view) drifted(r index.WatchDrift) bool {
-	if !r.HasCutoff || r.CutoffSeq != v.cutoff {
-		return true
-	}
-	if v.head() >= r.NextSeq {
-		return false
-	}
-	return r.HasNext && boundary.Settled(boundary.Row(r.Next), r.CutoffSeq)
-}
-
-// head 는 캐시 머리 H 다 — 뷰 첫 행부터 settled 로 이어진 마지막 seq 다(boundary.Compute 의 HeadSeq — 스캔을 뷰
-// 하한에서 시작한다). 〔r53b — Q-1〕 접두가 비면(뷰 첫 행이 미settled · 행이 없음) 하한 − 1 이다 — 컷오프 − 1 이
-// 아니다. 뷰가 모르는 하한 앞 행을 대조하지 않는다.
-func (v *view) head() int64 {
-	w, _ := boundary.Compute(snapshot{v}, v.floor)
-	return w.HeadSeq
 }
 
 // ReconcileWatch 는 감시 화해다(계획 4.5 A2 결정 11) — 감시 결과의 live 행마다, DB 는 init 확정인데 캐시는 아니면

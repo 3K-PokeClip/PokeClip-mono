@@ -168,6 +168,56 @@ class RecipeParserTest {
         rejectsV2(r -> ((ObjectNode) r.get("subtitles").get("position")).put("y", 1.1));
     }
 
+    /**
+     * 거절 문장은 clip {@code clips.error_message} 를 거쳐 사용자 화면에 보인다. 입력 값(모르는 칸 이름 포함)은 싣지 않고, 칸
+     * 이름은 코드 상수만 싣는다. 기대 문장은 고정 글자로 적는다.
+     */
+    @Test
+    void 거절_문장은_입력_값을_되울리지_않는다() {
+        String evil = "zz-evil";
+        rejectsWith(r -> r.put("schemaVersion", 97), "recipe.schemaVersion은 지원하지 않는다", "97");
+        rejectsWith(r -> r.put(evil, 1), "recipe에 모르는 칸이 있다", evil);
+        rejectsWith(r -> output(r).put(evil, 1), "recipe.outputs[]에 모르는 칸이 있다", evil);
+        rejectsWith(r -> {
+            ObjectNode twin = output(r).deepCopy();
+            twin.put("outputId", evil);
+            output(r).put("outputId", evil);
+            r.withArray("outputs").add(twin);
+        }, "recipe.outputs[].outputId가 겹친다", evil);
+        rejectsWith(r -> output(r).put("aspect", evil), "recipe.outputs[].aspect은 지원하지 않는다", evil);
+        rejectsWith(r -> r.withArray("outputs").add(output(r).deepCopy().put("outputId", "o2")),
+                "recipe.outputs[].aspect가 겹친다", "VERT_9_16");
+        rejectsWith(r -> {
+            ObjectNode twin = ((ObjectNode) r.get("audio").get("tracks").get(0)).deepCopy();
+            r.withObject("audio").withArray("tracks").add(twin);
+        }, "audio.tracks[].trackId가 겹친다", ": 1");
+        rejectsWith(r -> ((ObjectNode) r.get("subtitles")).put("mode", evil), "subtitles.mode은 지원하지 않는다", evil);
+        rejectsV2With(r -> output(r).withObject("background").put("kind", evil),
+                "background.kind은 지원하지 않는다", evil);
+        rejectsV2With(r -> ((ObjectNode) r.get("subtitles").get("position")).put("anchor", evil),
+                "subtitles.position.anchor은 지원하지 않는다", evil);
+    }
+
+    private static void rejectsWith(Consumer<ObjectNode> change, String message, String echoed) {
+        ObjectNode r = Fixtures.recipe("s1");
+        change.accept(r);
+        assertRejectedWith(r, message, echoed);
+    }
+
+    private static void rejectsV2With(Consumer<ObjectNode> change, String message, String echoed) {
+        ObjectNode r = Fixtures.recipeV2("s1");
+        change.accept(r);
+        assertRejectedWith(r, message, echoed);
+    }
+
+    private static void assertRejectedWith(ObjectNode r, String message, String echoed) {
+        assertThatThrownBy(() -> RecipeParser.parse(r))
+                .isInstanceOfSatisfying(RenderFailure.class, f -> {
+                    assertThat(f.code()).isEqualTo(ErrorCode.VALIDATION);
+                    assertThat(f.getMessage()).isEqualTo(message).doesNotContain(echoed);
+                });
+    }
+
     private static ObjectNode output(ObjectNode r) {
         return (ObjectNode) r.get("outputs").get(0);
     }

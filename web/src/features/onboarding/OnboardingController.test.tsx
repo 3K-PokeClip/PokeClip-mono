@@ -156,7 +156,7 @@ describe('OnboardingController', () => {
   it('기록이 있으면 5단계 — 포키가 해 주는 일은 빼고 세며, 끝에서 완료를 누르면 칩으로 돌아간다(POK-378)', async () => {
     renderWithHome();
     // 지난 방송 격자가 서야 지난 방송·오른쪽 패널 단계 타깃이 있다 — 홈을 다 읽은 뒤 시작한다
-    await screen.findByRole('region', { name: '지난 방송 · VOD' });
+    await screen.findByRole('region', { name: '지난 방송' });
 
     const welcome = await screen.findByRole('dialog');
     expect(within(welcome).getAllByRole('listitem')).toHaveLength(5);

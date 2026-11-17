@@ -145,3 +145,55 @@ resource "aws_vpc_endpoint_route_table_association" "s3" {
   vpc_endpoint_id = aws_vpc_endpoint.s3[0].id
   route_table_id  = each.value.id
 }
+
+# AWS API 를 NAT 밖 VPC 인터페이스 엔드포인트로 받는다(POK-408 설계 보강 3-1).
+# ENI 는 nat_az 의 프라이빗 서브넷 하나에만 둔다 — 그 AZ 가 손상되면 다른 AZ 도
+# 이 서비스들을 잃는다(NAT 와 같은 장애 영역). 정책은 붙이지 않는다(기본 전체
+# 허용).
+locals {
+  interface_endpoint_count = length(var.interface_endpoint_services) > 0 ? 1 : 0
+}
+
+# 엔드포인트 ENI 는 연결을 먼저 열지 않으므로 이그레스 규칙을 두지 않는다
+# (Terraform 이 새 SG 의 기본 이그레스를 지운다).
+resource "aws_security_group" "interface_endpoints" {
+  count = local.interface_endpoint_count
+
+  name        = "${var.name}-vpce"
+  description = "VPC interface endpoints - HTTPS from the VPC"
+  vpc_id      = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.name}-vpce"
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "interface_endpoints_https" {
+  count = local.interface_endpoint_count
+
+  security_group_id = aws_security_group.interface_endpoints[0].id
+  description       = "HTTPS from the VPC"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = aws_vpc.this.cidr_block
+}
+
+resource "aws_vpc_endpoint" "interface" {
+  for_each = toset(var.interface_endpoint_services)
+
+  vpc_id              = aws_vpc.this.id
+  service_name        = "com.amazonaws.${data.aws_region.current.region}.${each.key}"
+  vpc_endpoint_type   = "Interface"
+  private_dns_enabled = var.interface_endpoint_private_dns
+  subnet_ids          = [aws_subnet.private[var.nat_az].id]
+  security_group_ids  = [aws_security_group.interface_endpoints[0].id]
+
+  tags = {
+    Name = "${var.name}-${each.key}"
+  }
+
+  # 엔드포인트가 생기는 것이 곧 private DNS 전환이다. 인그레스 규칙이 먼저 있어야
+  # 전환 순간부터 VPC 호출자가 닿고, 파괴 때는 엔드포인트가 먼저 사라진다.
+  depends_on = [aws_vpc_security_group_ingress_rule.interface_endpoints_https]
+}

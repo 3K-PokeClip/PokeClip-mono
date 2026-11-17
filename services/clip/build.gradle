@@ -12,6 +12,8 @@ dependencies {
     implementation project(':web-support')
     // DB 로그인 방식(비밀번호 · RDS IAM)과 db_connected 줄(POK-407). 서버 넷이 같이 쓴다.
     implementation project(':db-support')
+    // 장부 시각 ↔ 매체 자리 변환 F(POK-196). 마크 저장 위치와 카드 장면이 이 한 함수로 행을 고른다.
+    implementation project(':ledger-timeline')
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     // RestClient 클래스 자체는 webmvc가 끌어오는 spring-web에 있지만, RestClient.Builder
@@ -71,5 +73,9 @@ dependencies {
 tasks.named('test') {
     inputs.file(rootProject.file('README.md'))
             .withPropertyName('servicesReadme')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    // ServerClockPositionTest가 공유 시험 표(F의 wall · pdt 사례)를 상대 경로로 읽는다(POK-196). 같은 이유로 입력에 둔다.
+    inputs.file(rootProject.file('ledger-timeline/src/test/resources/ledger-timeline-cases.json'))
+            .withPropertyName('ledgerTimelineCases')
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }

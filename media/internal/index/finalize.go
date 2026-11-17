@@ -33,8 +33,9 @@ var ErrChainChanged = errors.New("index: 사슬이 바뀌었다")
 // 끊는다(보안 78acee38 L-1). 발행 층은 이를 too_large 로 가른다.
 var ErrChainTooLarge = errors.New("index: 사슬 행이 적재 상한을 넘는다")
 
-// Chain 은 사슬 하나다 — 같은 회차 안에서 inherits_session 으로 이어진 세션들이다(설계 0절 사슬 행). VOD 문서 단위이고
-// 키는 머리 세션으로 정한다(K1 — vod/{stream}/{Head}/index.m3u8).
+// Chain 은 사슬 하나다 — 같은 회차 안에서 inherits_session 으로 이어진 세션들이다(설계 0절 사슬 행). 사슬 문서의 키는
+// 머리 세션으로 정한다(vod/{stream}/{Head}/index.m3u8). VOD 문서 단위는 회차다 — 사슬이 여럿이면 마지막 사슬의 동결이
+// 회차 키로 회차 전체를 쓴다(POK-549 가 M6 K1 「사슬 하나에 문서 하나」를 넓혔다 — publish 의 vod_round.go).
 type Chain struct {
 	StreamID string
 	// RoundID 는 꼬리 세션의 round_id 다. "" 면 NULL(M6 전 세션)이다.
@@ -89,12 +90,13 @@ SELECT pg_catalog.min(seq), pg_catalog.max(seq)
   FROM stream_segments
  WHERE stream_id = $1 AND session_id = ANY($2)`
 
-// chainRowsSQL 은 사슬 범위 [$2, $3] 의 행을 $4 개까지 싣는다 — 조각 축 열은 되감기 적재(rewindRowsSQL)와 같다. 부른
-// 쪽은 상한보다 하나 더 받아 넘침을 가른다.
+// chainRowsSQL 은 사슬 범위 [$2, $3] 의 행을 $4 개까지 싣는다 — 조각 축 열은 되감기 적재(rewindRowsSQL)와 같다(판
+// timing_version 포함 · 원래 사실 칸은 읽지 않음). 부른 쪽은 상한보다 하나 더 받아 넘침을 가른다.
 const chainRowsSQL = `
 SELECT s.seq, s.session_id, s.duration_ms, s.playback_pdt, s.playback_s3_key,
        (s.playback_upload_state = 'uploaded') AS pb_uploaded,
-       (g.seq IS NOT NULL)                    AS is_gap
+       (g.seq IS NOT NULL)                    AS is_gap,
+       s.timing_version
   FROM stream_segments s
   LEFT JOIN stream_published_gaps g ON g.stream_id = s.stream_id AND g.seq = s.seq
  WHERE s.stream_id = $1 AND s.seq >= $2 AND s.seq <= $3

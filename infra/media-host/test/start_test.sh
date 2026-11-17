@@ -8,7 +8,17 @@
 # 응답기 모드 외부 입력(4C 토큰 · 거부 목록 · 상태 디렉터리 · IP 한도 env 파일 ·
 # 모드 원천 꼴 · 거부 목록 가드 — 사례 51 – 61 은 lib/start_ingest_input_cases.sh)
 # 과 모드 블록(운영 템플릿 원본 그대로 두 모드 기동 · 표지 꼴 — 사례 62 · 63 은
-# lib/start_mode_cases.sh).
+# lib/start_mode_cases.sh)과 상자 스위치 파일(sidecar.env — 사례 64 는
+# lib/start_sidecar_env_cases.sh)과 기동 전 검사(사이드카 라벨 · timing-preflight
+# — 사례 65 – 69 는 lib/start_timing_cases.sh)와 60일 만료 창구 토큰(받기 성공 ·
+# 실패 · 링크 · 정지 · 상속 export · 응답기 모드 — 사례 70 – 76 은
+# lib/start_clip_expiry_cases.sh)과 대리 창구 켬 상자(토큰 묶음 · 주소 걸음 ·
+# 모드 꼴 · 두 번째 묶음의 빈 목록 — 사례 77 – 86 은
+# lib/start_cred_relay_cases.sh, 켬 상자 기동 전 검사 87 · 88 은
+# lib/start_timing_cases.sh, 창구 토큰 정지 정리 89 · 90 은
+# lib/stop_guard_cases.sh, 토큰 묶음 rename 중간 실패 91 은
+# lib/start_cred_relay_cases.sh, 정지 이름 · lib 호출자 대조 92 는
+# lib/stop_guard_cases.sh).
 #
 # bin/start-media.sh · bin/stop-media.sh 를 빈 환경(env -i)에서 돌린다. PATH 맨
 # 앞에는 가짜 docker · chown(test/start_fakebin — argv 와 환경을 전부 기록)과
@@ -48,6 +58,14 @@ source "${TEST_DIR}/lib/start_ingest_auth_cases.sh"
 source "${TEST_DIR}/lib/start_ingest_input_cases.sh"
 # shellcheck source=lib/start_mode_cases.sh
 source "${TEST_DIR}/lib/start_mode_cases.sh"
+# shellcheck source=lib/start_sidecar_env_cases.sh
+source "${TEST_DIR}/lib/start_sidecar_env_cases.sh"
+# shellcheck source=lib/start_timing_cases.sh
+source "${TEST_DIR}/lib/start_timing_cases.sh"
+# shellcheck source=lib/start_clip_expiry_cases.sh
+source "${TEST_DIR}/lib/start_clip_expiry_cases.sh"
+# shellcheck source=lib/start_cred_relay_cases.sh
+source "${TEST_DIR}/lib/start_cred_relay_cases.sh"
 
 readonly COMPOSE_TEMPLATE="${MEDIA_HOST_DIR}/compose.yml.tmpl"
 readonly MTX_TEMPLATE="${TEST_DIR}/mediamtx.test.yml.tmpl"
@@ -64,7 +82,7 @@ readonly API_PASS_NAME='mtx_api_pass'
 readonly API_PASS_PATTERN='^[0-9a-f]{64}$'
 # 우회 플래그로 읽힐 문자열(대소문자 무시).
 readonly BYPASS_PATTERN='skip|bypass|no_prereq|prereq=0'
-readonly CASE_COUNT=63
+readonly CASE_COUNT=92
 
 #######################################
 # up 호출 argv 를 한 줄로 낸다(인자 사이 공백). 호출이 하나가 아니면 실패.
@@ -84,12 +102,18 @@ up_argv() {
 
 #######################################
 # 템플릿에서 restart: "no" 인 서비스 이름을 정렬해 낸다. restart 가 없는
-# 서비스가 있으면 「MISSING <이름>」 줄을 낸다.
+# 서비스가 있으면 「MISSING <이름>」 줄을 낸다. profiles 로만 뜨는 서비스(기동 전
+# 검사 timing-preflight — up 이 띄우지 않고 run --rm 으로 한 번 돈다)는 출력
+# 연결 대상이 아니라 뺀다. 렌더되지 않는 템플릿 주석(「${/*」 · 「${~/*」 로
+# 시작해 「*/」 로 시작하는 줄까지)은 건너뛴다 — 0열에서 시작해도 services
+# 구역의 끝이 아니다(「%{」 지시어 줄도 마찬가지).
 # Arguments:
 #   compose 템플릿.
 #######################################
 template_no_restart_services() {
   awk '
+    /^\$\{~?\/\*/ { incomment = ($0 !~ /\*\//); next }
+    incomment { if ($0 ~ /^\*\//) incomment = 0; next }
     /^services:/ { insvc = 1; next }
     /^[^ #%]/ { insvc = 0 }
     insvc && /^  [a-z][a-z0-9-]*:[ ]*$/ {
@@ -98,9 +122,11 @@ template_no_restart_services() {
     insvc && svc != "" && /^    restart:/ {
       v = $0; sub(/^    restart:[ ]*/, "", v); gsub(/"/, "", v); r[svc] = v
     }
+    insvc && svc != "" && /^    profiles:/ { prof[svc] = 1 }
     END {
       for (s in seen) {
         if (!(s in r)) print "MISSING " s
+        else if (s in prof) continue
         else if (r[s] == "no") print s
       }
     }' "$1" | LC_ALL=C sort
@@ -404,20 +430,22 @@ case_prod_default_prereq() {
 }
 
 #######################################
-# 사례 9 — prod 기본값으로 모든 점검을 통과시키면 -f · -p 가 prod 기본값이다.
+# 사례 9 — prod 기본값(MEDIA_COMPOSE_FILE 주입 없음)이면 상자 스위치 파일을 prod
+# compose 자리 옆(/etc/pokeclip-media/sidecar.env)에서 찾는다. 시험 기계에는
+# 그 파일이 없으므로 up 전에 막힌다. -f · -p 의 prod 기본값은 정지 쪽(사례
+# 17)이 down argv 로 본다 — 시작은 그 파일 없이 up 에 닿지 않는다.
 #######################################
 case_prod_default_up() {
-  local argv
+  local prod_env="${PROD_COMPOSE_FILE%/*}/sidecar.env"
+  if [[ -e "${prod_env}" || -L "${prod_env}" ]]; then
+    harness::add_reason "이 기계에 ${prod_env} 가 있어 판정 불가"
+    return 1
+  fi
   fixture::new_case
   fixture::base_env MEDIA_COMPOSE_FILE MEDIA_COMPOSE_PROJECT
   fixture::run start-media.sh || return 1
-  argv="$(up_argv)" || return 1
-  if [[ "${argv}" != "compose --ansi never -p ${PROD_PROJECT} -f \
-${PROD_COMPOSE_FILE} up "* ]]; then
-    harness::add_reason "up argv 「${argv}」(기대 -p ${PROD_PROJECT} -f \
-${PROD_COMPOSE_FILE})"
-    return 1
-  fi
+  fixture::expect_blocked 'MEDIA START BLOCKED: sidecar settings unavailable' \
+    || return 1
   fixture::common_checks
 }
 
@@ -784,7 +812,8 @@ main() {
     case_cred_helpers_missing
   harness::run_case 8 'prod 기본값 — 실패 줄에 기본 config 경로' \
     case_prod_default_prereq
-  harness::run_case 9 'prod 기본값 — -p · -f 기본값으로 up' case_prod_default_up
+  harness::run_case 9 'prod 기본값 — compose 기본 자리 옆 sidecar.env 를 봄' \
+    case_prod_default_up
   harness::run_case 10 'CDN 비밀 조회 실패 → 기동 차단' case_secret_fail
   harness::run_case 11 'CDN 비밀 빈 값 · None · ARN 없음 → 기동 차단' \
     case_secret_empty
@@ -883,6 +912,65 @@ main() {
     mode_cases::case_raw_template
   harness::run_case 63 '표지 꼴 깨짐 → template-mode 로 막음' \
     mode_cases::case_shape_table
+  harness::run_case 64 '상자 스위치 파일 없음 · 링크 · 두 줄 · 꼴 밖 → 기동 차단' \
+    sidecar_env::case_switch_file
+  harness::run_case 65 '기동 전 검사 — 라벨에 판 2 → 검사 서비스 없이 up' \
+    timing::case_label_two
+  harness::run_case 66 '기동 전 검사 — 판 2 없음 · 읽기 실패 → 검사 0 이면 up' \
+    timing::case_preflight_pass
+  harness::run_case 67 '기동 전 검사 — 3 · 4 · 검사 명령 없음 → BLOCKED · up 0' \
+    timing::case_preflight_blocked
+  harness::run_case 68 '기동 전 검사 걸음 = 렌더 뒤 · up 앞(정적)' \
+    timing::case_order_static
+  harness::run_case 69 '기동 전 검사 — 받기 실패면 고정 다이제스트 로컬 라벨' \
+    timing::case_pull_fallback
+  harness::run_case 70 '만료 토큰 — ARN 빔 → 받지 않음 · 디렉터리 없음' \
+    clip_expiry::case_arn_empty
+  harness::run_case 71 \
+    '만료 토큰 — 낡은 파일 지우고 사이드카 0400 · rename · argv 에 ARN 만' \
+    clip_expiry::case_installed
+  harness::run_case 72 '만료 토큰 받기 실패 → 앞 토큰 없음 · 기동 계속' \
+    clip_expiry::case_fetch_failed
+  harness::run_case 73 '만료 토큰 디렉터리 링크 → 손대지 않고 막음' \
+    clip_expiry::case_dir_link
+  harness::run_case 74 'stop — 만료 토큰 삭제 · 링크면 CLEANUP FAIL · 대상 보존' \
+    clip_expiry::case_stop
+  harness::run_case 75 '만료 토큰 — 상속 export 에도 토큰 노출 0' \
+    clip_expiry::case_inherited_export
+  harness::run_case 76 '만료 토큰 — 응답기 모드에서도 사이드카 0400' \
+    clip_expiry::case_responder_mode
+  harness::run_case 77 '창구 켬 — 주소 셋 up 앞 · 토큰 넷 · 디렉터리 소유 · 권한' \
+    cred_relay::case_default
+  harness::run_case 78 '창구 끔 — ip 0 · 창구 디렉터리 0 · up argv 그대로' \
+    cred_relay::case_off
+  harness::run_case 79 'cred-relay 줄 꼴 밖(둘 · 뒤 공백 · 같은 줄 값) → 막음' \
+    cred_relay::case_mode_mismatch
+  harness::run_case 80 '응답기 모드 + 켬 — 파일 열의 경로 · 소유 · 내용' \
+    cred_relay::case_responder_mode
+  harness::run_case 81 '토큰 묶음 — 목록이 남아 있으면 cred-relay-list' \
+    cred_relay::case_list_not_empty
+  harness::run_case 82 '창구 디렉터리 링크 → cred-relay-dir · 대상 보존' \
+    cred_relay::case_dir_link
+  harness::run_case 83 '주소 걸음 실패 → cred-relay address · up 0' \
+    cred_relay::case_address_failure
+  harness::run_case 84 '창구 토큰 생성 실패 → 막음 · 창구 파일 0' \
+    cred_relay::case_token_unavailable
+  harness::run_case 85 '두 번째 기동(링크 있음) — 주소만 다시 · 새 토큰' \
+    cred_relay::case_rerun
+  harness::run_case 86 '창구 토큰 — 제 파일 밖 노출 0 · 상속 export' \
+    cred_relay::case_no_leak
+  harness::run_case 87 '켬 상자 판 2 없음(none · invalid · null) → 즉시 막음' \
+    timing::case_cred_relay_blocked
+  harness::run_case 88 '켬 상자 판 2 있음 → 검사 서비스 없이 up' \
+    timing::case_cred_relay_v2
+  harness::run_case 89 'stop — 창구 토큰 · 임시 파일 삭제 · 남으면 CLEANUP FAIL' \
+    stop::case_cred_cleanup
+  harness::run_case 90 'stop — 창구 디렉터리 링크 → CLEANUP FAIL · 대상 보존' \
+    stop::case_cred_link
+  harness::run_case 91 '토큰 묶음 rename 중간 · 끝 실패 → 막음 · 창구 파일 0' \
+    cred_relay::case_rename_failure
+  harness::run_case 92 'stop — 지우는 창구 토큰 이름 = lib 호출자 목록' \
+    stop::case_cred_callers_match
 
   if ! harness::summary "${CASE_COUNT}"; then
     exit 1

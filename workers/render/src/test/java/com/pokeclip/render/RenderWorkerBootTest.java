@@ -3,11 +3,16 @@ package com.pokeclip.render;
 import com.pokeclip.render.work.IdleKeeper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -23,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class RenderWorkerBootTest {
 
     private static final String NOWHERE = "http://127.0.0.1:1/000000000000/";
+    private static final String FAKE_FFMPEG_FIRST_LINE = "ffmpeg version 0.0-boot-test Copyright (c) fake";
 
     @Test
     void 사진_줄만_보는데_내부_토큰이_비면_부팅을_거부한다() {
@@ -76,6 +82,27 @@ class RenderWorkerBootTest {
                 "--pokeclip.render.internal-token=token")) {
             assertThat(context.getBeansOfType(IdleKeeper.class)).isEmpty();
         }
+    }
+
+    /**
+     * 두 줄의 시작 로그에 실제로 설정한 ffmpeg가 찍은 판 첫 줄이 실린다(PDT 설계 7.7 · 15절 {@code render.worker_started}). 배선에서
+     * 고정 글자나 다른 실행 파일(ffprobe)을 넘기면 로그만 보고 「고정한 판이 떴다」고 잘못 읽는다. 가짜 ffmpeg는 판 두 줄을 찍는다.
+     */
+    @Test
+    void 두_줄의_시작_로그에_설정한_ffmpeg의_판_첫_줄을_싣는다(CapturedOutput output, @TempDir Path dir) throws Exception {
+        Path ffmpeg = dir.resolve("ffmpeg");
+        Files.writeString(ffmpeg, "#!/bin/sh\necho '" + FAKE_FFMPEG_FIRST_LINE + "'\necho 'configuration: --fake'\n");
+        Files.setPosixFilePermissions(ffmpeg, PosixFilePermissions.fromString("rwx------"));
+
+        try (ConfigurableApplicationContext context = boot("--pokeclip.render.queue-url=" + NOWHERE + "render",
+                "--pokeclip.thumbnail.queue-url=" + NOWHERE + "thumb", "--pokeclip.render.internal-token=token",
+                "--pokeclip.render.ffmpeg=" + ffmpeg, "--pokeclip.render.work-dir=" + dir.resolve("work"))) {
+            assertThat(context.isActive()).isTrue();
+        }
+
+        assertThat(output.getOut())
+                .contains("render.worker_started queue=" + NOWHERE + "render ffmpeg=" + FAKE_FFMPEG_FIRST_LINE)
+                .contains("thumbnail.worker_started queue=" + NOWHERE + "thumb ffmpeg=" + FAKE_FFMPEG_FIRST_LINE);
     }
 
     /** 거부해야 할 경우에 쓴다. 검사가 깨져 떠 버리면 닫아서, 가짜 주소를 두드리는 일꾼 스레드가 뒤 시험까지 남지 않게 한다. */

@@ -32,8 +32,9 @@ import org.springframework.security.web.SecurityFilterChain;
 
 /**
  * 만료 방송 창구 전용 출입증의 부팅 검사(POK-196 M6, 설계 7절 prod 연결 clip 행). auth 의 같은 검사 시험
- * ({@code StreamKeyResolveBootCheckTest})을 옮겨 왔다. 검사는 전용 토큰이 있을 때만 돈다 — 운영 clip 은 지금 전달 헤더
- * 전략 env 를 넣지 않고(비면 플랫폼 감지) 뜨는데, 이 창구를 안 여는 그 clip 이 검사에 걸려 죽으면 안 된다.
+ * ({@code StreamKeyResolveBootCheckTest})을 옮겨 왔다. 검사는 전용 토큰이 있을 때만 돈다 — 전달 헤더 전략 env 를
+ * 넣지 않은 clip(비면 플랫폼 감지)이 이 창구를 안 열 때 검사에 걸려 죽으면 안 된다. 운영은 platform 이
+ * native 를 넣는다(POK-551).
  *
  * <p>실패 메시지는 여기서 직접 읽는다(값이 실리지 않았는지). 컨텍스트 캐시를 쓰지 않는다(ContextRunner) — 갈래마다 시험
  * 컨텍스트를 띄우면 커넥션 예산이 넘친다({@code IntegrationTestSupport}).
@@ -68,7 +69,7 @@ class ExpiredBroadcastBootCheckTest {
   }
 
   /**
-   * 운영 clip 꼴이다 — 전략 env 가 비어 미설정이다(플랫폼 감지). 토큰이 없으면 대역도 비어 있지만 뜨고, 닫힌
+   * 전략 env 를 넣지 않은 clip 꼴이다 — 미설정이라 플랫폼 감지로 간다. 토큰이 없으면 대역도 비어 있지만 뜨고, 닫힌
    * 창구는 403 이 아니라 401 이다.
    */
   @Test
@@ -119,7 +120,7 @@ class ExpiredBroadcastBootCheckTest {
       web(INTERNAL_TOKEN_SET, EXPIRED_TOKEN_SET, ALLOWED_CIDR_SET, strategy)
           .run(context -> assertFailedWithoutValues(context, "server.forward-headers-strategy"));
     }
-    // 아예 적지 않은 경우 — env 를 안 넣은 운영 clip 의 지금 꼴이다
+    // 아예 적지 않은 경우 — 전략 env 를 안 넣은 clip 꼴이다(운영은 platform 이 native 를 넣는다)
     web(INTERNAL_TOKEN_SET, EXPIRED_TOKEN_SET, ALLOWED_CIDR_SET)
         .run(context -> assertFailedWithoutValues(context, "server.forward-headers-strategy"));
   }

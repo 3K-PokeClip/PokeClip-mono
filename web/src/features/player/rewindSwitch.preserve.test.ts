@@ -57,7 +57,6 @@ function sealedEnd(): PlaybackSessionState {
       firstMs: T0,
       lastEndMs: NOW,
       targetDurationS: 6,
-      headSpanMs: 18_000,
     },
     pos(p),
     { type: 'endlist' },
@@ -88,7 +87,6 @@ describe('끝남 대기의 이음 지점(현행 보존)', () => {
         firstMs: T0,
         lastEndMs: NOW,
         targetDurationS: 6,
-        headSpanMs: 18_000,
       },
       pos(p),
       streamPoll(liveReady(A2, NOW - 2_000, NOW + MIN), X_A),
@@ -121,7 +119,6 @@ describe('봉인된 끝 — 넘김 0 · 현행 제안 경로(T27)', () => {
         firstMs: T0,
         lastEndMs: NOW,
         targetDurationS: 6,
-        headSpanMs: 18_000,
       },
       streamPoll(liveReady(A2, NOW + MIN, NOW + 2 * MIN), X_A),
       { type: 'endlist' },
@@ -137,7 +134,7 @@ describe('봉인된 끝 — 넘김 0 · 현행 제안 경로(T27)', () => {
     expect(goLive.kinds).toEqual([]);
     expect(goLive.state.source.url).toBe(A1);
     expect(goLive.state.offer).toEqual({ kind: 'go-live' });
-    expect(sessionView(goLive.state, NOW).actions).toEqual(['record', 'go-live']);
+    expect(sessionView(goLive.state, NOW).actions).toEqual(['go-live']);
     expect(step(sealedEnd(), later(X_B)).state.offer).toMatchObject({ goTo: 'r-B' });
     expect(step(sealedEnd(), later(X_UNKNOWN)).state.offer).toBeNull();
   });
@@ -191,7 +188,6 @@ function rewindNear(): PlaybackSessionState {
       firstMs: T0,
       lastEndMs: NOW,
       targetDurationS: 6,
-      headSpanMs: 18_000,
     },
   ]);
 }
@@ -239,9 +235,9 @@ describe('넘김 0 끝단 — 탐침을 청하지 않는 자리(T4 b–e · T6 �
 
   it('T6 음성: 끝남 대기의 문이 열려도 E1 의 조건 하나가 거짓이면 탐침 0', () => {
     const ending = endingAtEnd();
-    const waitWith = (origin: 'live' | 'rewind', atEnd: boolean, recordOnEnd: boolean) => ({
+    const waitWith = (origin: 'live' | 'rewind', atEnd: boolean, closeOnEnd: boolean) => ({
       ...ending,
-      phase: { kind: 'ending-wait' as const, origin, atEnd, recordOnEnd },
+      phase: { kind: 'ending-wait' as const, origin, atEnd, closeOnEnd },
     });
     const waits: PlaybackSessionState[] = [
       waitWith('rewind', false, false),

@@ -44,6 +44,23 @@ type tableGrant struct {
 // M6 몫은 선부여다(ADR-0006 개정 2026-10-26). segments · sessions · gaps DELETE 와 cutoffs UPDATE · DELETE 는
 // M6-4(60일 만료)가, outbox 의 네 권한은 M6-8(계약9 발행기)과 M6-4(만료가 그 회차 행을 지움)가 쓰고, 쓰는 문장은
 // 그 PR 이 들인다. 지금 쓰는 M6 권한은 stream_seq_floors SELECT 하나다 — LoadCursor 와 하한 검사 트리거가 읽는다.
+//
+// stream_edge_bounds 의 권한 넷(SELECT · INSERT · UPDATE · DELETE)은 /dvr 하한 Writer(POK-525 설계 3-3)의 원장 문장
+// 넷(index/edge_bounds.go) 몫이다. 문장과 권한은 일대일이 아니다:
+//
+//	raiseSQL             올림 — INSERT · ON CONFLICT DO UPDATE 의 UPDATE(+ sessions FOR SHARE — 열 하나 이상 UPDATE)
+//	closedUnreleasedSQL  조회 — SELECT
+//	markReleasedSQL      해제 기록 — UPDATE(안쪽 FOR UPDATE 잠금 포함)
+//	deleteReleasedSQL    해제 행 정리 — DELETE
+//
+// SELECT 는 조회 밖에서도 든다 — 올림 · 해제 기록 · 정리도 WHERE · ON CONFLICT · RETURNING 에서 열을 읽는다.
+//
+// PDT 게이트(stream_timing_gate)는 SELECT 하나다(POK-196 · 설계 r7 9.3). 회차 개시 · 기동 검사가 읽고, 쓰기자 거부 트리거가
+// 부른 쪽 권한으로 읽는다. UPDATE 는 주지 않는다 — 스위치 · 래치는 손 SQL 로만 바꾸고, 잠금은 행 잠금(FOR SHARE 는 UPDATE
+// 권한을 요구한다)이 아니라 advisory 열쇠라 PUBLIC 기본으로 충분하다.
+//
+// 만료 끄기 스위치(stream_expiry_switch)도 SELECT 하나다(POK-551). 만료기가 회차 시작 · 장 받기 전 · 방송마다 읽고(index.
+// ReadExpirySwitch), 켜고 끄는 것은 마스터 손 SQL 이다 — 사이드카가 스위치를 켜지 못한다.
 var mediaIndexerGrants = []tableGrant{
 	{table: "stream_segments", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 	{table: "stream_sessions", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
@@ -51,6 +68,9 @@ var mediaIndexerGrants = []tableGrant{
 	{table: "stream_published_gaps", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
 	{table: "stream_seq_floors", privileges: []string{"SELECT"}},
 	{table: "broadcast_lifecycle_outbox", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
+	{table: "stream_edge_bounds", privileges: []string{"SELECT", "INSERT", "UPDATE", "DELETE"}},
+	{table: "stream_timing_gate", privileges: []string{"SELECT"}},
+	{table: "stream_expiry_switch", privileges: []string{"SELECT"}},
 }
 
 // MediaIndexerGrantSQL 은 role 에게 media_indexer 권한을 주는 GRANT 문장들이다(끝 ; 없음).

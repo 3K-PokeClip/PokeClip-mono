@@ -70,6 +70,8 @@ variables {
   rds_sg_id          = "sg-0rds0000000000000"
   auth_sg_id         = "sg-0auth000000000000"
   auth_port          = 18086
+  clip_sg_id         = "sg-0clip000000000000"
+  clip_port          = 18087
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -82,6 +84,7 @@ variables {
   mediamtx_image                = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   nginx_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222"
   sidecar_image                 = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  timing_guard_image            = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:6666666666666666666666666666666666666666666666666666666666666666"
   loopback_sender_image         = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-loopback-sender@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   rds_endpoint                  = "pokeclip-prod-db.example.ap-northeast-2.rds.amazonaws.com"
   rds_db_name                   = "pokeclip"
@@ -94,6 +97,8 @@ variables {
   ecr_credential_helper_version = "0.12.0-3.amzn2023"
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
+  broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  edge_bounds_kvs_arn           = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 run "accepts_valid_inputs" {
@@ -124,6 +129,24 @@ run "rejects_mediamtx_loopback_ports" {
     proxy_ports = {
       live     = 18081
       playback = 9996
+      control  = 18083
+      health   = 18084
+    }
+  }
+
+  expect_failures = [var.proxy_ports]
+}
+
+# 대리 창구(cred-relay)가 호스트 망 169.254.170.2:9911 에 묶인다. 공개 포트가
+# 같으면 Docker DNAT(nat PREROUTING dst-type LOCAL)이 중계 요청을 MediaMTX 로
+# 보낸다(POK-574 P3).
+run "rejects_cred_relay_port" {
+  command = plan
+
+  variables {
+    proxy_ports = {
+      live     = 9911
+      playback = 18082
       control  = 18083
       health   = 18084
     }
@@ -170,6 +193,17 @@ run "rejects_image_without_digest" {
   }
 
   expect_failures = [var.sidecar_image]
+}
+
+# 검사 핀(POK-196 PDT 기동 전 검사)도 다이제스트 고정이다 — 태그면 같은 태그 재푸시로 하한 아래 이미지가 핀에 들어온다.
+run "rejects_timing_guard_image_without_digest" {
+  command = plan
+
+  variables {
+    timing_guard_image = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar:latest"
+  }
+
+  expect_failures = [var.timing_guard_image]
 }
 
 run "rejects_bundle_image_without_digest" {
@@ -473,6 +507,43 @@ run "rejects_unknown_ingest_auth_ip_limit" {
   expect_failures = [var.ingest_auth_ip_limit]
 }
 
+# 새 꼴 쓰기 스위치(sidecar.env 의 PLAYBACK_ROUND_KEYS)는 bool 이고 기본 끔이다
+# (결정 9 — 켬은 prod tfvars 의 몫). null 은 기본값으로 떨어진다(nullable = false).
+run "defaults_playback_round_keys_false" {
+  command = plan
+
+  assert {
+    condition     = output.template_vars.playback_round_keys == false
+    error_message = "playback_round_keys 기본값이 false 가 아니다."
+  }
+}
+
+run "accepts_playback_round_keys_true" {
+  command = plan
+
+  variables {
+    playback_round_keys = true
+  }
+
+  assert {
+    condition     = output.template_vars.playback_round_keys == true
+    error_message = "playback_round_keys 가 템플릿 변수로 그대로 넘어가지 않았다."
+  }
+}
+
+run "null_playback_round_keys_falls_back_to_false" {
+  command = plan
+
+  variables {
+    playback_round_keys = null
+  }
+
+  assert {
+    condition     = output.template_vars.playback_round_keys == false
+    error_message = "playback_round_keys = null 이 기본값 false 로 떨어지지 않았다(nullable = false)."
+  }
+}
+
 # 4C 토큰 비밀 ARN 은 다른 비밀 ARN 과 같은 꼴만 받는다(옛 모드는 빈 값).
 run "rejects_wildcard_stream_key_resolve_token_secret_arn" {
   command = plan
@@ -482,4 +553,259 @@ run "rejects_wildcard_stream_key_resolve_token_secret_arn" {
   }
 
   expect_failures = [var.stream_key_resolve_token_secret_arn]
+}
+
+# /dvr 하한 Writer(POK-525) 스위치는 bool 이고 기본 끔이다 — 끔이면 사이드카
+# REWIND_EDGE_BOUNDS_KVS_ARN 이 빈 값(Writer 꺼짐), 켬이면 KVS ARN 이다. null 은
+# 기본값으로 떨어진다(nullable = false).
+run "defaults_edge_bounds_writer_off" {
+  command = plan
+
+  assert {
+    condition     = output.template_vars.edge_bounds_kvs_arn == ""
+    error_message = "edge_bounds_writer_enabled 기본값에서 사이드카 KVS ARN 이 빈 값이 아니다."
+  }
+}
+
+run "renders_edge_bounds_kvs_arn_when_writer_on" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = true
+  }
+
+  assert {
+    condition     = output.template_vars.edge_bounds_kvs_arn == var.edge_bounds_kvs_arn
+    error_message = "edge_bounds_writer_enabled = true 인데 사이드카 KVS ARN 이 입력 ARN 이 아니다."
+  }
+}
+
+run "null_edge_bounds_writer_falls_back_to_off" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = null
+  }
+
+  assert {
+    condition     = output.template_vars.edge_bounds_kvs_arn == ""
+    error_message = "edge_bounds_writer_enabled = null 이 기본값 false 로 떨어지지 않았다(nullable = false)."
+  }
+}
+
+# KVS ARN 은 전역 CloudFront KVS 하나(리전 빔 · 12자리 계정 · 소문자 UUID id)만
+# 받는다 — 인스턴스 역할 EdgeBoundsKvs 의 Resource 라 와일드카드 · 다른 자원이면
+# 권한이 넓어진다.
+run "accepts_edge_bounds_kvs_arn_in_other_partition" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws-us-gov:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+}
+
+# 파티션은 aws 와 「-」 로 이은 소문자 조각(aws-us-gov · aws-cn)뿐이다 — aws 뒤에
+# 바로 글자가 붙은 꼴은 파티션이 아니다.
+run "rejects_edge_bounds_kvs_arn_with_unknown_partition" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:awsfoo:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_wildcard_edge_bounds_kvs_arn" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:key-value-store/*"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_empty_edge_bounds_kvs_arn" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = ""
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_of_other_resource" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:function/pokeclip-prod-live-auth"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_region" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront:us-east-1:123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_11_digit_account" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::12345678901:key-value-store/00000000-0000-0000-0000-0000000000e1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_uppercase_id" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000E1"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_edge_bounds_kvs_arn_with_trailing_path" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1/x"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+# 60일 만료 창구 clip 주소(POK-551 c4). 꼴은 http · https 의 scheme://host[:port]
+# 하나(경로 · 끝 / · 질의 · 조각 · 자격증명 없음)로, 사이드카
+# media/internal/config/expiry.go 의 validateClipURL 이 받는 꼴의 부분 집합이다
+# (IPv6 · 대문자 scheme · 밑줄 든 호스트는 여기서만 거부). 포트(없으면
+# scheme 기본 포트)는 clip_port 와 같아야 한다 — Media → clip SG 짝이 그 포트만
+# 연다. 시험 clip_port 는 18087.
+run "accepts_clip_internal_url_on_clip_port" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:18087"
+  }
+
+  assert {
+    condition     = output.template_vars.clip_internal_url == "http://clip.pokeclip.internal:18087"
+    error_message = "clip_internal_url 이 템플릿 변수로 그대로 넘어가지 않았다."
+  }
+}
+
+run "accepts_https_clip_internal_url_with_default_port" {
+  command = plan
+
+  variables {
+    clip_internal_url = "https://clip.pokeclip.internal"
+    clip_port         = 443
+  }
+
+  assert {
+    condition     = output.template_vars.clip_internal_url == "https://clip.pokeclip.internal"
+    error_message = "포트 없는 https 주소(기본 443 = clip_port)가 통과하지 않았다."
+  }
+}
+
+run "rejects_clip_internal_url_port_other_than_clip_port" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:8081"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+# 포트가 없으면 scheme 기본 포트(http 80)로 대조한다.
+run "rejects_clip_internal_url_default_port_other_than_clip_port" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+run "rejects_clip_internal_url_with_trailing_slash" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:18087/"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+run "rejects_clip_internal_url_with_path" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:18087/internal"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+run "rejects_clip_internal_url_with_query" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:18087?x=1"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+run "rejects_clip_internal_url_with_fragment" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:18087#x"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+run "rejects_clip_internal_url_with_userinfo" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://user@clip.pokeclip.internal:18087"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+run "rejects_clip_internal_url_with_other_scheme" {
+  command = plan
+
+  variables {
+    clip_internal_url = "ftp://clip.pokeclip.internal:18087"
+  }
+
+  expect_failures = [var.clip_internal_url]
+}
+
+run "rejects_clip_expiry_token_secret_arn_with_wildcard" {
+  command = plan
+
+  variables {
+    clip_expiry_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/*"
+  }
+
+  expect_failures = [var.clip_expiry_token_secret_arn]
 }

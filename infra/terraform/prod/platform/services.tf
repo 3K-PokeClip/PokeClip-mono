@@ -103,6 +103,14 @@ locals {
         COLLECTOR_BASE_URL = local.collector_base_url
         # 서명 값 셋 중 하나라도 빠지면 부팅을 거부한다(POK-321).
         PLAYBACK_REQUIRED = "true"
+        # 로드밸런서 뒤(auth 와 같음). 비우면 Boot 가 ECS 를 감지해 같은 native 로
+        # 돌지만, 만료 창구 전용 토큰이 있으면 none 이나 native 를 명시해야
+        # 부팅한다(ExpiredBroadcastSecurityConfig — POK-551). 신뢰 대역은 Boot
+        # 기본값(사설망 · 루프백) 그대로다.
+        FORWARD_HEADERS_STRATEGY = "native"
+        # 놓친 종료 편지 치우기 — 유예 · 주기는 서버 기본값(variables.tf 의
+        # clip_broadcast_reaper_enabled 주석).
+        BROADCAST_REAPER_ENABLED = tostring(var.clip_broadcast_reaper_enabled)
       },
     )
     # CHZZK_CLIENT_ID · SOOP_CLIENT_ID(방송 정보 · SOOP 채팅)와 채팅 원본 보관

@@ -1,12 +1,18 @@
 {
+  "broadcast_topic_arn": "",
+  "clip_internal_url": "",
   "control_upstream": "",
+  "cred_relay": false,
   "detached_log_driver": "journald",
+  "edge_bounds_kvs_arn": "",
   "ingest_auth_image": "",
   "ingest_auth_ip_limit": "on",
   "janitor_enabled": false,
+  "lifecycle_publish_streams": [],
   "media_health_path": "/pcbench-edge-proxy-health",
   "mediamtx_image": "registry.pcbench-edge-proxy.invalid/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "nginx_image": "registry.pcbench-edge-proxy.invalid/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "playback_round_keys": false,
   "proxy_control_port": 28183,
   "proxy_health_port": 28184,
   "proxy_live_port": 28181,
@@ -16,5 +22,6 @@
   "rewind_bucket_name": "pcbench-edge-proxy-rewind",
   "rewind_public_base_url": "https://media.pcbench-edge-proxy.invalid",
   "sidecar_image": "registry.pcbench-edge-proxy.invalid/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-  "stream_key_resolve_url": "http://auth.pcbench-edge-proxy.invalid:28085"
+  "stream_key_resolve_url": "http://auth.pcbench-edge-proxy.invalid:28085",
+  "timing_guard_image": "registry.pcbench-edge-proxy.invalid/media-sidecar@sha256:4444444444444444444444444444444444444444444444444444444444444444"
 }

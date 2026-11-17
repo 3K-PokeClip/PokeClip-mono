@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -414,7 +415,7 @@ func TestInitProduceFailureRetriesWithoutMarking(t *testing.T) {
 }
 
 // unproducibleCases 는 같은 입력이면 늘 같은 산출 실패다 — 무결성 ⓑ·ⓒ·ⓓ(트랙 부족·빈 트랙·크기
-// 상한). 재포장이 오류값을 감싸 돌려주므로(%w) 감싼 형태도 같은 부류다.
+// 상한)와 요청 경계의 음수 도장. 재포장이 오류값을 감싸 돌려주므로(%w) 감싼 형태도 같은 부류다.
 var unproducibleCases = []struct {
 	name string
 	err  error
@@ -423,6 +424,8 @@ var unproducibleCases = []struct {
 	{"샘플_0", playback.ErrEmptyTrack},
 	{"크기_상한_초과", playback.ErrInputTooLarge},
 	{"감싼_오류", fmt.Errorf("%w: 17MiB", playback.ErrInputTooLarge)},
+	{"음수_도장", playback.ErrNegativePos},
+	{"감싼_음수_도장", fmt.Errorf("%w: %v", playback.ErrNegativePos, -44*time.Millisecond)},
 }
 
 // 같은 입력이면 늘 같은 산출 실패는 사다리를 타지 않는다(cc r3 #1): 첫 시도에서 ③ 을 failed 로
@@ -489,6 +492,68 @@ func TestInitUnproducibleInputFailsWithoutRetry(t *testing.T) {
 				t.Error("백오프가 등록되지 않았다")
 			}
 			cap.one(t, "upload_failed")
+		})
+	}
+}
+
+// 기본 생산자(Remuxer)가 음수 도장을 거부한 실패도 같은 입력이면 늘 같아 사다리를 타지 않는다
+// (POK-550). 패키지 경계를 실물로 잰다 — 생산자가 오류값을 감싸지(%w) 않거나 분류가 그 값을 모르면
+// 여기서 깨진다. 실시간 = 작업에 실린 도장이 음수, 스위퍼 = 회차 첫 조각 mtxi 가 음수인데 표
+// 보정값이 0(인덱서 하한 이전의 옛 결함 재현 · 표 {4→0}). 잡는 결함: 사다리(1+2+4초)가 하나뿐인
+// 워커를 조각마다 7초 묶고, 스위퍼가 백오프마다 같은 조각을 다시 집을 때도 되풀이된다(prod 실측).
+func TestNegativePosFailsWithoutRetryWithDefaultProducer(t *testing.T) {
+	const lead = 44 * time.Millisecond
+	for _, tt := range []struct {
+		name   string
+		target func(t *testing.T, u *Uploader, dir string) index.UploadTarget
+		run    func(t *testing.T, u *Uploader, target index.UploadTarget) outcome
+	}{
+		{
+			name: "실시간",
+			target: func(t *testing.T, _ *Uploader, dir string) index.UploadTarget {
+				path, size := copyFixture(t, dir, "demo", "seg4.mp4")
+				tgt := playbackTarget(t, "demo", 4, "S-1", path, size)
+				tgt.PlaybackPos = -lead
+				tgt.ExpectedInitSHA = mustHexBytes(t, goldenInitSHA)
+				return tgt
+			},
+			run: func(_ *testing.T, u *Uploader, tgt index.UploadTarget) outcome { return runLive(u, tgt) },
+		},
+		{
+			name: "스위퍼",
+			target: func(t *testing.T, u *Uploader, dir string) index.UploadTarget {
+				request(u, liveRequest(t, 4, "S-1", 0)) // 하한 없이 연 회차의 표 줄
+				return sweepTargetWithMtxi(t, dir, 4, "S-1", -lead)
+			},
+			run: runTarget,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &fakeUploadStore{}
+			put := &fakePutter{}
+			u, cap, dir, _ := newPlaybackUploader(t, st, put, nil, nil)
+			target := tt.target(t, u, dir)
+
+			if got := tt.run(t, u, target); got != outcomeNeutral {
+				t.Errorf("outcome = %v, want neutral — S3 에 닿지 않았다 (%s)", got, cap.dump())
+			}
+			if n := cap.count("upload_retry"); n != 0 {
+				t.Errorf("upload_retry = %d건, want 0건 — 같은 도장이면 다시 만들어도 같다", n)
+			}
+			if n := len(put.putCalls()); n != 0 {
+				t.Errorf("PUT = %d회, want 0회", n)
+			}
+			marked, failed := st.playbackCalls()
+			if len(marked) != 0 || len(failed) != 1 || failed[0].seq != 4 || failed[0].reason == index.ReasonInitMismatch {
+				t.Errorf("③ 마킹 = uploaded %+v · failed %+v, want failed seq 4 1회(세션을 끝내지 않는 사유)", marked, failed)
+			}
+			if _, blocked := u.gate.backoffBlocked(targetKeyOf(target)); !blocked {
+				t.Error("백오프가 등록되지 않았다 — 재수집마다 같은 실패를 되풀이한다")
+			}
+			rec := cap.one(t, "upload_failed")
+			if msg, _ := rec.attrs["err"].(string); rec.level != slog.LevelError || !strings.Contains(msg, "pos 가 음수다") {
+				t.Errorf("upload_failed = %v err %q, want ERROR 「pos 가 음수다」", rec.level, msg)
+			}
 		})
 	}
 }

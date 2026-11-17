@@ -55,6 +55,8 @@ s3:GetBucketPolicy	ap-northeast-2	*
 secretsmanager:GetResourcePolicy	ap-northeast-2	*
 ecr:GetRepositoryPolicy	ap-northeast-2	*
 sns:GetTopicAttributes	ap-northeast-2	*
+# 경보 주제(us-east-1 — POK-525 prod/edge)의 정책 읽기(2-3 래퍼).
+sns:GetTopicAttributes	us-east-1	*
 sqs:GetQueueAttributes	ap-northeast-2	*
 ec2:DescribeInstances	ap-northeast-2	*
 ec2:DescribeInstances	us-east-1	*

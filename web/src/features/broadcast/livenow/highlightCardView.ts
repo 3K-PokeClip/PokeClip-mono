@@ -2,11 +2,10 @@
 //
 // 렌더에서 떼어낸 이유는 playerMath와 같다: 상태 5종 × 폴백 3단은 조합이 많아 jsdom 렌더로
 // 훑기보다 여기서 전수 검사하는 편이 싸다. 그리고 status 유니온이 늘면 이 표가 타입으로 깨진다 —
-// 화면이 조용히 빈 배지를 그리는 대신 빌드가 멈춘다.
+// 화면이 조용히 엉뚱한 상태를 그리는 대신 빌드가 멈춘다. 상태 배지(검토 대기 · 수동 마킹 …)는 카드에서 뺐다(2026-11-04 시안 B2-1).
 
 import { parseClockLabel } from '@/features/player/playerMath';
 import { CARD_THUMBNAIL_PASS_MS, pickThumbnailUrl } from '@/features/thumbnail/thumbnailUrl';
-import type { BadgeTone } from '@/ui';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 
@@ -15,8 +14,6 @@ export type CardViewState = 'ready' | 'manual' | 'processing';
 
 export interface HighlightCardView {
   state: CardViewState;
-  badgeTone: BadgeTone;
-  badgeLabel: string;
   /** 되감기 창을 벗어나 곧 사라질 카드 — 흐리게 */
   dimmed: boolean;
   /** 편집·업로드 버튼줄을 그릴지: 만료된 카드엔 할 일이 없다 */
@@ -41,31 +38,13 @@ export interface ResolvedCardVisual {
 
 const STATE_BY_STATUS: Record<
   LiveHighlight['status'],
-  { state: CardViewState; tone: BadgeTone; label: string; dimmed: boolean; showActions: boolean }
+  { state: CardViewState; dimmed: boolean; showActions: boolean }
 > = {
-  scored: { state: 'ready', tone: 'point', label: '검토 대기', dimmed: false, showActions: true },
-  manual: {
-    state: 'manual',
-    tone: 'neutral',
-    label: '수동 마킹',
-    dimmed: false,
-    showActions: true,
-  },
-  clipped: {
-    state: 'ready',
-    tone: 'success',
-    label: '클립 완료',
-    dimmed: false,
-    showActions: true,
-  },
-  unprocessed: {
-    state: 'ready',
-    tone: 'neutral',
-    label: '미처리',
-    dimmed: false,
-    showActions: true,
-  },
-  expired: { state: 'ready', tone: 'danger', label: '만료', dimmed: true, showActions: false },
+  scored: { state: 'ready', dimmed: false, showActions: true },
+  manual: { state: 'manual', dimmed: false, showActions: true },
+  clipped: { state: 'ready', dimmed: false, showActions: true },
+  unprocessed: { state: 'ready', dimmed: false, showActions: true },
+  expired: { state: 'ready', dimmed: true, showActions: false },
 };
 
 export function cardViewFor(highlight: LiveHighlight): HighlightCardView {
@@ -73,11 +52,15 @@ export function cardViewFor(highlight: LiveHighlight): HighlightCardView {
   const base = STATE_BY_STATUS[highlight.status];
   return {
     state: base.state,
-    badgeTone: base.tone,
-    badgeLabel: base.label,
     dimmed: base.dimmed,
     showActions: base.showActions,
   };
+}
+
+/** 카드 길이 표기 — 60초 → 「1:00」 */
+export function lengthLabel(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
 /** 감지 사유를 모를 때의 최소 표기 — 계약이 늘 아는 것은 자동인지 수동인지뿐이다 */
@@ -154,14 +137,14 @@ export function cardVisualFor(
       progress: known.progress ?? null,
     };
   }
-  // 모르는 카드 — 계약이 주는 것만으로 세운다. 길이·파형·경과는 알 길이 없어 감춘다
-  // (자리만 비우면 되고, 지어내면 실연동 뒤 거짓 표기로 남는다).
+  // 모르는 카드 — 계약이 주는 것만으로 세운다. 길이 · 경과는 카드 목록이 실어 주면(lengthSec · ago) 쓰고, 파형 · 진행률은
+  // 알 길이 없어 감춘다(자리만 비우면 되고, 지어내면 실연동 뒤 거짓 표기로 남는다).
   return {
-    duration: null,
+    duration: highlight.lengthSec !== undefined ? lengthLabel(highlight.lengthSec) : null,
     reason: fallbackReason(highlight.source),
     posPercent: fallbackPosPercent(highlight.timestamp, stream.uptimeSeconds),
     spark: null,
-    timeAgo: null,
+    timeAgo: highlight.ago ?? null,
     progress: null,
   };
 }

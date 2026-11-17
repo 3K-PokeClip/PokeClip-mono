@@ -30,9 +30,10 @@ variable "subnet_id" {
 }
 
 variable "instances" {
-  description = "상자 키 → 구성 판(설계 5-3 교체 모델). 새 구성은 config_version 을 올린 새 키로만 들어간다 — 이미 떠 있는 키의 user_data · AMI 는 바꾸지 않는다."
+  description = "상자 키 → 구성 판(설계 5-3 교체 모델)과 대리 창구 스위치. 새 구성은 config_version 을 올린 새 키로만 들어간다 — 이미 떠 있는 키의 user_data · AMI 는 바꾸지 않는다. cred_relay 켬 키는 IMDS 홉 1(컨테이너는 호스트 대리 창구로만 자격을 받음), 값 없음 = 끔(홉 2 — 지금과 같음). 떠 있는 키의 스위치는 제자리에서 바꾸지 않고 새 키로 넣는다(POK-574)."
   type = map(object({
     config_version = string
+    cred_relay     = optional(bool, false)
   }))
 
   validation {
@@ -159,7 +160,7 @@ variable "srt_port" {
 }
 
 variable "proxy_ports" {
-  description = "nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081)와 MediaMTX 루프백(8888 · 9996 · 9997) 밖."
+  description = "nginx 듣기 포트 넷(live · playback · control · health). 1024 이상 · 서로 다름 · 응답기(8080 · 8081) · MediaMTX 루프백(8888 · 9996 · 9997) · 대리 창구(9911) 밖."
   type = object({
     live     = number
     playback = number
@@ -170,9 +171,9 @@ variable "proxy_ports" {
   validation {
     condition = alltrue([
       for port in values(var.proxy_ports) :
-      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8888, 9996, 9997], port)
+      port >= 1024 && port <= 65535 && floor(port) == port && !contains([8080, 8081, 8888, 9911, 9996, 9997], port)
     ])
-    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8888 · 9996 · 9997 이 아니어야 한다."
+    error_message = "proxy_ports 는 1024 부터 65535 까지의 정수이고 8080 · 8081 · 8888 · 9911 · 9996 · 9997 이 아니어야 한다."
   }
 
   validation {
@@ -209,7 +210,7 @@ variable "janitor_enabled" {
 }
 
 variable "bundle_image" {
-  description = "설치 묶음 이미지 <ECR 저장소>@sha256:<64자>(스크립트 · 상자에서 렌더하는 템플릿)."
+  description = "설치 묶음 이미지 <ECR 저장소>@sha256:<64자>(스크립트 · 상자에서 렌더하는 템플릿). c0 하한 이상만 둔다(POK-196 PDT — 기동 전 검사가 든 start-media.sh · 판정은 runbooks/media-swap.md 「PDT 하한 판정」) — 하한 아래 묶음으로 설치한 상자는 판 2 를 못 읽는 사이드카로 내려도 막지 못한다."
   type        = string
 
   validation {
@@ -245,6 +246,16 @@ variable "sidecar_image" {
   validation {
     condition     = can(regex("^[^@]+@sha256:[0-9a-f]{64}$", var.sidecar_image))
     error_message = "sidecar_image 는 <저장소>@sha256:<16진 64자> 꼴이어야 한다."
+  }
+}
+
+variable "timing_guard_image" {
+  description = "기동 전 검사 핀 <ECR 저장소>@sha256:<64자> — compose 서비스 timing-preflight 의 이미지(POK-196 PDT 설계 r7 9.4). 사이드카 저장소의 c0 하한 이상 이미지(c0 머지 커밋을 조상으로 둔 커밋의 빌드 — runbooks/media-swap.md 「PDT 하한 판정」)만 둔다. 사이드카를 출시 이미지로 내릴 때도 내리지 않는다 — 하한 아래 이미지를 두면 검사 명령이 없어 상자가 막힌다(fail-closed). 첫 부팅에 한 번 쓰인다(user_data 는 ignore_changes)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[^@]+@sha256:[0-9a-f]{64}$", var.timing_guard_image))
+    error_message = "timing_guard_image 는 <저장소>@sha256:<16진 64자> 꼴이어야 한다."
   }
 }
 
@@ -458,5 +469,130 @@ variable "ingest_auth_ip_limit" {
   validation {
     condition     = contains(["on", "off"], var.ingest_auth_ip_limit)
     error_message = "ingest_auth_ip_limit 은 \"on\" 또는 \"off\" 여야 한다."
+  }
+}
+
+variable "broadcast_topic_arn" {
+  description = "계약9 방송 생명주기 SNS FIFO 주제 ARN(런타임 1단 출력 broadcast_topic_arn — 값 아님). 사이드카 BROADCAST_TOPIC_ARN(응답기 모드 · 발행 목록이 찰 때만 렌더)이고, 인스턴스 역할 sns:Publish 의 Resource 다(목록과 무관하게 늘)."
+  type        = string
+
+  # 사이드카 media/internal/config/lifecycle.go 의 loadLifecycle 과 같은 판정이다
+  # — arn.Parse(콜론으로 가른 칸 여섯 · 첫 칸 arn — 자원은 다섯째 콜론 뒤 전부)
+  # 뒤 서비스 sns · 지역 있음 · 계정 12자리 숫자 · 자원이 .fifo 로 끝나고 그보다
+  # 김. 파티션은 사이드카도 보지 않는다. 여기서 통과한 값을 사이드카가 기동
+  # 거부하지 않게 하는 것이 목적이다.
+  validation {
+    condition = alltrue([
+      for parts in [split(":", var.broadcast_topic_arn)] : try(
+        length(parts) >= 6 &&
+        parts[0] == "arn" &&
+        parts[2] == "sns" &&
+        parts[3] != "" &&
+        can(regex("^[0-9]{12}$", parts[4])) &&
+        endswith(join(":", slice(parts, 5, length(parts))), ".fifo") &&
+        length(join(":", slice(parts, 5, length(parts)))) > length(".fifo"),
+        false,
+      )
+    ])
+    error_message = "broadcast_topic_arn 은 SNS FIFO 주제 ARN(arn:<파티션>:sns:<지역>:<12자리 계정>:<이름>.fifo)이어야 한다."
+  }
+}
+
+variable "lifecycle_publish_streams" {
+  description = "계약9 발행 허용 목록 — ingestStreamId(26자 Crockford base32) 목록, \"*\" 는 전부. 사이드카 LIFECYCLE_PUBLISH_STREAMS(쉼표로 이은 한 값). 비면 렌더하지 않아 발행이 꺼진다. 응답기 모드에서만 채운다. 사이드카는 기동 때만 읽으므로 바꾸는 것은 상자 교체다."
+  type        = list(string)
+  default     = []
+
+  # 사이드카는 항목을 검증하지 않고, 꼴이 틀린 항목의 회차를 오류 없이 버린다
+  # (lifecycle_abandoned reason=streamer_invalid) — 여기가 유일한 방어다.
+  validation {
+    condition = alltrue([
+      for stream in var.lifecycle_publish_streams :
+      stream == "*" || can(regex("^[0-9A-HJKMNP-TV-Z]{26}$", stream))
+    ])
+    error_message = "lifecycle_publish_streams 의 항목은 \"*\" 또는 26자 Crockford base32 대문자(I · L · O · U 없음)여야 한다."
+  }
+
+  # 옛 모드는 발행 env 두 줄을 렌더하지 않아 사이드카가 발행을 끈다
+  # (lifecycle_disabled reason=no_topic) — apply 뒤에야 알지 않게 plan 에서 막는다.
+  validation {
+    condition     = var.ingest_auth_image != "" || length(var.lifecycle_publish_streams) == 0
+    error_message = "옛 모드(ingest_auth_image 빈 값)에서는 lifecycle_publish_streams 를 채우지 않는다 — 발행 env 가 렌더되지 않아 사이드카가 발행을 끈다."
+  }
+}
+
+variable "playback_round_keys" {
+  description = "새 꼴 쓰기 스위치(sidecar.env 의 PLAYBACK_ROUND_KEYS — 두 모드 공통). user_data 가 첫 부팅에 한 번 쓰고, 그 뒤의 정본은 상자 안 파일이다. 기본 끔(결정 9 — 켬은 prod tfvars 의 몫)."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "edge_bounds_kvs_arn" {
+  description = "/dvr 하한 KVS ARN(런타임 1단 출력 edge_bounds_kvs_arn — 값 아님). 인스턴스 역할 EdgeBoundsKvs 의 Resource 다(Writer 스위치와 무관하게 늘). 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 에는 edge_bounds_writer_enabled 가 참일 때만 들어간다."
+  type        = string
+
+  # 전역 CloudFront KVS 하나 — 리전 빔 · 12자리 계정 · id 는 생성 때 정해지는
+  # 소문자 UUID 다. 와일드카드 · 다른 자원 · 뒤 경로를 막는다(Resource 가 넓어짐).
+  # 파티션은 aws 와 「-」 로 이은 소문자 조각(aws-us-gov · aws-cn)뿐이다.
+  validation {
+    condition     = can(regex("^arn:aws(-[a-z]+)*:cloudfront::[0-9]{12}:key-value-store/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.edge_bounds_kvs_arn))
+    error_message = "edge_bounds_kvs_arn 은 CloudFront KVS ARN(arn:<파티션>:cloudfront::<12자리 계정>:key-value-store/<소문자 UUID>)이어야 한다."
+  }
+}
+
+variable "edge_bounds_writer_enabled" {
+  description = "/dvr 하한 Writer 스위치 — 참이면 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 에 edge_bounds_kvs_arn 을, 거짓이면 빈 값을 렌더한다(빈 값 = Writer 꺼짐). 사이드카는 기동 때만 읽고 user_data 는 첫 부팅에만 쓰므로 바꾸는 것은 상자 교체다. IAM 은 바뀌지 않는다."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "clip_sg_id" {
+  description = "clip 서비스 SG id(platform 출력 service_sg_ids.clip) — Media 이그레스와 clip 인그레스 ← Media(60일 만료 창구)의 한 쌍. 만료 주소와 상관없이 늘 만든다."
+  type        = string
+}
+
+variable "clip_port" {
+  description = "clip 서비스 포트(platform 출력 service_ports.clip) — 위 한 쌍의 TCP 포트."
+  type        = number
+}
+
+variable "clip_internal_url" {
+  description = "60일 만료 창구 clip 주소 http(s)://<호스트>[:<포트>](사이드카 CLIP_INTERNAL_URL — 예: http://clip.pokeclip.internal:<clip 포트>). 빈 값이 끔이다 — 사이드카 env 둘 · 토큰 디렉터리 bind 를 렌더하지 않고 media.env 의 토큰 비밀 ARN 도 비운다. 사이드카는 기동 때만 읽고 user_data 는 첫 부팅에만 쓰므로 바꾸는 것은 상자 교체다."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  # http · https 의 scheme://host[:port] 하나. 문자 집합으로 사용자 정보 · 경로 ·
+  # 끝 / · 질의 · 조각 · 공백이 모두 막힌다. 여기서 통과한 값을 사이드카가 기동
+  # 거부하지 않게 하는 것이 목적이라, 사이드카 media/internal/config/expiry.go 의
+  # validateClipURL 이 받는 꼴의 부분 집합이다(IPv6 · 대문자 scheme · 밑줄 든
+  # 호스트는 여기서만 거부).
+  validation {
+    condition     = var.clip_internal_url == "" || can(regex("^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$", var.clip_internal_url))
+    error_message = "clip_internal_url 은 빈 값이거나 http(s)://<호스트>[:<포트>] 여야 한다(사용자 정보 · 경로 · 끝 / · 질의 · 조각 금지)."
+  }
+
+  # 포트(없으면 scheme 기본 포트)는 clip_port 와 같아야 한다 — Media → clip SG
+  # 짝이 그 포트만 연다. 꼴이 틀린 값은 첫 검증이 막으므로 꼴이 맞을 때만 본다.
+  validation {
+    condition = alltrue([
+      for m in regexall("^(https?)://[A-Za-z0-9.-]+(?::([0-9]{1,5}))?$", var.clip_internal_url) :
+      (m[1] != null ? tonumber(m[1]) : (m[0] == "https" ? 443 : 80)) == var.clip_port
+    ])
+    error_message = "clip_internal_url(루트 tfvars)의 포트가 clip_port(platform 출력 service_ports.clip)와 달라 Media → clip SG 짝에 막힌다 — 두 값을 맞춘다."
+  }
+}
+
+variable "clip_expiry_token_secret_arn" {
+  description = "60일 만료 창구 토큰 비밀 ARN(런타임 1단 출력 clip_expiry_token_secret_arn — 값 아님) — media.env 의 CLIP_EXPIRY_TOKEN_SECRET_ARN. clip_internal_url 이 빈 값이면 media.env 에는 빈 값으로 간다. 읽기 권한은 media_secret_arns 가 준다."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.clip_expiry_token_secret_arn == "" || can(regex("^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:[0-9]+:secret:[A-Za-z0-9/_+=.@-]+$", var.clip_expiry_token_secret_arn))
+    error_message = "clip_expiry_token_secret_arn 은 빈 값이거나 Secrets Manager 비밀 ARN 이어야 한다(와일드카드 금지)."
   }
 }

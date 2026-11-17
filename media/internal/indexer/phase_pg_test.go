@@ -92,6 +92,8 @@ func (d phaseDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInp
 		BaseSessionID:      dec.BaseSessionID,
 		EndingSessionID:    dec.EndingSessionID,
 		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		RoundID:            dec.RoundID,
+		NewRound:           dec.NewRound, // 빠뜨리면 store 의 새 회차 판별 단언이 개시를 되돌린다(cm cc D1)
 		Plan:               dec,
 	}, nil
 }
@@ -101,7 +103,14 @@ func (d phaseDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDeci
 	if !ok {
 		return "", fmt.Errorf("테스트 어댑터: 개시 계획이 session.Decision 이 아니다(%T)", dec.Plan)
 	}
+	plan.RoundID = dec.RoundID // 장부가 든 회차를 Open 이 대조한다(프로덕션 어댑터와 같은 꼴)
 	return d.reg.Open(ctx, tx, plan, firstPDT)
+}
+
+// legacySegKey 는 실물 키 파생(playback.SegKey)을 index.PlaybackKeyFunc 에 입힌 옛 꼴 어댑터다 — 회차를 버린다(스위치 끔
+// 상자와 같은 꼴). 회차 꼴 선택은 조립 지점 시험(cmd/segment-indexer playback_key_wire_test.go)이 잰다.
+func legacySegKey(streamID, _ string, seq int64) (string, error) {
+	return playback.SegKey(streamID, seq)
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +157,7 @@ func newPhaseFixture(t *testing.T, name string, p phase) *phaseFixture {
 
 	// 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초 · 재접속 계승 창 300초.
 	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
-	store := index.NewPGStore(pool, phaseDecider{reg: reg}, playback.SegKey)
+	store := index.NewPGStore(pool, phaseDecider{reg: reg}, legacySegKey)
 
 	f := &phaseFixture{
 		t: t, pool: pool, root: t.TempDir(),
@@ -171,7 +180,7 @@ func (f *phaseFixture) rebuild(durationMS int64) {
 	f.t.Helper()
 	opt := testOptions()
 	opt.SeedEnabled = true
-	f.ix = New(f.store, func(string) (int64, error) { return durationMS, nil },
+	f.ix = New(f.store, func(string) (int64, error) { return durationMS, nil }, noTimingFacts,
 		f.adopt, nil, f.observer, opt, slog.New(f.logs))
 	if f.degraded.reattached {
 		// 재장착이 실패한 경로 — 같은 널 오브젝트에 다른 가드로 도달한다.

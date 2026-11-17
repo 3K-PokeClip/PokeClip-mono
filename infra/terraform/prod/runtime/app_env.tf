@@ -75,6 +75,10 @@ output "app_env" {
       THUMBNAIL_QUEUE_URL      = aws_sqs_queue.job["thumbnail"].url
       CLIPS_BUCKET             = aws_s3_bucket.clips.bucket
       SEGMENT_BUCKET           = aws_s3_bucket.rewind.bucket
+      # 만료 창구의 출발지 — Media 프라이빗 서브넷(POK-551). auth 의 resolve
+      # 대역과 같은 원천이다. 전용 토큰(app_secret_arns)이 있는데 이 값이 비면
+      # clip 이 부팅을 거부한다.
+      EXPIRED_BROADCASTS_ALLOWED_CIDRS = local.media_private_subnet_cidr
     })
     # 스위치는 배치(POK-306)가 AUTH_BASE_URL · INTERNAL_API_TOKEN 과 함께
     # 정한다 — AUTH_BASE_URL 이 없으면 localhost 로 떠서 틀린 주소로 돈다.

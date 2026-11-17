@@ -218,6 +218,19 @@
   text-decoration: none;
 }
 
+/* 제목이 없어 화면이 채운 「제목 없는 방송」 — 홈 타일(.vodUntitled)과 같은 값으로 흐리게 해
+   주인이 쓴 제목과 구분한다 */
+.rowUntitled {
+  color: var(--pc-color-text-muted);
+  font-weight: 600;
+}
+
+/* 준비 중 행은 행 전체가 이미 흐리다(.rowPreparing). 흐린 색까지 얹으면 두 번 흐려져 제목 대비가
+   4.5:1 아래로 떨어지니, 색은 제목 칸 값으로 되돌리고 행 흐림 하나만 남긴다 */
+.rowPreparing .rowUntitled {
+  color: inherit;
+}
+
 /* 링크 하나가 행 전체를 덮는다 — 행을 <Link>로 감싸면 안의 버튼이 링크 안의 버튼이 된다.
    반경은 덮는 대상(.row)의 값을 그대로 적는다 — inherit는 반경이 없는 .rowLink에서
    0을 물려받아 포커스 링만 각지게 그린다 */

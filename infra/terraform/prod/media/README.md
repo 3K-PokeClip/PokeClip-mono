@@ -39,15 +39,24 @@ prod Media 상자[^box]를 띄우는 루트입니다(설계 3-1 의 ⑨). 자원
 | 루트 | 출력 |
 |---|---|
 | network | `vpc_id` · `media_private_subnet_id` · `s3_prefix_list_id` |
-| platform | `target_group_arns` · `internal_alb_sg_id` · `nlb_sg_id` · `media_proxy_ports` · `media_health_path` · `service_sg_ids`(`auth`) · `service_ports`(`auth`) |
+| platform | `target_group_arns` · `internal_alb_sg_id` · `nlb_sg_id` · `media_proxy_ports` · `media_health_path` · `service_sg_ids`(`auth` · `clip`) · `service_ports`(`auth` · `clip`) |
 | secrets | `cdn_secret_arn` · `test_stream_key_secret_arn` |
 | registry | `repo_urls`(아래 「이미지」) |
-| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
+| 런타임 1단 | `rds_endpoint` · `rds_db_name` · `rds_resource_id` · `rds_sg_id` · `rewind_bucket_arn` · `media_secret_arns` · `ingest_auth_resolve_token_secret_arn` · `clip_expiry_token_secret_arn` · `broadcast_topic_arn` · `edge_bounds_kvs_arn`([CONTRACT-runtime.md](/infra/terraform/CONTRACT-runtime.md)) |
 
 출력 하나라도 없으면 plan 이 그 이름으로 실패합니다. 런타임 1단 출력은 O7e
 선행 확인 ② 입니다. platform 의 `service_ports` 는 Media ↔ auth 짝(kty 결정
 2026-10-25 (나))과 함께 더한 출력이라, 그 전에 apply 한 platform 상태면
-platform 을 다시 apply 한 뒤에 plan 이 통과합니다.
+platform 을 다시 apply 한 뒤에 plan 이 통과합니다. 런타임 1단의
+`edge_bounds_kvs_arn`(POK-525)도 같습니다 — prod/runtime 을 다시 apply 해 KVS
+그릇을 만든 뒤에 plan 이 통과합니다. PR Ⓒ 머지 뒤 그 apply 전에는 이 루트의
+어떤 plan 이든(긴급 apply 포함) 그 출력 이름으로 멈춥니다. 순서는
+[교체 런북](/infra/terraform/runbooks/media-swap.md) 「POK-525 교체 선행」
+입니다. 런타임 1단의 `clip_expiry_token_secret_arn`(POK-551 — 60일 만료 창구
+토큰 그릇)도 같습니다. POK-551 머지 뒤 prod/runtime 을 다시 apply 하기 전에는
+`clip_internal_url` 이 빈 값이어도 이 루트의 plan 이 그 출력 이름으로 멈춥니다
+— 순서는 [런타임 1단 런북](/infra/terraform/runbooks/runtime-1a.md)
+「1단-나 ③」 입니다.
 
 ## 이미지
 
@@ -61,6 +70,7 @@ tfvars 에 둡니다.
 | `nginx` | `media-nginx` |
 | `sidecar` | `media-sidecar`(janitor 도 이 이미지) |
 | `loopback_sender` | `media-loopback-sender` |
+| `timing_guard` | `media-sidecar` — 기동 전 검사 핀(POK-196 PDT). **필수**입니다(`optional` 아님 — 없으면 plan 이 필수 속성 오류로 멈춥니다). c0 하한 이상 이미지만 두고, 사이드카를 출시 이미지로 내릴 때도 그대로 둡니다([Media 교체 런북](/infra/terraform/runbooks/media-swap.md) 「PDT 하한 판정」) |
 | `ingest_auth` | `media-ingest-auth` — 비우면 렌더하지 않습니다(M15) |
 
 *   `media-host-bundle` · `media-loopback-sender` 는 M9 에서 `prod/registry` 에
@@ -70,6 +80,10 @@ tfvars 에 둡니다.
 *   다이제스트는 O7c 의
     [prod 산출물 올리기 런북](/infra/terraform/runbooks/prod-artifacts.md)이
     푸시하고 기록한 값입니다. 모두 arm64 단일 변형이어야 합니다.
+*   `timing_guard` 는 PDT 머지 뒤 **첫 `prod/media` plan 전에** 채웁니다.
+    Media 교체 런북 「PDT 배포 순서」 3(c0 교체)보다 앞선 다른 작업(POK-525
+    교체 · `instances` 변경 등)의 plan 도 이 키를 요구합니다. 떠 있는 상자는
+    `user_data` 가 `ignore_changes` 라 값을 채워도 바뀌지 않습니다.
 
 ## 값과 적용
 
@@ -94,6 +108,33 @@ tfvars 에 둡니다.
     `ingest_auth_ip_limit` 은 기본 `"on"` 입니다. 응답기 모드
     (`image_digests.ingest_auth` 가 찬 값)에서 4C 주소가 비면 plan 이
     멈춥니다. 둘 다 바꾸면 설정 반영 교체로 들어갑니다.
+*   `lifecycle_publish_streams`(계약9 발행 허용 목록)는 기본 빈 목록(발행
+    꺼짐)입니다. 항목은 26자 Crockford base32 `ingestStreamId` 또는 `*` 이고,
+    응답기 모드에서만 채웁니다 — 옛 모드에서 채우면 plan 이 멈춥니다. 주제
+    ARN 은 런타임 1단 출력 `broadcast_topic_arn` 에서만 오고 tfvars 칸이
+    없습니다. 인스턴스 역할의 `sns:Publish`(그 주제 하나)는 목록과 무관하게
+    늘 있습니다. 켜기 · 넓히기 · 끄기는 설정 반영 교체이고, 순서는
+    [교체 런북](/infra/terraform/runbooks/media-swap.md) 「O8a 당김 교체」를
+    따릅니다.
+*   `playback_round_keys`(새 꼴 쓰기 스위치 — 상자의
+    `/etc/pokeclip-media/sidecar.env`)는 기본 `false` 입니다(모듈 기본도
+    `false`). prod 값은 POK-525 교체 걸음 4.12(A 회수 4.11 뒤)부터 `true` 입니다(결정 9 (가)).
+    첫 부팅에만 쓰이므로 바꿔도 plan 의 상자 변경은 0 이고, 다음 상자부터 그
+    값으로 뜹니다. 떠 있는 상자의 값은 상자 안 파일이 정본입니다.
+*   `edge_bounds_writer_enabled`(/dvr 하한 Writer 스위치)는 기본 `false`
+    입니다. 켜면 사이드카 `REWIND_EDGE_BOUNDS_KVS_ARN` 에 런타임 1단 출력
+    `edge_bounds_kvs_arn` 을 채우고, 끄면 빈 값(Writer 꺼짐)입니다. KVS ARN 은
+    런타임 출력에서만 오고 tfvars 칸이 없습니다. 인스턴스 역할의
+    `EdgeBoundsKvs`(그 KVS 하나)는 스위치와 무관하게 늘 있습니다 — 처음 이
+    루트를 apply 할 때 공유 역할 정책에 문 하나가 더해집니다. user_data 로만
+    들어가 바꿔도 떠 있는 상자는 그대로이고, 켜기 · 끄기는 설정 반영 교체
+    입니다(POK-525 교체 걸음 4.1 에서 켬).
+*   `clip_internal_url`(60일 만료 창구 clip 주소)은 기본 빈 값(만료 끔 ·
+    롤백 스위치)입니다. 포트는 platform 출력 `service_ports.clip` 과 같아야
+    plan 이 통과합니다. 토큰 그릇은 런타임 1단 출력
+    `clip_expiry_token_secret_arn` 에서만 오고 tfvars 칸이 없습니다. Media ↔
+    clip SG 짝은 주소와 상관없이 늘 있습니다. user_data 로만 들어가 바꿔도 떠
+    있는 상자는 그대로이고, 켜기 · 끄기는 설정 반영 교체입니다.
 
 적용은 O7e 의 1(kty 승인)입니다. 백엔드는 `backend.hcl.example` 을
 `backend.hcl` 로 복사하고 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를
@@ -152,9 +193,10 @@ platform 대상 그룹이 교체될 수 있습니다(provider 6.68.0 기준 — 
 
 *   이미지 참조 조립(저장소 · 다이제스트 짝 · 빈 응답기), 런타임 · secrets ·
     platform(포트 · 헬스 경로) 출력이 사이드카 env · `media.env` · nginx
-    변수에 닿는지, platform 의 auth SG · 포트가 Media ↔ auth 짝(모듈 시험용
-    출력 `auth_resolve_rules`)에 닿는지, 기본값(janitor 켬 · 제어면 상류 빈
-    값), 출력 넷, 다이제스트 꼴 검증을 봅니다.
+    변수에 닿는지, 런타임 출력 `broadcast_topic_arn` 이 사이드카 발행 env 에
+    닿고 이 루트에 그 칸이 없는지, platform 의 auth SG · 포트가 Media ↔
+    auth 짝(모듈 시험용 출력 `auth_resolve_rules`)에 닿는지, 기본값(janitor
+    켬 · 제어면 상류 빈 값), 출력 넷, 다이제스트 꼴 검증을 봅니다.
 *   **시험으로 볼 수 없는 것:** 루트 시험은 하위 모듈 안의 자원을 주소로 볼
     수 없습니다. 그래서 그대로 넘기는 선 — `subnet_id` · `vpc_id` · 대상
     그룹 · LB SG · `rds_sg_id` · `rds_resource_id` · `media_secret_arns` — 은

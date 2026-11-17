@@ -2,7 +2,7 @@
 
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { ApiError, apiFetch, READ_TIMEOUT_MS, type ApiFetchInit } from './client';
-import { markPlaybackCookiesIssued } from './mediaPlayback';
+import { markPlaybackCookiesIssued } from './mediaAccess';
 import { onSessionAdvance } from '@/stores/auth';
 import { notifyChannelGone } from '@/stores/channel';
 
@@ -50,6 +50,16 @@ export interface JumpCard {
   hidden?: boolean;
   /** 카드 시점 장면 사진(POK-277). 목록 문만 싣는다. 통로(SSE)로 온 카드는 비어 있다 */
   thumbnailUrl?: string | null;
+  /**
+   * 카드 시점의 플레이어용 PDT(POK-196). 서버가 못 정하면(장면 없음 · 장면 행 PDT 빈 칸 · 장면 조회 실패) null, 옛 서버면
+   * 빠져 온다. 읽기는 readPlayerAtMs(cardPositions.ts)
+   */
+  playerAtMs?: number | null;
+  /**
+   * 창 두 끝의 플레이어용 PDT(POK-196). playerAtMs 가 null 이거나 창 끝 하나라도 같은 까닭으로 못 정하면 null, 옛 서버면
+   * 빠져 온다. 읽기는 readPlayerWindow(cardPositions.ts)
+   */
+  playerWindow?: { startMs: number; endMs: number } | null;
   createdAt: string;
 }
 
@@ -102,9 +112,12 @@ export interface BroadcastRow {
   channelNames?: { CHZZK: string | null; SOOP: string | null } | null;
 }
 
-/** 방송을 사람에게 보일 이름(POK-259). 방송 제목이 있으면 그것, 없으면 방송 번호 */
-export function broadcastTitle(row: Pick<BroadcastRow, 'streamId' | 'title'>): string {
-  return row.title?.trim() || row.streamId;
+/**
+ * 방송을 사람에게 보일 이름(POK-259). 방송 제목이 있으면 앞뒤 공백을 깎은 그것, 없거나 비면 null이다 — 화면이 「제목 없는
+ * 방송」으로 적는다. 세션 ID 로 물러서지 않는다: 그 값은 주소용 식별자라 제목 자리에 보일 것이 아니다
+ */
+export function broadcastTitle(row: Pick<BroadcastRow, 'title'>): string | null {
+  return row.title?.trim() || null;
 }
 
 /** 플랫폼 코드를 화면 이름으로(POK-398). 모르는 코드면 null이다: 치지직이라고 지어내지 않고 태그를 숨긴다 */
@@ -117,19 +130,6 @@ export function platformLabel(code: string | null | undefined): string | null {
 /** 영상 주소(라이브 LL-HLS·녹화 재생)를 만드는 키. 방송을 가리키는 번호(API 경로·자격)에는 쓰지 않는다 */
 export function mediaStreamId(row: Pick<BroadcastRow, 'streamId' | 'ingestStreamId'>): string {
   return row.ingestStreamId || row.streamId;
-}
-
-/**
- * 카드·조각 ms의 0초가 되는 절대 시각(epoch ms). 서버 기준점이 정본이고(렌더가 자르는 축과 같다), 없으면 녹화 재생 서버의
- * 첫 구간, 그것도 없으면 방송 시작 시각으로 대신한다
- */
-export function timelineBaseMs(
-  row: Pick<BroadcastRow, 'startedAt' | 'timelineOriginAt'>,
-  recordingStartMs: number | null = null,
-): number {
-  if (row.timelineOriginAt) return Date.parse(row.timelineOriginAt);
-  if (recordingStartMs !== null) return recordingStartMs;
-  return Date.parse(row.startedAt!);
 }
 
 export interface SegmentIndex {
@@ -357,10 +357,17 @@ export interface BroadcastTimeline {
   truncated: boolean;
 }
 
-/** 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다 */
-export async function fetchBroadcastTimeline(streamId: string): Promise<BroadcastTimeline> {
+/**
+ * 방송 하나의 시점별 기록 전체. 방송 정보 문과 같은 자격 판정이고, 모르는 방송이면 빈 구간이다.
+ * signal: 부른 쪽이 읽기를 버리면 요청도 끊는다(첫 사진을 바로 다시 읽을 때 떠난 읽기, POK-552)
+ */
+export async function fetchBroadcastTimeline(
+  streamId: string,
+  signal?: AbortSignal,
+): Promise<BroadcastTimeline> {
   const res = await apiFetch(
     `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info/timeline`,
+    signal ? { signal } : undefined,
   );
   return (await res.json()) as BroadcastTimeline;
 }
@@ -849,6 +856,13 @@ export function requestFileAccess(streamId: string, clipId: number): Promise<Cli
 export interface SegmentAudioAccess {
   expiresAt: string;
   segments: { seq: number; startAtMs: number; durationMs: number; url: string }[];
+  /** 끝 소리 확보 상태(POK-196). 옛 서버면 빠져 온다. 읽기는 readAudioCapture(cardPositions.ts) */
+  audioCapture?: 'attached' | 'not_ready' | 'skipped';
+  /**
+   * 확보 조각(컷 끝 바로 뒤 조각 · segments 에 섞지 않는다). audioCapture 가 attached 일 때만 실린다. startAtMs 는 확보 판정
+   * 축(ms 내림)이라 segments 의 같은 seq 와 1ms 다를 수 있다 — 자리는 seq 로 찾는다
+   */
+  audioCaptureSegment?: SegmentAudioAccess['segments'][number];
 }
 
 export function requestSegmentAudioAccess(
@@ -909,11 +923,23 @@ export function libraryQueryOptions(streamerId: number | null) {
 }
 
 /**
- * 받아 둔 보관함 목록을 버린다. 편집기는 보관함과 같이 서 있지 않아 저장 · 영상 요청의 답을 목록에 얹을 수 없다: 남겨 두면 보관함으로
- * 돌아갈 때 방금 만든 편집본이 없는 옛 목록이 먼저 보인다.
+ * 받아 둔 보관함 목록을 낡은 것으로 돌린다. 편집기는 보관함과 같이 서 있지 않아 저장 · 영상 요청의 답을 목록에 얹을 수 없다: 남겨 두면
+ * 보관함으로 돌아갈 때 방금 만든 편집본이 없는 옛 목록이 먼저 보인다 — 안 보이는 목록은 버린다.
+ * 보고 있는 목록은 버리지 않고 다시 읽는다: 카드에서 저장을 누르고 끝나기 전에 보관함으로 옮기면 목록이 먼저 떠 있는데, 버리기만
+ * 하면 그 관찰자는 다시 읽지 않아 다음 주기(최대 5분)까지 새 편집본이 안 보였다(PR #480 2차 리뷰).
+ * 첫 읽기가 걸려 있으면(받아 둔 목록이 없다) 다시 읽으라 해도 새로 읽지 않고 그 요청을 같이 쓴다 — query-core는 받아 둔 데이터가
+ * 있을 때만 걸린 읽기를 접고 새로 읽는다. 그 요청은 저장보다 먼저 나가 새 편집본이 빠져 있으니 먼저 접고(읽기 전 상태로 되돌린다)
+ * 다시 읽는다(PR #480 3차 리뷰)
  */
 export function forgetLibraryList(queryClient: QueryClient): void {
-  queryClient.removeQueries({ queryKey: ['library'] });
+  void queryClient
+    .cancelQueries({
+      queryKey: ['library'],
+      fetchStatus: 'fetching',
+      predicate: (query) => query.state.data === undefined,
+    })
+    .then(() => queryClient.invalidateQueries({ queryKey: ['library'], refetchType: 'active' }));
+  queryClient.removeQueries({ queryKey: ['library'], type: 'inactive' });
 }
 
 export function fetchLibraryDetail(recipeId: number): Promise<LibraryDetail> {
@@ -975,7 +1001,7 @@ export async function requestPlaybackAccess(streamId: string): Promise<PlaybackA
       {
         method: 'POST',
         credentials: 'include',
-        // 지난 방송 목록이 이 답을 기다린다: 멈추면 목록 읽기가 끝나지 않는다. 쿠키를 다시 받는 것은 두 번 해도 안전하다
+        // 라이브 화면 · 편집기가 이 답을 기다린다: 멈추면 라이브 주소를 붙이지 못하고 편집기가 ③ 되감기 목록을 받지 못한다. 쿠키를 다시 받는 것은 두 번 해도 안전하다
         timeoutMs: READ_TIMEOUT_MS,
       },
     );

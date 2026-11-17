@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AlertCircle, Upload, X } from 'lucide-react';
-import { Button, Dialog, IconButton, Progress } from '@/ui';
+import { Button, Dialog, IconButton, PRIVATE_TEXT_CLASS, Progress } from '@/ui';
 import { cropToDataUrl, INITIAL_CROP, MASK_PX, type CropTransform } from './cropImage';
 import { PhotoCropStage, type CropStatus } from './PhotoCropStage';
 import { cssColor, PRESET_AVATARS, presetAvatarDataUrl } from './profilePresets';
@@ -108,7 +108,8 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
         <button
           key={preset.bg + preset.fg}
           type="button"
-          className={styles.presetSwatch}
+          // 견본마다 이름의 첫 글자를 그린다
+          className={`${styles.presetSwatch} ${PRIVATE_TEXT_CLASS}`}
           style={{ background: cssColor(preset.bg), color: cssColor(preset.fg) }}
           aria-label={`기본 아바타 ${i + 1}`}
           onClick={() => choosePreset(i)}
@@ -218,7 +219,9 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
                   <span className={styles.uploadBar}>
                     <Progress size="sm" label="업로드 진행률" />
                   </span>
-                  <span className={styles.uploadFile}>{photo.fileLabel}</span>
+                  <span className={`${styles.uploadFile} ${PRIVATE_TEXT_CLASS}`}>
+                    {photo.fileLabel}
+                  </span>
                 </div>
               )}
             </div>

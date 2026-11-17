@@ -90,5 +90,12 @@ resource "terraform_data" "remote_contract" {
       condition     = can(regex("^[a-z0-9][a-z0-9.-]*\\.s3\\.[a-z0-9-]+\\.amazonaws\\.com$", local.runtime.rewind_bucket_regional_domain_name))
       error_message = "runtime 출력 rewind_bucket_regional_domain_name 이 없거나 <버킷>.s3.<리전>.amazonaws.com 꼴이 아니다."
     }
+
+    # /dvr 하한 함수의 KVS 연결(POK-525). prod/runtime 을 POK-525 판으로
+    # apply 하기 전이면 이 출력이 없어 멈춘다 — prod/runtime README 「적용」.
+    precondition {
+      condition     = can(regex("^arn:aws:cloudfront::[0-9]{12}:key-value-store/[0-9a-f-]{36}$", local.runtime.edge_bounds_kvs_arn))
+      error_message = "runtime 출력 edge_bounds_kvs_arn 이 없거나 CloudFront KVS ARN(arn:aws:cloudfront::<계정>:key-value-store/<id>) 꼴이 아니다."
+    }
   }
 }

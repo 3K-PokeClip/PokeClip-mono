@@ -1,6 +1,6 @@
 # ECS Fargate 서비스 하나(설계 3-3 ecs_service · 5-5 · 결정 146 arm64). 태스크
 # 정의 · 서비스 · 서비스 SG(이그레스만) · Cloud Map 등록 · 로그 그룹 · 실행 ·
-# 작업 역할을 만든다. 인그레스 규칙은 상대 SG 를 아는 호출자(platform 루트)가
+# 작업 역할을 만든다. 인그레스 규칙은 상대 SG 를 아는 호출자(호출 루트)가
 # 만든다. 비밀 값은 입력에 없다 — ARN 만 받아 ECS 가 기동 때 읽는다.
 
 data "aws_caller_identity" "current" {}
@@ -163,22 +163,37 @@ resource "aws_ecs_task_definition" "this" {
     operating_system_family = "LINUX"
   }
 
-  container_definitions = jsonencode([{
-    name         = var.name
-    image        = var.image
-    essential    = true
-    portMappings = [{ containerPort = var.port, protocol = "tcp" }]
-    environment  = [for key, value in var.env : { name = key, value = value }]
-    secrets      = [for key, arn in var.secrets : { name = key, valueFrom = arn }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = aws_cloudwatch_log_group.this.name
-        awslogs-region        = data.aws_region.current.region
-        awslogs-stream-prefix = var.name
-      }
+  dynamic "ephemeral_storage" {
+    for_each = var.ephemeral_storage_gib == null ? [] : [var.ephemeral_storage_gib]
+
+    content {
+      size_in_gib = ephemeral_storage.value
     }
-  }])
+  }
+
+  # port 가 없으면 portMappings 키 자체를 내지 않는다(빈 목록 아님). jsonencode 는
+  # 키를 정렬해 내므로 port 를 준 호출의 문자열은 이 칸이 생기기 전과 같다.
+  container_definitions = jsonencode([merge(
+    {
+      name        = var.name
+      image       = var.image
+      essential   = true
+      environment = [for key, value in var.env : { name = key, value = value }]
+      secrets     = [for key, arn in var.secrets : { name = key, valueFrom = arn }]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.this.name
+          awslogs-region        = data.aws_region.current.region
+          awslogs-stream-prefix = var.name
+        }
+      }
+    },
+    {
+      for key, mappings in { portMappings = [{ containerPort = var.port, protocol = "tcp" }] } :
+      key => mappings if var.port != null
+    },
+  )])
 }
 
 resource "aws_ecs_service" "this" {

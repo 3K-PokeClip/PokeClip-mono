@@ -5,19 +5,25 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
 대상 등록 · 응답기 거부 목록 SSM 파라미터를 만듭니다.
 
 *   **상자:** AL2023 arm64 AMI(SSM 공개 파라미터)를 Media AZ 프라이빗
-    서브넷에 둡니다. 공인 IP 가 없고, IMDSv2 필수에 hop limit 2 입니다 —
-    컨테이너(사이드카 IAM DB 토큰 · S3 업로드)가 인스턴스 역할 자격을 얻어야
-    하기 때문입니다.
+    서브넷에 둡니다. 공인 IP 가 없고, IMDSv2 필수에 IPv6 엔드포인트는
+    끕니다. hop limit 은 키마다 `cred_relay` 로 정합니다(POK-574). 끔(값
+    없음)은 2 입니다 — 컨테이너(사이드카 IAM DB 토큰 · S3 업로드)가 IMDS 로
+    직접 역할 자격을 얻습니다. 켬은 1 입니다 — 컨테이너는 IMDS 토큰을 받지
+    못하고, 사이드카 · janitor 만 호스트 망의 대리 창구(cred-relay)로 자격을
+    받습니다.
 *   **교체 모델(5-3):** 상자 키마다 `config_version` 을 둡니다. 이미 떠 있는
     키의 user_data · AMI 는 바꾸지 않고(`ignore_changes`), 새 구성은 새 키로
     띄운 뒤 `ingest_active_key` · `http_active_key` 를 옮깁니다. 대상 그룹
     넷에는 활성 키의 상자 하나만 등록합니다.
 *   **SG(5-5):** Media SG 인그레스는 SRT ← NLB · 프록시 셋 ← 내부 ALB ·
     헬스 ← 둘입니다. 이그레스는 443 → S3 prefix list · 443 → 0.0.0.0/0 ·
-    5432 → RDS SG · `auth_port` → auth SG(응답기의 4C resolve)입니다. RDS
-    인그레스 ← Media 5432 · auth 인그레스 ← Media `auth_port` 와 로드밸런서
-    SG 이그레스 → Media 도 이 모듈이 만듭니다(한 apply 에 짝이 생깁니다).
-    auth 짝은 kty 결정 2026-10-25 (나)로 런타임 2단에서 옮겼습니다.
+    5432 → RDS SG · `auth_port` → auth SG(응답기의 4C resolve) ·
+    `clip_port` → clip SG(사이드카의 60일 만료 창구)입니다. RDS 인그레스 ←
+    Media 5432 · auth 인그레스 ← Media `auth_port` · clip 인그레스 ← Media
+    `clip_port` 와 로드밸런서 SG 이그레스 → Media 도 이 모듈이 만듭니다(한
+    apply 에 짝이 생깁니다). auth 짝은 kty 결정 2026-10-25 (나)로 런타임
+    2단에서 옮겼고, clip 짝은 같은 꼴입니다. clip 짝은 만료 주소와 상관없이 늘
+    만듭니다 — 켜고 끌 때 SG 차분이 없습니다.
     MediaMTX 루프백 포트(8888 · 9996 · 9997)는 열지 않습니다.
 *   **인스턴스 역할:** 경로 `/pokeclip/prod/`. 관리형 정책은
     `AmazonSSMManagedInstanceCore` 하나이고, 권한 정책은 정책 문서
@@ -51,7 +57,9 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
         `launch_template` 금지(`dynamic` 포함 — 템플릿의 프로필로 비켜 간다).
     *   상자 접속 · 자격: `key_name`(SSH 키 쌍) 금지 · `metadata_options` 에
         `http_tokens = "required"` 리터럴 명시 필수(IMDSv2 — 없음 · 식 ·
-        `dynamic` 위반).
+        `dynamic` 위반). 같은 블록의 `http_put_response_hop_limit` 은 리터럴
+        `1` 또는 정확히 `each.value.cred_relay ? 1 : 2`(2 · 변수 · 다른 식
+        위반), `http_protocol_ipv6` 는 리터럴 `"disabled"` 필수.
     *   명령 블록: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` ·
         `file`) · `connection` 금지(`dynamic` 포함).
     *   lifecycle: 거부 목록 파라미터는 `prevent_destroy = true`(리터럴) ·
@@ -69,7 +77,7 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
 | 설치 묶음 이미지(`infra/media-host/bundle/Dockerfile` — `pokeclip-prod/media-host-bundle`) | `bin/*.sh` → `/opt/pokeclip-media/bin/` | `root:root` · 0755 |
 | 같은 이미지 | `bin/lib/*` → `/opt/pokeclip-media/bin/lib/` | `root:root` · 0644(디렉터리 0755) |
 | 같은 이미지 | `mediamtx.yml.tmpl` → `/etc/pokeclip-media/mediamtx.yml.tmpl` | `root:root` · 0644 |
-| user_data | `compose.yml` · `nginx.conf` · `ingest-auth.env`(Terraform 렌더) · `media.env` | `root:root` · 0644 |
+| user_data | `compose.yml` · `nginx.conf` · `ingest-auth.env` · `sidecar.env`(Terraform 렌더) · `media.env` | `root:root` · 0644 |
 | user_data | `/root/.docker/config.json`(`credHelpers` → `ecr-login`) | `root:root` · 0600 |
 | user_data | 유닛 `pokeclip-media.service`(저장소 파일 그대로) · drop-in `10-bundle.conf` | `root:root` · 0644 |
 | user_data | journald 설정(`Storage=persistent`) | `root:root` · 0644 |
@@ -90,10 +98,19 @@ Media 상자[^box] 모듈입니다(설계 3-3 · 3-3-1 · 5-3 · 5-5, 계획 M9)
     합니다.
 *   부트스트랩의 판정 줄(`MEDIA BOOTSTRAP OK|FAIL <단계>`)은 cloud-init 출력
     (`/var/log/cloud-init-output.log`)에 남습니다.
-*   압축 user_data 크기(시험값 기준): 기본 약 12.9 KB · 가장 큰 렌더(응답기
-    · janitor · 제어면 상류 모두 켬) 약 13.7 KB — 여유 약 2.6 KB 입니다. 주석을
-    고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은 16 KiB 게이트 시험이 매번
-    다시 잽니다.
+*   압축 user_data 크기(시험값 기준 · 2026-11-12 실측): 기본 14,673 바이트 ·
+    가장 큰 렌더(응답기 · janitor · 제어면 상류 · 발행 목록 둘 · 새 꼴 쓰기 ·
+    하한 Writer · 만료 창구 모두 켬) 15,819 바이트입니다. POK-574 뒤 가장 큰
+    렌더는 여기에 대리 창구 켬을 더한 것이고 16,095 바이트입니다(2026-11-16
+    시험값). 주석을 고칠 때마다 수십 바이트씩 바뀌므로 정확한 값은 16 KiB
+    게이트 시험(`largest_user_data_under_16_kib` — 켬 키로 잼)이 매번 다시
+    잽니다.
+*   **한계 — 16 KiB 여유가 작습니다.** 가장 큰 렌더의 여유는 289 바이트입니다
+    (POK-574 전 565).
+    POK-551 전(acebb9a1)에 이미 16,302 바이트(여유 82)였고, 만료 창구를 더하려고
+    compose 템플릿 머리의 「계약9 발행 게이트」 설명을 렌더에 남지 않는 템플릿
+    주석으로 옮겼습니다(kty 결정 B). compose 템플릿에 줄을 더할 때는 새 설명을
+    템플릿 주석(`${/* … */ ""}`)으로 둡니다.
 
 묶음 내용이 저장소와 같은지는 묶음 Dockerfile 이 저장소 경로를 그대로 COPY
 하는 것으로 갈음합니다. 2026-10-23 로컬 빌드(arm64)에서 꺼낸 9개 파일의
@@ -122,7 +139,17 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     `c8gn.large`). 2026-10-23 `describe-instance-types` 읽기에서 상시 네트워크
     대역폭 6.25 Gbps · EBS 상시 처리량 156 MB/s 였습니다(같은 크기의
     `c7g.large` 는 상시 0.937 Gbps).
-*   디스크: DVR 1시간 × 30방송 ≈ 125 GB 에 OS 몫을 더한 150 GiB 입니다.
+*   디스크: 150 GiB 는 처음에 라이브 DVR 1시간 × 30방송 ≈ 125 GB 에 OS 몫을
+    더해 정했습니다. 라이브 창이 28초(조각 7개 · ADR-102)가 된 뒤로는 라이브
+    목록 몫이 무시할 만합니다 — MediaMTX 는 목록에서 빠진 조각을 디스크에서도
+    지웁니다(상류 v1.21.1 이 쓰는 gohlslib v2.4.5 `muxer_stream.go`). 디스크를
+    채우는 것은 녹화입니다: 녹화는 방송 하나에 시간당 약 4.2 GB 이고 janitor
+    보관 유예(`JANITOR_GRACE`) 동안 루트에 남습니다(janitor 를 끄면 보존 기한
+    24시간까지). 유예는 기본 8분이라(`infra/media-host` README
+    「janitor_enabled」) 업로드 지연과 8분 분량만 남습니다. 렌더본이
+    23시간(V1 임시)인 옛 상자면 녹화가 디스크를 정합니다. 값은 그대로 두고,
+    판정은 녹화 증가율로 합니다
+    ([media-swap](/infra/terraform/runbooks/media-swap.md) 「동시 방송 부하」 행).
     처리량 변수는 125 부터 750 MiB/s 까지 받습니다 — gp3 는 IOPS 당
     0.25 MiB/s 까지이고 이 모듈은 IOPS 를 기본 3,000 으로 둡니다.
 *   유형은 입력 단계에서 계열 이름(세대 숫자 뒤 `g`)으로 한 번 거르고, plan
@@ -135,6 +162,8 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 *   `proxy_ports`(live · playback · control · health)는 1024 이상이고 서로
     다르며, 응답기 포트(8080 · 8081)와 MediaMTX 루프백 포트(8888 · 9996 ·
     9997)가 아닙니다. 같은 망 칸[^netns]에서 겹치면 nginx 가 뜨지 않습니다.
+    대리 창구 포트 9911 도 아닙니다 — 공개 포트가 같으면 Docker DNAT 이 중계
+    요청을 MediaMTX 로 보냅니다(POK-574).
 *   이미지 참조는 모두 `<저장소>@sha256:<64자>` 이고 이 계정 ECR 레지스트리
     호스트(`media.env` 의 `ECR_REGISTRY_HOST`)로 시작해야 합니다. 응답기
     (`ingest_auth_image`)만 빈 값을 받습니다 — 비면 렌더하지 않습니다(M15).
@@ -143,8 +172,63 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
     아키텍처(`aws_ec2_instance_type`)에 arm64 가 없으면 plan 이 멈춥니다.
 *   `stream_key_resolve_url` 의 포트는 `auth_port`(platform 출력
     `service_ports.auth`)와 같아야 합니다 — 다르면 plan 이 멈춥니다(POK-477).
+*   `clip_internal_url`(기본 빈 값 · null 은 기본값으로)은 60일 만료 창구
+    clip 주소입니다. 꼴은 `http(s)://<호스트>[:<포트>]` 이고, 사이드카
+    `validateClipURL`(`media/internal/config/expiry.go`)이 받는 꼴의 부분
+    집합입니다 — IPv6 · 대문자 scheme · 밑줄 든 호스트는 사이드카는 받지만
+    여기서는 plan 이 멈춥니다. 포트(없으면 scheme 기본 포트)는
+    `clip_port`(platform 출력 `service_ports.clip`)와 같아야 합니다 — 다르면
+    plan 이 멈춥니다. 차면
+    사이드카 env 둘(`CLIP_INTERNAL_URL` · `CLIP_EXPIRY_TOKEN_FILE`)과 토큰
+    디렉터리 bind 를 렌더하고(두 모드 공통), 비면(끔) 셋 다 렌더하지 않으며
+    `media.env` 의 `CLIP_EXPIRY_TOKEN_SECRET_ARN` 도 비웁니다.
+    `clip_expiry_token_secret_arn`(런타임 1단 출력 — 값 아님)의 읽기 권한은
+    `media_secret_arns` 가 줍니다. compose 에 들어가 첫 부팅에만 쓰이므로
+    바꾸는 것은 상자 교체입니다.
+*   **한계 — URL 이 빈 상자도 만료 토큰을 읽을 수 있습니다.** 읽기 권한은
+    `media_secret_arns` 를 따르고 `clip_internal_url` 을 보지 않으므로, 주소가
+    빈 상자의 인스턴스 역할도 그 그릇을 읽습니다. 만료를 켜고 끌 때 IAM
+    차분이 생기지 않게 하려는 선택입니다(kty 2026-11-13).
 *   `rewind_bucket_arn` 에서 버킷 이름을 꺼내 사이드카 `S3_BUCKET` 으로
     넘깁니다.
+*   `broadcast_topic_arn`(필수)은 사이드카 `loadLifecycle` 과 같은 판정으로
+    봅니다 — `arn:<파티션>:sns:<지역>:<12자리 계정>:<이름>.fifo`(파티션은 보지
+    않습니다). 인스턴스 역할 `BroadcastPublish`(`sns:Publish` · 그 주제
+    하나)는 발행 목록과 무관하게 늘 있습니다.
+*   `lifecycle_publish_streams` 의 항목은 `*` 또는 26자 Crockford base32
+    대문자입니다 — 사이드카는 항목을 검증하지 않고 꼴이 틀린 항목의 회차를
+    오류 없이 버립니다. 옛 모드(`ingest_auth_image` 빈 값)에서 채우면 plan 이
+    멈춥니다. 사이드카 env 두 줄은 응답기 모드이고 목록이 찰 때만
+    렌더합니다.
+*   `playback_round_keys`(bool · 기본 `false` · null 은 기본값으로)는 새 꼴
+    쓰기 스위치입니다. `/etc/pokeclip-media/sidecar.env` 에 정확히 한 줄
+    `PLAYBACK_ROUND_KEYS=true|false` 로 렌더해 첫 부팅에 한 번 씁니다(두 모드
+    공통 — compose 사이드카의 required `env_file`). 그 뒤의 정본은 상자 안
+    파일이라(user_data `ignore_changes`) 값을 바꿔도 떠 있는 상자는 그대로이고
+    다음 상자부터 그 값으로 뜹니다. 켬은 prod tfvars 의 몫입니다(결정 9).
+*   `edge_bounds_kvs_arn`(필수 — 런타임 1단 출력)은 /dvr 하한 KVS 하나만
+    받습니다 — `arn:<파티션>:cloudfront::<12자리 계정>:key-value-store/<소문자
+    UUID>`(와일드카드 · 다른 자원 · 뒤 경로 거부). 인스턴스 역할
+    `EdgeBoundsKvs`(`cloudfront-keyvaluestore:` DescribeKeyValueStore ·
+    UpdateKeys · 그 KVS 하나 — GetKey · ListKeys · PutKey · DeleteKey 없음.
+    GetKey 는 상자에서 부르는 곳이 없어 POK-574 가 뺐습니다)는
+    Writer 스위치와 무관하게 늘 있습니다. 동작 이름은 서비스 승인 참조 대조
+    (2026-11-04)이고, 실제 허용 · 거부는 ISB 실측 몫입니다(POK-525 계획 12절
+    (2)).
+*   `edge_bounds_writer_enabled`(bool · 기본 `false` · null 은 기본값으로)는
+    /dvr 하한 Writer 스위치입니다. 켜면 사이드카 `REWIND_EDGE_BOUNDS_KVS_ARN`
+    에 위 ARN 을, 끄면 빈 값을 렌더합니다(빈 값 = Writer 꺼짐 · 두 모드
+    공통). compose 에 들어가 첫 부팅에만 쓰이므로 바꾸는 것은 상자 교체입니다.
+*   `instances` 원소의 `cred_relay`(bool · 기본 `false` — 값 없음은 끔)는 그
+    상자의 IMDS 대리 창구 스위치입니다(POK-574 ·
+    [ADR-0008](/docs/decisions/2026-11-15-media-imds-credential-relay.md)).
+    켜면 그 상자의 IMDS 홉 상한이 1 이 되고, compose 렌더본에 중계 서비스
+    `cred-relay` 와 사이드카 · janitor 의 창구 env · 토큰 디렉터리 bind 가
+    들어갑니다(키마다 렌더 — nginx 렌더 · `template_vars` 는 공통). 끄면 렌더
+    바이트 · 홉 2 가 이 변수가 없던 때와 같습니다. IMDS 설정은 `ignore_changes`
+    밖이라 떠 있는 상자에 곧바로 반영됩니다 — 그래서 떠 있는 키의 값은 바꾸지
+    않고 새 키로 교체합니다(교체 런북 「대리 창구 하한 · 켬 상자」). 켬 상자는
+    사이드카 · 설치 묶음이 POK-574 이상이어야 합니다.
 *   응답기 거부 목록 파라미터 이름은 `/pokeclip/prod/media/ingest-auth-deny-tokens`
     로 확정입니다(M15 계획 · ingest-auth `CONTRACT.md` K5 · `media.env` 의
     `INGEST_AUTH_DENYLIST_PARAM`). 값은 운영자가 고치고 Terraform 은 첫 줄만
@@ -155,15 +239,20 @@ kty 확정(2026-10-23): `c8gn.large`(네트워크 최적화 Graviton) · 루트 
 | 출력 | 쓰는 곳 |
 |---|---|
 | `instance_ids` | 루트 · 운영 확인 |
-| `media_sg_id` | Media 를 상대로 규칙을 거는 다른 루트(Media ↔ auth 짝은 이 모듈이 만듭니다 — kty 결정 2026-10-25 (나)) |
+| `media_sg_id` | Media 를 상대로 규칙을 거는 다른 루트(Media ↔ auth · clip 짝은 이 모듈이 만듭니다 — kty 결정 2026-10-25 (나)) |
 | `instance_role_arn` | 참고용 |
-| `rendered_user_data` · `template_vars` · `auth_resolve_rules` | 시험용(비밀 없음) — 루트는 다시 내보내지 않습니다 |
+| `rendered_user_data` · `template_vars` · `auth_resolve_rules` · `clip_expiry_rules` | 시험용(비밀 없음) — 루트는 다시 내보내지 않습니다 |
 
 ## 시험
 
 `terraform -chdir=infra/terraform/modules/media_host test`(mock provider).
 
 *   정책 문서의 `json` 은 mock 이 지어내므로 `statement` 입력을 직접 봅니다.
+    예외는 `tests/broadcast_publish_policy.tftest.hcl` ·
+    `tests/edge_bounds_kvs_policy.tftest.hcl` 둘입니다 — 정책 문서만 진짜
+    provider 로 계산하고(가짜 자격 · AWS 호출 없음) 나머지 자원 · data 는 모두
+    override 해, 실제 정책 JSON 에서 `BroadcastPublish` · `EdgeBoundsKvs` 를
+    봅니다. 모듈에 자원을 더하면 두 파일에 `override_resource` 를 더합니다.
 *   compose · nginx 렌더본은 저장소 템플릿을 같은 변수로 다시 렌더한 값과
     같은지, 템플릿 변수 키 집합은 `infra/media-host/test/render_vars.json` 과
     같은지 봅니다.

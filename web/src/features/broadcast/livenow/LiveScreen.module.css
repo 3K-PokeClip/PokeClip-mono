@@ -383,14 +383,22 @@
   }
 }
 
-/* 방금 감지·마킹된 카드 */
-.cardEmphasized {
-  border-color: rgb(214 63 159 / 0.45); /* 테마 고정 */
-  background: rgb(214 63 159 / 0.05); /* 테마 고정 */
+/* 「편집」을 아직 못 여는 카드(편집기 미리 받기 중, POK-499): 만드는 중인 카드 자리(.pendingCard)와 같은 점선 · 틴트.
+   다 받으면 이 클래스가 빠져 기본 카드와 같아진다. 올렸을 때도 점선 색을 지킨다(.card:hover가 테두리 색을 바꾼다) */
+.cardPreparing,
+.cardPreparing:hover {
+  border: calc(1.5 * var(--pc-u)) dashed var(--pc-color-point);
+  background: rgb(214 63 159 / 0.06); /* 테마 고정 */
 }
 
 .cardDimmed {
   opacity: 0.55;
+}
+
+/* 사진 칸(시안 B2-1) — 사진(시점 이동 단추)과 그 위 「저장」 알약(단추 안에 단추를 못 넣어 바깥 형제)을 겹친다 */
+.cardThumbBox {
+  position: relative;
+  flex: none;
 }
 
 .cardThumb {
@@ -401,8 +409,10 @@
   border: none;
   padding: 0;
   background: var(--pc-color-bg-inset);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
-  flex: none;
+  overflow: hidden;
 }
 
 .cardThumbLabel {
@@ -415,21 +425,63 @@
   color: var(--pc-color-text-muted);
 }
 
-.cardSpark {
+/* 아래 그늘 — 사진 위 흰 글자가 밝은 장면에서도 읽히게 */
+.cardShade {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: calc(3 * var(--pc-u));
-  width: 100%;
-  height: calc(22 * var(--pc-u));
-  display: block;
-  opacity: 0.9;
+  bottom: 0;
+  height: 62%;
+  background: linear-gradient(to top, rgb(0 0 0 / 0.82), rgb(0 0 0 / 0)); /* 테마 고정 */
 }
 
-.cardSpark polyline {
-  fill: none;
-  stroke: var(--pc-color-point);
-  stroke-width: 1.2;
+/* 왼쪽 위 점수(수동은 「수동」) — 사진 위라 어두운 바탕 · 흰 글자, 두 테마 같다 */
+.cardScore {
+  position: absolute;
+  top: calc(8 * var(--pc-u));
+  left: calc(8 * var(--pc-u));
+  padding: calc(2 * var(--pc-u)) calc(7 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  background: rgb(0 0 0 / 0.62); /* 테마 고정 */
+  color: #fff; /* 테마 고정 */
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 아래 그늘 글 한 줄 — 왼쪽 방송 시각 + 길이, 오른쪽 경과(같은 밑줄) */
+.cardCaption {
+  position: absolute;
+  left: calc(12 * var(--pc-u));
+  right: calc(12 * var(--pc-u));
+  bottom: calc(10 * var(--pc-u));
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(8 * var(--pc-u));
+  color: #fff; /* 테마 고정 */
+}
+
+.cardTime {
+  font-size: calc(17 * var(--pc-u));
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.cardTime small {
+  margin-left: calc(6 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.cardAgo {
+  flex: none;
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 600;
+  opacity: 0.88;
+  white-space: nowrap;
 }
 
 .cardPosTrack {
@@ -450,34 +502,38 @@
   background: var(--pc-color-point);
 }
 
-.cardScore {
+/* 준비 중: 위치 눈금 자리에서 도는 띠(카드 테두리 점선과 같은 색) */
+.cardSweep {
   position: absolute;
-  top: calc(8 * var(--pc-u));
-  left: calc(8 * var(--pc-u));
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(3 * var(--pc-u));
+  background: rgb(255 255 255 / 0.14); /* 테마 고정 */
+  overflow: hidden;
 }
 
-.cardReason {
+.cardSweep::after {
+  content: '';
   position: absolute;
-  top: calc(8 * var(--pc-u));
-  right: calc(8 * var(--pc-u));
-  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
-  border-radius: calc(99 * var(--pc-u));
-  background: rgb(0 0 0 / 0.55); /* 테마 고정 */
-  color: rgb(255 255 255 / 0.85); /* 테마 고정 */
-  font-size: calc(10 * var(--pc-u));
-  font-weight: 650;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 35%;
+  background: var(--pc-color-point);
+  animation: card-sweep 1.4s ease-in-out infinite;
 }
 
-.cardDuration {
-  position: absolute;
-  right: calc(8 * var(--pc-u));
-  bottom: calc(9 * var(--pc-u));
-  padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
-  border-radius: calc(5 * var(--pc-u));
-  background: rgb(0 0 0 / 0.62); /* 테마 고정 */
-  color: #fff; /* 테마 고정 */
-  font-size: calc(10.5 * var(--pc-u));
-  font-weight: 600;
+/* transform으로 옮긴다(합성만 탄다): left를 움직이면 준비 중 카드마다 매 프레임 레이아웃이 돈다 — 화면 밖 카드도 준비 중이다(PR #480 2차 리뷰).
+   띠 폭이 줄의 35%라 줄 왼쪽 밖(-100%)에서 오른쪽 밖(100/35 ≈ 286%)까지 간다 */
+@keyframes card-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(286%);
+  }
 }
 
 .cardProcessing {
@@ -489,42 +545,104 @@
   background: rgb(0 0 0 / 0.72); /* 테마 고정 */
 }
 
+/* 올리면 「여기부터 보기」 — 사진이 시점 이동 단추라는 것을 보인다(패널 머리말에만 있던 안내) */
+.cardPlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(6 * var(--pc-u));
+  background: rgb(0 0 0 / 0.38); /* 테마 고정 */
+  color: #fff; /* 테마 고정 */
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.cardThumb:hover .cardPlay,
+.cardThumb:focus-visible .cardPlay {
+  opacity: 1;
+}
+
+/* 오른쪽 위 「저장」 알약 — 사진 위라 어두운 바탕(두 테마 같다), 저장되면 강조색 「저장됨」 */
+.cardSave {
+  position: absolute;
+  top: calc(7 * var(--pc-u));
+  right: calc(7 * var(--pc-u));
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  height: calc(26 * var(--pc-u));
+  padding: 0 calc(10 * var(--pc-u)) 0 calc(8 * var(--pc-u));
+  border: none;
+  border-radius: calc(99 * var(--pc-u));
+  background: rgb(0 0 0 / 0.6); /* 테마 고정 */
+  color: #fff; /* 테마 고정 */
+  font: inherit;
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.cardSave:hover:not([aria-disabled='true']) {
+  background: rgb(0 0 0 / 0.8); /* 테마 고정 */
+}
+
+.cardSave:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 저장 중 — disabled 대신 aria-disabled로 막는다(초점을 잃지 않게) */
+.cardSave[aria-disabled='true'] {
+  cursor: default;
+}
+
+/* 올렸을 때도 강조색 그대로(.cardSave:hover:not(…)와 같은 무게라 뒤에 둔다) */
+.cardSaveDone,
+.cardSaveDone:hover:not([aria-disabled='true']) {
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cardSweep::after {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.6;
+  }
+
+  .cardPlay,
+  .cardSave {
+    transition: none;
+  }
+}
+
 .cardBody {
   display: flex;
   flex-direction: column;
   gap: calc(6 * var(--pc-u));
-  padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u)) calc(12 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(12 * var(--pc-u)) calc(12 * var(--pc-u));
+  margin-top: auto;
 }
 
-.cardTitle {
-  margin: 0;
-  font-size: calc(13.5 * var(--pc-u));
-  font-weight: 650;
-  white-space: nowrap;
+/* 카드 제목은 화면에 안 쓰고(사진 위 시각이 대신한다) 듣는 쪽 · 제목으로 훑는 쪽에만 남긴다 */
+.cardTitleHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cardMeta {
-  margin: 0;
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cardStatusRow {
-  display: flex;
-  align-items: center;
-  gap: calc(6 * var(--pc-u));
-  margin-top: calc(2 * var(--pc-u));
-}
-
-.cardTimeAgo {
-  margin-left: auto;
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
+  border: 0;
 }
 
 .cardProgressRow {
@@ -546,13 +664,24 @@
 .cardActions {
   display: flex;
   gap: calc(6 * var(--pc-u));
-  margin-top: calc(4 * var(--pc-u));
 }
 
-/* 마지막(아이콘 버튼)만 빼고 늘린다. 요소 이름으로 고르면 「편집」이 링크가 되는 순간
-   빠져나가 한쪽만 늘어난다 — 실제로 그렇게 어긋난 적이 있다. */
-.cardActions > *:not(:last-child) {
-  flex: 1;
+/* 「편집」(가린 카드는 되살리기)만 늘린다. 아이콘 단추(다시 시도 · 가리기)는 제 크기 */
+.cardGrow {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* 미리 받기 실패 — 경고색 다시 시도 */
+.cardRetry {
+  color: var(--pc-color-warning-text);
+}
+
+/* 만료 카드: 버튼줄 대신 한 줄 */
+.cardNote {
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
 }
 
 /* ---------- 만드는 중인 카드 자리 ---------- */
@@ -567,12 +696,6 @@
   min-height: calc(300 * var(--pc-u));
   border: calc(1.5 * var(--pc-u)) dashed var(--pc-color-point);
   border-radius: calc(14 * var(--pc-u));
-  background: rgb(214 63 159 / 0.06); /* 테마 고정 */
-}
-
-/* 편집 준비 전의 「편집」 버튼(POK-499): 만드는 중인 카드 자리와 같은 점선 · 틴트 */
-.cardEditPending {
-  border: calc(1.5 * var(--pc-u)) dashed var(--pc-color-point);
   background: rgb(214 63 159 / 0.06); /* 테마 고정 */
 }
 

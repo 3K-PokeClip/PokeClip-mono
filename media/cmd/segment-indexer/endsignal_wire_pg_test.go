@@ -37,10 +37,10 @@ VALUES ($1, 1, 0, $2, 4000, 'k-1', '/recordings/x/1.mp4', 'uploaded', 1000, 'S-X
 		t.Fatalf("조각 픽스처 실패: %v", err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	inbox, intents := session.NewPlaybackInbox(), session.NewIntentInbox()
+	inbox := session.NewPlaybackInbox()
 	recv, err := newEndSignalReceiver(endSignalDeps{
-		resolve: fakeResolver(t), apply: intentApplier(pool, newIntentOptions(log, nil, nil)),
-		changed: inbox.Changed, postIntent: intents.Post, log: log,
+		resolve: fakeResolver(t), apply: intentApplier(pool, newIntentOptions(log, nil)),
+		changed: inbox.Changed, log: log,
 	})
 	if err != nil {
 		t.Fatalf("수신부 조립 실패: %v", err)
@@ -76,9 +76,6 @@ VALUES ($1, 1, 0, $2, 4000, 'k-1', '/recordings/x/1.mp4', 'uploaded', 1000, 'S-X
 	}
 	if got := inbox.Drain(); !slices.Equal(got, []string{wireToken}) {
 		t.Fatalf("표지 = %v, want [%s]", got, wireToken)
-	}
-	if got := intents.Drain(); len(got) != 0 {
-		t.Fatalf("계승 해제 요청 = %v, want 없음", got)
 	}
 
 	time.Sleep(1100 * time.Millisecond) // 키당 초당 1 창을 넘긴다
@@ -123,8 +120,8 @@ func TestEndSignalPoolExhaustedIs503WithinApplyTimeoutPG(t *testing.T) {
 
 	logs, log := newLockedLogger()
 	recv, err := newEndSignalReceiver(endSignalDeps{
-		resolve: fakeResolver(t), apply: intentApplier(small, newIntentOptions(log, nil, nil)),
-		changed: func(string) {}, postIntent: func(string, string) {}, log: log,
+		resolve: fakeResolver(t), apply: intentApplier(small, newIntentOptions(log, nil)),
+		changed: func(string) {}, log: log,
 	})
 	if err != nil {
 		t.Fatalf("수신부 조립 실패: %v", err)

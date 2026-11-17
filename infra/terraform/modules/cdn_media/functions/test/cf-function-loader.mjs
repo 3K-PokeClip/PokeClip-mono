@@ -54,18 +54,60 @@ export function findUnsupportedSyntax(source) {
 }
 
 /**
- * 함수 원문을 평가해 handler 를 돌려준다. 런타임처럼 strict 모드로 돈다.
- * console.log 는 인자 하나만 받는다(런타임이 쉼표 문법을 지원하지 않는다).
+ * Terraform templatefile 처럼 원문의 자리표시자(달러 · 여는 중괄호 · 이름 ·
+ * 닫는 중괄호)를 vars 의 값으로 바꾼다. 넣은 값은 다시 해석하지 않는다.
+ * 흉내 내는 것은 이름 하나짜리 자리표시자뿐이다 — 식 · 지시문(퍼센트 · 여는
+ * 중괄호) · 탈출(달러 둘) · 넘기지 않은 이름 · 닫히지 않은 자리표시자는 실제
+ * templatefile 과 결과가 갈릴 수 있어 예외로 막는다.
+ * @param {string} source 템플릿 원문.
+ * @param {!Object<string, string>} vars 자리표시자 이름과 값.
+ * @return {string} 렌더본.
+ */
+export function renderTemplate(source, vars) {
+  if (source.includes('%{') || source.includes('$${')) {
+    throw new Error('templatefile 지시문 · 탈출 문법은 흉내 내지 않는다');
+  }
+  const opened = source.split('${').length - 1;
+  let replaced = 0;
+  const rendered = source.replace(/\$\{([^}]*)\}/g, (match, name) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || !Object.hasOwn(vars, name)) {
+      throw new Error(`templatefile 자리표시자 ${match} 에 넘긴 값이 없다`);
+    }
+    replaced++;
+    return vars[name];
+  });
+  if (replaced !== opened) {
+    throw new Error('templatefile 자리표시자가 닫히지 않았다');
+  }
+  return rendered;
+}
+
+/**
+ * 함수 파일을 읽어 평가하고 handler 를 돌려준다(loadHandlerFromSource 참고).
  * @param {string} path 함수 파일의 절대 경로.
  * @param {{cf: (?Object|undefined), logs: (!Array<string>|undefined)}=}
  *     options cf = 가짜 cloudfront 모듈, logs = console.log 가 쌓이는 곳.
  * @return {function(!Object): !Promise<!Object>}
  */
-export function loadHandler(path, {cf = undefined, logs = []} = {}) {
-  const body = readFunctionSource(path)
-      .replace(CLOUDFRONT_IMPORT, 'const cf = injectedCf;');
+export function loadHandler(path, options = {}) {
+  return loadHandlerFromSource(readFunctionSource(path), path, options);
+}
+
+/**
+ * 함수 원문을 평가해 handler 를 돌려준다. 런타임처럼 strict 모드로 돈다.
+ * console.log 는 인자 하나만 받는다(런타임이 쉼표 문법을 지원하지 않는다).
+ * templatefile 로 렌더하는 함수는 renderTemplate 의 결과를 넘긴다.
+ * @param {string} source 함수 원문(또는 렌더본).
+ * @param {string} label 오류 문구에 싣는 이름(보통 함수 파일 경로).
+ * @param {{cf: (?Object|undefined), logs: (!Array<string>|undefined)}=}
+ *     options cf = 가짜 cloudfront 모듈, logs = console.log 가 쌓이는 곳.
+ * @return {function(!Object): !Promise<!Object>}
+ */
+export function loadHandlerFromSource(
+    source, label, {cf = undefined, logs = []} = {}) {
+  const body = source.replace(CLOUDFRONT_IMPORT, 'const cf = injectedCf;');
   if (/^\s*(import|export)\b/m.test(body)) {
-    throw new Error(`${path}: cloudfront 밖의 import · export 는 쓸 수 없다`);
+    throw new Error(`${label}: cloudfront 밖의 import · export 는 쓸 수 없다`);
   }
   const fakeConsole = {
     log(...args) {

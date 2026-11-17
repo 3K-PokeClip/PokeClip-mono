@@ -156,6 +156,36 @@ describe('useRewindStatus — 경로 하나를 10초로 폴링한다(설계 5.1�
     visibility.mockRestore();
   });
 
+  it('askOnVisible 거짓이면 숨김 복귀에 다시 묻지 않는다 — 걸린 요청과 처음 시한을 그대로 둔다', async () => {
+    const spy = stubControllableFetch();
+    renderHook(() => useRewindStatus(ROUND, BASE, onResult, { askOnVisible: false }));
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    for (const state of ['hidden', 'visible', 'hidden', 'visible'] as const) {
+      await act(async () => vi.advanceTimersByTime(1_000));
+      visibility.mockReturnValue(state);
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+    }
+    visibility.mockRestore();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(pending[0]!.signal?.aborted).toBe(false);
+    await act(async () => vi.advanceTimersByTimeAsync(REWIND_REQUEST_TIMEOUT_MS - 4_000));
+    expect(pending[0]!.signal?.aborted).toBe(true);
+    expect(urlsOf(results)).toEqual(['unavailable']);
+  });
+
+  it('askOnVisible 이 바뀌어도 걸린 요청을 끊거나 새로 묻지 않는다(경로가 같으면 기동하지 않음)', async () => {
+    const spy = stubControllableFetch();
+    const { rerender } = renderHook(
+      ({ askOnVisible }) => useRewindStatus(ROUND, BASE, onResult, { askOnVisible }),
+      { initialProps: { askOnVisible: true } },
+    );
+    rerender({ askOnVisible: false });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(pending[0]!.signal?.aborted).toBe(false);
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it('refresh(같은 url) 의 답이 그 url 이면 2초 간격 세 번 더 묻고 10초로 돌아간다(R16)', async () => {
     const spy = stubControllableFetch();
     const { result } = renderHook(() => useRewindStatus(STREAM, BASE, onResult));

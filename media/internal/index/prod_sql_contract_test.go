@@ -9,6 +9,7 @@ package index
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +25,9 @@ import (
 // 그 줄이 없으면 SQL 만 고치는 PR 에서 이 시험이 돌지 않는다.
 var prodSQLDir = filepath.Join("..", "..", "..", "infra", "terraform", "prod", "runtime", "sql")
 
-// prodSQLApplied 는 운영자가 순서대로 psql 로 돌리는 파일이다(00 ~ 40 은 psql -1, 50 은 따로).
+// prodSQLApplied 는 운영자가 순서대로 psql 로 돌리는 파일이다(00 ~ 40 은 psql -1, 50 은 따로). 60 은 운영 SQL 2 다 —
+// 00 ~ 50 과 다른 때(새 꼴 쓰기를 켠 뒤 · contract)에 psql -1 로 혼자 돌리고 40 으로 다시 확인한다. 끝에 두어 앞 다섯의
+// 슬라이스([1:4] · [:5])를 흔들지 않는다.
 var prodSQLApplied = []string{
 	"00_preflight.sql",
 	"10_roles.sql",
@@ -32,6 +35,7 @@ var prodSQLApplied = []string{
 	"30_grants.sql",
 	"40_verify.sql",
 	"50_advisory_probe.sql",
+	roundFrozenFile,
 }
 
 // prodSchemaFile 은 schemaDDL 사본이다. 20_schema.sql 이 \ir 로 읽고, 혼자서는 돌리지 않는다.
@@ -41,6 +45,20 @@ const prodSchemaFile = "stream_schema.sql"
 const (
 	schemaCopyBegin = "-- BEGIN schemaDDL"
 	schemaCopyEnd   = "-- END schemaDDL"
+)
+
+// roundFrozenFile 은 회차 불변 트리거를 까는 운영 SQL 2 다(POK-525 설계 r9.3 2-2).
+const roundFrozenFile = "60_round_frozen.sql"
+
+// roundFrozenLockTimeout 은 60_round_frozen.sql 의 둘째 문장이다 — CREATE TRIGGER 가 stream_sessions 의 SHARE ROW
+// EXCLUSIVE 를 기다리는 시간의 상한(런북 「M6 스키마 재실행」 의 lock_timeout=3s 와 같은 값). psql -1 의 트랜잭션 안에서만
+// 듣는다.
+const roundFrozenLockTimeout = "SET LOCAL lock_timeout = '3s'"
+
+// 60_round_frozen.sql 에서 roundFrozenDDL 사본이 시작하고 끝나는 표지다. 두 표지 사이 글자는 roundFrozenDDL 과 바이트가 같다.
+const (
+	roundFrozenCopyBegin = "-- BEGIN roundFrozenDDL"
+	roundFrozenCopyEnd   = "-- END roundFrozenDDL"
 )
 
 // 허용한 psql 메타 명령 줄이다. 이 밖의 메타 명령(\i · \gset · \if 등)과 psql 변수는 쓰지 않는다 — 실적용
@@ -58,6 +76,7 @@ var prodSQLAllowedMeta = map[string][]string{
 	"30_grants.sql":         {metaStopOnError},
 	"40_verify.sql":         {metaStopOnError},
 	"50_advisory_probe.sql": {metaStopOnError},
+	roundFrozenFile:         {metaStopOnError},
 }
 
 // 30_grants.sql 이 GRANT 를 감싸는 두 문장이다(H2 — 마스터는 INHERIT FALSE 라 media_owner 로 바꿔야 GRANT 할 수 있다).
@@ -212,28 +231,68 @@ func TestProdSQLDirHoldsOnlyKnownFiles(t *testing.T) {
 // stream_schema.sql 의 두 표지 사이가 schemaDDL 과 바이트가 같다(D8).
 func TestProdStreamSchemaCopyMatchesSchemaDDL(t *testing.T) {
 	src := readProdSQL(t, prodSchemaFile)
-	if n := strings.Count(src, schemaCopyBegin); n != 1 {
-		t.Fatalf("%s 의 시작 표지 %q 개수 = %d, want 1", prodSchemaFile, schemaCopyBegin, n)
+	if err := copyMismatch(src, schemaCopyBegin, schemaCopyEnd, schemaDDL); err != nil {
+		t.Errorf("%s 사본 대조 실패: %v — ddl.go 를 바꿨으면 표지 사이를 schemaDDL 그대로 다시 붙여 넣는다", prodSchemaFile, err)
 	}
-	if n := strings.Count(src, schemaCopyEnd); n != 1 {
-		t.Fatalf("%s 의 끝 표지 %q 개수 = %d, want 1", prodSchemaFile, schemaCopyEnd, n)
+}
+
+// 60_round_frozen.sql 의 두 표지 사이가 roundFrozenDDL 과 바이트가 같다(E9 — 로컬 EnsureSchema 와 운영이 같은 트리거를 깐다).
+func TestProdRoundFrozenCopyMatchesRoundFrozenDDL(t *testing.T) {
+	src := readProdSQL(t, roundFrozenFile)
+	if err := copyMismatch(src, roundFrozenCopyBegin, roundFrozenCopyEnd, roundFrozenDDL); err != nil {
+		t.Errorf("%s 사본 대조 실패: %v — ddl.go 를 바꿨으면 표지 사이를 roundFrozenDDL 그대로 다시 붙여 넣는다", roundFrozenFile, err)
 	}
-	start := strings.Index(src, schemaCopyBegin) + len(schemaCopyBegin)
-	end := strings.Index(src, schemaCopyEnd)
-	if end < start {
-		t.Fatalf("%s 의 끝 표지가 시작 표지보다 앞에 있다", prodSchemaFile)
+}
+
+// copyMismatch 는 src 의 두 표지 begin · end 사이가 정본 want 와 바이트가 같은지 본다. 같으면 nil 이고, 다르면
+// 까닭(표지 개수 · 순서, 또는 처음 갈라지는 줄)을 오류로 돌려준다. 실패 판정은 부르는 Test 가 한다.
+func copyMismatch(src, begin, end, want string) error {
+	if n := strings.Count(src, begin); n != 1 {
+		return fmt.Errorf("시작 표지 %q 개수 = %d, want 1", begin, n)
 	}
-	got := src[start:end]
-	if got == schemaDDL {
-		return
+	if n := strings.Count(src, end); n != 1 {
+		return fmt.Errorf("끝 표지 %q 개수 = %d, want 1", end, n)
+	}
+	from := strings.Index(src, begin) + len(begin)
+	to := strings.Index(src, end)
+	if to < from {
+		return errors.New("끝 표지가 시작 표지보다 앞에 있다")
+	}
+	got := src[from:to]
+	if got == want {
+		return nil
 	}
 	i := 0
-	for i < len(got) && i < len(schemaDDL) && got[i] == schemaDDL[i] {
+	for i < len(got) && i < len(want) && got[i] == want[i] {
 		i++
 	}
-	line := strings.Count(schemaDDL[:i], "\n") + 1
-	t.Errorf("%s 사본 = %d 바이트, schemaDDL = %d 바이트 — schemaDDL 의 %d 번째 줄(%d 바이트)에서 처음 갈라진다. "+
-		"ddl.go 를 바꿨으면 표지 사이를 schemaDDL 그대로 다시 붙여 넣는다", prodSchemaFile, len(got), len(schemaDDL), line, i)
+	line := strings.Count(want[:i], "\n") + 1
+	return fmt.Errorf("사본 %d 바이트 · 정본 %d 바이트 — 정본의 %d 번째 줄(%d 바이트)에서 처음 갈라진다", len(got), len(want), line, i)
+}
+
+// 60_round_frozen.sql 의 모양(r9.1 cc L5) — 메타 명령은 \set ON_ERROR_STOP on 하나이고, 처음 · 끝 문장은 SET ROLE
+// media_owner · RESET ROLE 이다(표 소유자로 트리거를 만든다 — 마스터는 INHERIT FALSE). 둘째 문장은 잠금 대기 상한이다 —
+// 없으면 방송 중 적용이 열린 세션 쓰기 뒤에서 끝없이 기다리고, 그 뒤 세션 쓰기가 줄을 선다. 사본 뒤에 끝 단언과 OK 행이
+// 이 순서로 온다 — 단언이 사본보다 앞이면 깔기 전 상태를 재고, OK 행이 단언보다 앞이면 실패해도 OK 가 찍힌다.
+func TestProdRoundFrozenFileShape(t *testing.T) {
+	script := mustSplitPSQL(t, roundFrozenFile)
+	if want := []string{metaStopOnError}; !slices.Equal(script.metas, want) {
+		t.Errorf("%s 의 메타 명령 = %q, want %q", roundFrozenFile, script.metas, want)
+	}
+	stmts := script.statements
+	if len(stmts) < 2 || normalizeSQL(stmts[0]) != grantsSetRole || normalizeSQL(stmts[len(stmts)-1]) != grantsResetRole {
+		t.Fatalf("%s 의 처음 · 끝 문장 = %q · %q, want %q · %q", roundFrozenFile, firstStmt(stmts), lastStmt(stmts), grantsSetRole, grantsResetRole)
+	}
+	if got := normalizeSQL(stmts[1]); got != roundFrozenLockTimeout {
+		t.Errorf("%s 의 둘째 문장 = %q, want %q (잠금 대기 상한)", roundFrozenFile, got, roundFrozenLockTimeout)
+	}
+	src := readProdSQL(t, roundFrozenFile)
+	copyEnd := strings.Index(src, roundFrozenCopyEnd)
+	assert := strings.LastIndex(src, roundFrozenFailedPrefix)
+	ok := strings.LastIndex(src, "'"+roundFrozenOK+"'")
+	if copyEnd < 0 || assert < copyEnd || ok < assert {
+		t.Errorf("%s 의 사본 끝 · 끝 단언 · OK 행 위치 = %d · %d · %d, want 오름차순(모두 있음)", roundFrozenFile, copyEnd, assert, ok)
+	}
 }
 
 // grantTarget 은 GRANT 문장 끝의 대상 역할이다.
@@ -397,10 +456,10 @@ func metaLines(src string) []string {
 	return out
 }
 
-// 00 ~ 40(과 20 이 읽는 사본)에는 트랜잭션 문이 없다 — 원자성은 psql -1 이 준다. 50 만 스스로
+// 00 ~ 40 · 60(과 20 이 읽는 사본)에는 트랜잭션 문이 없다 — 원자성은 psql -1 이 준다. 50 만 스스로
 // BEGIN … ROLLBACK 이고 그 사이에 다른 트랜잭션 문이 없다(확인만 하고 되돌린다 — K7).
 func TestProdSQLTransactionStatementConvention(t *testing.T) {
-	for _, name := range append(slices.Clone(prodSQLApplied[:5]), prodSchemaFile) {
+	for _, name := range append(slices.Clone(prodSQLApplied[:5]), roundFrozenFile, prodSchemaFile) {
 		for _, s := range mustSplitPSQL(t, name).statements {
 			if slices.Contains(txKeywords, firstKeyword(s)) {
 				t.Errorf("%s 에 트랜잭션 문 %q 이 있다 — psql -1 이 감싼다", name, normalizeSQL(s))

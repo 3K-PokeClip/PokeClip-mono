@@ -10,9 +10,10 @@ package publish
 //	L1  holdAge ≥ 0.5초                                  k 의 ③ 백오프를 당긴다(upload.Uploader.Expedite)
 //	L2  holdAge ≥ GAP_HOLD ∧ 적격 ①②⑤(캐시 행)             k 로 GAP 틱(③ fence · ④ 미uploaded 는 GAP 트랜잭션이 본다)
 //	L2′ stallAge ≥ D_act ∧ L2 가 설 수 없음(holding 제외)   봉인(Endlist)을 낸다 — 루프가 봉인 뒤 회차를 ending(stall_seal)
-//	                                                     으로 보낸다. 스위치(Options.StallSealAfter)가 0 이면 꺼짐(M6 K5)
+//	    view_behind 도 제외                               으로 보낸다. 스위치(Options.StallSealAfter)가 0 이면 꺼짐(M6 K5)
 //	L4  stallAge ≥ 갱신 의무 − T_edge ∧ L2 가 서지 못함     rewind_publish_stall_seconds ERROR(정체 한 번에 한 줄) —
-//	                                                     서지 못한 까닭이 no_row(유입이 멈춘 방송 종료 구간의 모양)면 WARN
+//	                                                     서지 못한 까닭이 no_row(유입이 멈춘 방송 종료 구간의 모양)면 WARN.
+//	                                                     장부에는 있는 행이면 view_behind(캐시 뒤처짐)라 ERROR 그대로
 //
 // L2 를 결정한 행의 「L2 가 서지 못함」은 사실로 받는다 — L2 를 결정한 평가는 GAP 틱에 차례를 주고 L4 를 누르고, 결과가
 // 돌아온 그 행의 GAP 틱이 서지 않았다는 사실(LadderInput.UnstoodGapSeq)이 있을 때만 누르지 않는다(gap=unstood).
@@ -39,6 +40,7 @@ const stallLog = "rewind_publish_stall_seconds"
 // L2 가 서지 못한 까닭 — L4 경보의 gap 속성 값이다(판단 J30 「귀속 판정」).
 const (
 	l2NoRow        = "no_row"        // ① 머리 다음 행이 캐시 뷰에 없다(유입이 멈췄거나 아직 오지 않았다)
+	l2ViewBehind   = "view_behind"   // ① 머리 다음 행이 캐시 뷰에 없는데 장부에는 있다(LadderInput.ViewBehind)
 	l2Incomplete   = "incomplete"    // ② 회차 · PDT · ③ 키 · 길이 가운데 없는 것이 있다(비귀속 행 포함)
 	l2BeforeCutoff = "before_cutoff" // ⑤ 컷오프 아래 행이다
 	l2Holding      = "holding"       // 적격이지만 holdAge 가 GAP_HOLD 에 못 미쳤다
@@ -71,6 +73,9 @@ type LadderInput struct {
 	// 후보 행을 시도하지 않은 틱이다 — 이 갈래를 「서지 않음」에서 뺄지는 루프 설계(커밋 7)가 정한다. 빼려면 가를 결과
 	// 칸이 있어야 하고(Outcome 에는 없다), 빼면 그 갈래가 되풀이되는 동안 L2 결정이 L4 를 누른다.
 	UnstoodGapSeq *int64
+	// ViewBehind 는 캐시 뷰가 장부보다 뒤처졌다는 것을 캐시가 아는가다(cache.Behind — 뷰 끝 다음 행이 장부에 있다). 머리 다음
+	// 행이 뷰에 없을 때 그 까닭을 방송 종료 구간(no_row · WARN)과 캐시 뒤처짐(view_behind · ERROR)으로 가른다.
+	ViewBehind bool
 	// PublishedAt 은 이 프로세스가 그 회차의 발행 성공(Outcome.Published)을 마지막으로 받은 시각이고(없으면 영값)
 	// OwnedSince 는 그 회차를 처음 소유 회차로 본 시각이다. stallAge 는 둘 가운데 늦은 쪽부터 잰다(판단 J29 —
 	// 설계의 원천 published_at 은 P4 가 쓰지 않는다 · 부기 42). OwnedSince 는 영값이면 안 된다 — 루프가 반드시 채운다
@@ -89,6 +94,9 @@ type LadderState struct {
 	// alarmed 는 L4 경보를 남긴 정체의 기준 시각(stallAge 의 기점)이다 — 같은 정체에는 한 줄만 남긴다. 발행이
 	// 성공하면 기점이 바뀌어 다시 무장한다(판단 J30 — A1 1회 가드와 같은 형).
 	alarmed time.Time
+	// alarmedWarn 은 alarmed 의 줄이 WARN(no_row)이었는가다 — 같은 정체에서 뒤처짐이 드러나면(view_behind) ERROR 를 한 줄 더
+	// 남기고 거짓이 된다(승격 — 정체당 한 번).
+	alarmedWarn bool
 	// warned 는 ending WARN 을 남긴 회차다 — 회차마다 한 번이다(리스크 C3).
 	warned string
 }
@@ -142,6 +150,9 @@ func evaluateLadder(opt Options, st LadderState, in LadderInput) (LadderState, L
 	hold, holdKnown := holdAge(row, found, in.Now, opt.E2EBudget)
 	step := LadderStep{Seq: k, Expedite: holdKnown && hold >= opt.ExpediteAfter}
 	blocked := gapIneligible(row, found, cutoff)
+	if blocked == l2NoRow && in.ViewBehind {
+		blocked = l2ViewBehind
+	}
 	if blocked == "" && hold < opt.GapHold {
 		blocked = l2Holding
 	}
@@ -161,9 +172,13 @@ func evaluateLadder(opt Options, st LadderState, in LadderInput) (LadderState, L
 
 // sealDue 는 L2′ 다(M4 r17 4.6.3) — 스위치가 켜졌고(StallSealAfter > 0) 발행 이력이 있는 회차의 stallAge 가 문턱에 닿았는데
 // L2 가 설 수 없으면(blocked — 머리 다음 행 없음 · 부적격 · 컷오프 아래 · 직전 GAP 틱이 서지 않음) 참이다. holding(적격인데
-// holdAge 가 GAP_HOLD 전)은 L2 가 곧 서므로 기다린다. fence 유효는 봉인 경로(Endlist E0)가 본다.
+// holdAge 가 GAP_HOLD 전)은 L2 가 곧 서므로 기다린다. view_behind(머리 다음 행이 장부에는 있다)도 기다린다 — 캐시가 적재로 그
+// 행을 싣는 중이라, 봉인하면 복구가 서기 전에 회차가 끝난다. 복구가 서지 않으면 L4 ERROR 가 남는다. 끝내 안 풀리는
+// 뒤처짐(적재가 멈추는 장부 빈자리)에서는 봉인 없이 그 ERROR 만 남아 회차가 스스로 닫히지 않을 수 있다 —
+// 운영자가 보는 자리는 media/README.md 신호표 아래 view_behind 메모다.
+// fence 유효는 봉인 경로(Endlist E0)가 본다.
 func sealDue(opt Options, in LadderInput, blocked string) bool {
-	if opt.StallSealAfter <= 0 || blocked == "" || blocked == l2Holding {
+	if opt.StallSealAfter <= 0 || blocked == "" || blocked == l2Holding || blocked == l2ViewBehind {
 		return false
 	}
 	since, ok := stallSince(in)
@@ -201,26 +216,32 @@ func gapIneligible(r boundary.Row, found bool, cutoff int64) string {
 	return ""
 }
 
-// alarm 은 L4 다 — 발행 이력이 있는 live 소유 회차의 stallAge 가 갱신 의무 − T_edge 에 닿았는데 L2 가 서지 못하면
-// ERROR 신호 하나를 돌려준다(설계 4.6.3 「ERROR + 귀속 판정 기록」). 속성은 정체 초 · L2 가 서지 못한 까닭(blocked —
-// 빈 값이 아니다) · 직전 틱의 중단 사유(없으면 빈 값)다. 첫 발행 전에는 없다 — 방송 시작 지연은 다른 신호
-// 몫이다(판단 J29). 까닭이 no_row(머리 다음 행이 캐시 뷰에 없다 — 유입이 멈춘 방송 종료 구간의 모양)면 등급만 WARN 이다(kty
-// 결정 ④ A — 방송 종료 구간의 L4 는 WARN 이다(2026-09-28). 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다.
-// 문턱 · 1회 가드 · 속성은 그대로).
+// alarm 은 L4 다 — 발행 이력이 있는 live 소유 회차의 stallAge 가 갱신 의무 − T_edge 에 닿았는데 L2 가 서지 못하면 ERROR 신호
+// 하나를 돌려준다(설계 4.6.3 「ERROR + 귀속 판정 기록」). 속성은 정체 초 · L2 가 서지 못한 까닭(blocked — 빈 값이 아니다) ·
+// 직전 틱의 중단 사유(없으면 빈 값)다. 첫 발행 전에는 없다 — 방송 시작 지연은 다른 신호 몫이다(판단 J29). 까닭이 no_row(머리
+// 다음 행이 캐시 뷰에 없다 — 유입이 멈춘 방송 종료 구간의 모양)면 등급만 WARN 이다(kty 결정 ④ A — 방송 종료 구간의 L4 는
+// WARN 이다(2026-09-28). 판정은 이미 아는 까닭 값으로 하고 시각에 기대지 않는다. 문턱 · 1회 가드 · 속성은 그대로). 그 행이
+// 장부에는 있는 view_behind 는 방송 종료 구간이 아니라 ERROR 다. no_row WARN 을 남긴 정체에서 뒤처짐이 드러나면(view_behind)
+// ERROR 를 한 줄 더 남긴다 — 감시 단독 경로는 뒤처짐을 첫 감시에야 알기 때문이다(승격 · 정체당 한 번). 다른 ERROR 까닭으로는
+// 오르지 않는다 — 유입이 잠시 멈췄다가 다음 행이 와서 holding 이 된 평범한 모양에 거짓 ERROR 가 서지 않게.
 func alarm(opt Options, st LadderState, in LadderInput, blocked string) (LadderState, *ladderSignal) {
 	since, ok := stallSince(in)
-	if !ok || st.alarmed.Equal(since) {
+	if !ok {
+		return st, nil
+	}
+	escalate := st.alarmed.Equal(since) && st.alarmedWarn && blocked == l2ViewBehind
+	if st.alarmed.Equal(since) && !escalate {
 		return st, nil
 	}
 	stall := in.Now.Sub(since)
 	if stall < opt.RefreshObligation-opt.EdgeDelay {
 		return st, nil
 	}
-	st.alarmed = since
 	level := slog.LevelError
 	if blocked == l2NoRow {
 		level = slog.LevelWarn
 	}
+	st.alarmed, st.alarmedWarn = since, level == slog.LevelWarn
 	return st, &ladderSignal{level: level, attrs: []any{"stream", in.StreamID, "session", in.Owner.SessionID,
 		"seconds", stall.Seconds(), "gap", blocked, "last_abort", in.Publish.lastAbort.reason}}
 }

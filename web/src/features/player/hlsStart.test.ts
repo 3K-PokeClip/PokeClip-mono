@@ -11,6 +11,7 @@ import { startLoadPosition } from './playbackEdge';
 type Handler = (event: string, data: unknown) => void;
 
 const EVENTS = {
+  MANIFEST_LOADED: 'hlsManifestLoaded',
   MANIFEST_PARSED: 'hlsManifestParsed',
   LEVEL_LOADED: 'hlsLevelLoaded',
   LEVEL_UPDATED: 'hlsLevelUpdated',
@@ -43,7 +44,7 @@ class FakeHls {
 const PDT0 = Date.parse('2026-10-25T05:00:00.000Z');
 /** 영상 0초부터 4초 조각 n 개(PDT0 부터) */
 function details(n: number): LevelDetails {
-  const fragments = [...Array(n).keys()].map((i) => ({
+  const fragments = Array.from({ length: n }, (_, i) => ({
     start: i * 4,
     duration: 4,
     programDateTime: PDT0 + i * 4_000,
@@ -71,7 +72,7 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     const startAtMs = PDT0 + 10_000;
     const { hls, onLoadFrom } = arm({ kind: 'rewind', startAtMs, strictStart: false });
     const first = details(8);
-    const want = startLoadPosition(first.fragments, startAtMs, 'rewind', 4);
+    const want = startLoadPosition(first.fragments, startAtMs, 'rewind', 4, true);
 
     hls.trigger(EVENTS.LEVEL_LOADED, { details: first });
     hls.trigger(EVENTS.LEVEL_LOADED, { details: details(9) });
@@ -80,6 +81,27 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     expect(hls.startLoad.mock.calls).toEqual([[want]]);
     expect(onLoadFrom.mock.calls).toEqual([[want]]);
     expect(hls.count(EVENTS.LEVEL_UPDATED)).toBe(0);
+  });
+
+  it.each<[string, boolean, number]>([
+    ['끝난 목록(ENDLIST)이면 첫 내용 조각(영상 6초)', false, 6],
+    ['방송 중이면 첫 내용 조각 + 그 조각 하나(영상 10초)', true, 10],
+  ])('되감기 맨 왼쪽 시작은 그 목록이 방송 중인가로 정한다 — %s', (_name, live, want) => {
+    const { hls, onLoadFrom } = arm({ kind: 'rewind', startAtMs: PDT0, strictStart: false });
+    // 맨 앞 GAP 하나(6초) 뒤 4초 조각 900 개 — 합이 한 시간을 넘는다
+    const fragments = [
+      { start: 0, duration: 6, programDateTime: PDT0, gap: true },
+      ...Array.from({ length: 900 }, (_, i) => ({
+        start: 6 + i * 4,
+        duration: 4,
+        programDateTime: PDT0 + 6_000 + i * 4_000,
+      })),
+    ];
+
+    hls.trigger(EVENTS.LEVEL_LOADED, { details: { fragments, targetduration: 6, live } });
+
+    expect(hls.startLoad.mock.calls).toEqual([[want]]);
+    expect(onLoadFrom.mock.calls).toEqual([[want]]);
   });
 
   it('되감기 목록에 시각 표시가 없으면 받기 위치는 null · hls.js 가 고르는 -1 로 받는다', () => {
@@ -100,9 +122,149 @@ describe('armStart — 시작 시각이 있는 재생기의 기동 처리기', (
     hls.trigger(EVENTS.MANIFEST_PARSED);
     hls.trigger(EVENTS.LEVEL_UPDATED, { details: details(8) });
 
-    const want = startLoadPosition(details(8).fragments, startAtMs, 'live', 4);
+    const want = startLoadPosition(details(8).fragments, startAtMs, 'live', 4, true);
     expect(hls.startLoad.mock.calls).toEqual([[-1], [want]]);
     expect(onLoadFrom).not.toHaveBeenCalled();
+  });
+
+  describe('다시보기 — 시작 시각이 없어도 첫 LEVEL_LOADED 에서 받기 위치를 한 번 정한다', () => {
+    /** 맨 앞 gaps 개가 GAP(3초)이고 그 뒤 4초 조각 6 개인 끝난 목록 — 첫 내용 조각은 영상 3 × gaps 초 */
+    function vodDetails(gaps: number, allGap = false): LevelDetails {
+      const fragments = Array.from({ length: gaps + 6 }, (_, i) => {
+        const start = i < gaps ? i * 3 : gaps * 3 + (i - gaps) * 4;
+        return {
+          start,
+          duration: i < gaps ? 3 : 4,
+          programDateTime: PDT0 + start * 1000,
+          gap: allGap || i < gaps,
+        };
+      });
+      return { fragments, targetduration: 4, live: false } as unknown as LevelDetails;
+    }
+
+    it('시작 시각이 없고 맨 앞이 GAP 이면 첫 내용 조각에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[9]]);
+      expect(onLoadFrom.mock.calls).toEqual([[9]]);
+    });
+
+    it('시작 시각이 없고 맨 앞 GAP 이 없으면 목록 첫 조각(영상 0초)에서 받는다 — 지금과 같은 자리', () => {
+      const { hls } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(0) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[0]]);
+    });
+
+    it('시작 시각이 있으면 그 자리에서 받는다 — 맨 앞 GAP 안이면 첫 내용 조각으로 올린다', () => {
+      const at = arm({ kind: 'vod', startAtMs: PDT0 + 20_000, strictStart: false });
+      const early = arm({ kind: 'vod', startAtMs: PDT0 + 1_000, strictStart: false });
+
+      at.hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+      early.hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+
+      expect(at.hls.startLoad.mock.calls).toEqual([[20]]);
+      expect(early.hls.startLoad.mock.calls).toEqual([[9]]);
+    });
+
+    it('목록 끝 뒤의 시작 시각은 마지막 조각의 시작에서 받는다 — 받을 조각이 남는다', () => {
+      const { hls } = arm({ kind: 'vod', startAtMs: PDT0 + 60 * 60_000, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[29]]);
+    });
+
+    it('모두 GAP 이면 시작 시각이 있든 없든 받기 위치는 null · hls.js 가 고르는 -1 로 받는다', () => {
+      for (const startAtMs of [null, PDT0 + 20_000]) {
+        const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs, strictStart: false });
+
+        hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(0, true) });
+
+        expect(hls.startLoad.mock.calls).toEqual([[-1]]);
+        expect(onLoadFrom.mock.calls).toEqual([[null]]);
+      }
+    });
+
+    /** 4초 조각 count 개 — gapAt 에 든 번째만 GAP 인 끝난 목록 */
+    function fourSecondsWithGapsAt(count: number, gapAt: readonly number[]): LevelDetails {
+      const fragments = Array.from({ length: count }, (_, i) => ({
+        start: i * 4,
+        duration: 4,
+        programDateTime: PDT0 + i * 4_000,
+        gap: gapAt.includes(i),
+      }));
+      return { fragments, targetduration: 4, live: false } as unknown as LevelDetails;
+    }
+
+    it('시작 시각이 가운데 GAP 조각 안이면 다음 내용 조각의 시작에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: PDT0 + 6_000, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: fourSecondsWithGapsAt(3, [1]) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[8]]);
+      expect(onLoadFrom.mock.calls).toEqual([[8]]);
+    });
+
+    it('가운데 GAP 이 이어지면 그 GAP 들을 모두 건너 다음 내용 조각의 시작에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: PDT0 + 6_000, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: fourSecondsWithGapsAt(4, [1, 2]) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[12]]);
+      expect(onLoadFrom.mock.calls).toEqual([[12]]);
+    });
+
+    it.each<[string, number]>([
+      ['마지막 GAP 조각 안', 10_000],
+      ['목록 끝 뒤', 60_000],
+    ])(
+      '마지막 조각이 GAP 이면 시작 시각이 %s 여도 마지막 내용 조각의 시작에서 받는다',
+      (_name, atMs) => {
+        const { hls } = arm({ kind: 'vod', startAtMs: PDT0 + atMs, strictStart: false });
+
+        hls.trigger(EVENTS.LEVEL_LOADED, { details: fourSecondsWithGapsAt(3, [2]) });
+
+        expect(hls.startLoad.mock.calls).toEqual([[4]]);
+      },
+    );
+
+    it('한 번만 정한다 — 그 뒤 목록에서는 startLoad 하지 않고, 라이브 기동 문지기도 달지 않는다', () => {
+      const { hls } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(0) });
+
+      expect(hls.startLoad.mock.calls).toEqual([[9]]);
+      expect(hls.count(EVENTS.MANIFEST_PARSED) + hls.count(EVENTS.LEVEL_UPDATED)).toBe(0);
+    });
+
+    it('주소가 매체 목록이면 받기를 깨우지 않는다 — 첫 LEVEL_LOADED 에서 정한 자리에서만 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+      const media = vodDetails(3);
+
+      hls.trigger(EVENTS.MANIFEST_LOADED, { levels: [{ details: media }] });
+      expect(hls.startLoad).not.toHaveBeenCalled();
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: media });
+
+      expect(hls.startLoad.mock.calls).toEqual([[9]]);
+      expect(onLoadFrom.mock.calls).toEqual([[9]]);
+    });
+
+    it('주소가 다중 화질 목록이면 받기를 깨워 화질 목록을 받게 하고, 첫 LEVEL_LOADED 에서 정한 자리에서 받는다', () => {
+      const { hls, onLoadFrom } = arm({ kind: 'vod', startAtMs: null, strictStart: false });
+
+      hls.trigger(EVENTS.MANIFEST_LOADED, { levels: [{}, {}] });
+      expect(hls.startLoad.mock.calls).toEqual([[-1]]);
+      hls.trigger(EVENTS.LEVEL_LOADED, { details: vodDetails(3) });
+      hls.trigger(EVENTS.MANIFEST_LOADED, { levels: [{}, {}] });
+
+      expect(hls.startLoad.mock.calls).toEqual([[-1], [9]]);
+      expect(onLoadFrom.mock.calls).toEqual([[9]]);
+    });
   });
 
   it('strictStart 라이브의 시작이 잘리면 받기를 멈추고 다음 마이크로태스크에 알린다', async () => {
@@ -221,5 +383,43 @@ describe('createSwapPause — 멈춘 채 갈아 끼우기 표', () => {
     expect(swap.holds(4)).toBe(false);
     swap.keepIfUserPaused(4);
     expect(swap.holds(5)).toBe(false);
+  });
+});
+
+// 재생기의 pause 처리기는 takeAppPause 가 참이면 userPaused 를 부르지 않는다(useHlsPlayback.ts onPause). 그 분기는 여기서
+// 다시 짜지 않는다 — 아래는 표시 메서드의 결과만 보고, 분기 배선은 재생기 훅 시험(useHlsPlayback.dvr404.test.ts 의
+// holdFrame 넷)이 본다
+describe('createSwapPause — 앱이 건 멈춤 표시(POK-528 계획 4-1)', () => {
+  it('앱이 곧 멈춘다고 적으면 다음 pause 하나만 앱 멈춤으로 먹는다', () => {
+    const swap = createSwapPause();
+    expect(swap.takeAppPause()).toBe(false);
+    swap.appPausing();
+    expect(swap.takeAppPause()).toBe(true);
+    expect(swap.takeAppPause()).toBe(false);
+  });
+
+  it('play 사건이 묵은 앱 멈춤 표시를 지운다 — 다음 사람 멈춤을 삼키지 않게', () => {
+    const swap = createSwapPause();
+    swap.appPausing();
+    swap.userPlayed();
+    expect(swap.takeAppPause()).toBe(false);
+  });
+
+  it('앱 멈춤 표시를 먹어도 사람 멈춤으로 적히지 않는다 — 넘김 되돌림이 표를 걸지 않는다', () => {
+    const swap = createSwapPause();
+    swap.appPausing();
+    expect(swap.takeAppPause()).toBe(true);
+    swap.keepIfUserPaused(3);
+    expect(swap.holds(4)).toBe(false);
+  });
+
+  it('표시를 먹은 뒤의 사람 멈춤은 지금처럼 넘김 되돌림이 표를 건다 — 표시가 남아 삼키지 않는다', () => {
+    const swap = createSwapPause();
+    swap.appPausing();
+    expect(swap.takeAppPause()).toBe(true);
+    expect(swap.takeAppPause()).toBe(false);
+    swap.userPaused();
+    swap.keepIfUserPaused(3);
+    expect(swap.holds(4)).toBe(true);
   });
 });

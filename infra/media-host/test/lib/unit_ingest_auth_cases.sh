@@ -57,7 +57,8 @@ responder::id() {
 }
 
 #######################################
-# 응답기 모드 자리(compose 사본 · ingest-auth.env · 시험 템플릿)를 만든다.
+# 응답기 모드 자리(compose 사본 · ingest-auth.env · sidecar.env · 시험 템플릿)를
+# 만든다.
 # compose 는 scratch 로 복사한다 — 운영 스크립트가 compose 파일 옆의
 # ingest-auth.env 를 바꿔 쓰므로 저장소 안에 두지 않는다.
 # Globals:
@@ -82,6 +83,7 @@ responder::write_assets() {
     || ! rm -f -- "${env_path}" \
     || ! printf 'INGEST_AUTH_IP_LIMIT=on\n' >"${env_path}" \
     || ! chmod 0644 "${env_path}" \
+    || ! cp -- "${TEST_DIR}/sidecar.env" "${responder_dir}/sidecar.env" \
     || ! cat >"${responder_dir}/mediamtx.yml.tmpl" <<'EOF'
 hlsCDNSecret: "@@HLS_CDN_SECRET@@"
 # @mode legacy begin

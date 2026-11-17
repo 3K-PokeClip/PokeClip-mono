@@ -1,7 +1,8 @@
 # prod Media 상자(설계 3-1 의 ⑨ · 3-3-1 · 5-3 · 5-5). Graviton EC2 · Media SG 와
-# 짝 규칙(RDS ← Media · auth ← Media · 로드밸런서 → Media) · 인스턴스 역할 ·
-# 대상 등록은 modules/media_host 가 만든다. 이 루트는 앞 루트 출력과 이미지
-# 참조를 잇는다. auth 짝은 kty 결정 2026-10-25 (나)로 이 루트 몫이다.
+# 짝 규칙(RDS ← Media · auth ← Media · clip ← Media · 로드밸런서 → Media) ·
+# 인스턴스 역할 · 대상 등록은 modules/media_host 가 만든다. 이 루트는 앞 루트
+# 출력과 이미지 참조를 잇는다. auth 짝은 kty 결정 2026-10-25 (나)로 이 루트
+# 몫이고, clip 짝(60일 만료 창구 — POK-551)도 같은 꼴이다.
 #
 # 교체(활성 키 이동 · 설정 반영 · force)는 runbooks/media-swap.md 를 따른다.
 
@@ -14,6 +15,8 @@ locals {
     sidecar         = "media-sidecar"
     loopback_sender = "media-loopback-sender"
     ingest_auth     = "media-ingest-auth"
+    # 기동 전 검사 핀(POK-196 PDT) — 사이드카 저장소의 다른 다이제스트다.
+    timing_guard = "media-sidecar"
   }
 
   # 다이제스트가 빈 응답기는 `…@` 로 조립하지 않고 빈 값으로 넘긴다(렌더 안 함).
@@ -46,6 +49,13 @@ module "media_host" {
   auth_sg_id = local.platform.service_sg_ids.auth
   auth_port  = local.platform.service_ports.auth
 
+  # 사이드카의 60일 만료 창구 길 — SG · 포트의 정본은 platform(clip 서비스),
+  # 토큰 그릇은 런타임 1단 출력(tfvars 칸 없음), 주소는 이 루트 입력(빈 값 끔).
+  clip_sg_id                   = local.platform.service_sg_ids.clip
+  clip_port                    = local.platform.service_ports.clip
+  clip_internal_url            = var.clip_internal_url
+  clip_expiry_token_secret_arn = local.runtime.clip_expiry_token_secret_arn
+
   # 정본은 platform(대상 그룹 포트 · 헬스와 같은 값).
   proxy_ports       = local.platform.media_proxy_ports
   media_health_path = local.platform.media_health_path
@@ -56,12 +66,24 @@ module "media_host" {
   mediamtx_image        = local.images.mediamtx
   nginx_image           = local.images.nginx
   sidecar_image         = local.images.sidecar
+  timing_guard_image    = local.images.timing_guard
   loopback_sender_image = local.images.loopback_sender
   ingest_auth_image     = local.images.ingest_auth
 
   stream_key_resolve_url              = var.stream_key_resolve_url
   stream_key_resolve_token_secret_arn = local.runtime.ingest_auth_resolve_token_secret_arn
   ingest_auth_ip_limit                = var.ingest_auth_ip_limit
+
+  # 계약9 발행 — 주제는 런타임 1단 출력만(tfvars 칸 없음), 목록은 이 루트 입력.
+  broadcast_topic_arn       = local.runtime.broadcast_topic_arn
+  lifecycle_publish_streams = var.lifecycle_publish_streams
+
+  playback_round_keys = var.playback_round_keys
+
+  # /dvr 하한 Writer — KVS 는 런타임 1단 출력만(tfvars 칸 없음), 스위치는 이
+  # 루트 입력.
+  edge_bounds_kvs_arn        = local.runtime.edge_bounds_kvs_arn
+  edge_bounds_writer_enabled = var.edge_bounds_writer_enabled
 
   rds_endpoint      = local.runtime.rds_endpoint
   rds_db_name       = local.runtime.rds_db_name

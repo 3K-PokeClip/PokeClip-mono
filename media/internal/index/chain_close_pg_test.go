@@ -315,8 +315,9 @@ func TestMarkChainEndedEndsChainAndEvaluatesRound(t *testing.T) {
 	}
 }
 
-// D55 다섯째 갈래 앞 몫 — 동결 중 사슬이 늦은 분리로 회차 B 로 통째로 옮겨졌다. phase 4 가 완결 평가할 회차는 Chain 의
-// RoundID(옛 회차)가 아니라 잠금 뒤 사슬 행에서 다시 읽은 round_id 다.
+// D55 다섯째 갈래 앞 몫 — 동결 중 사슬이 POK-525 전 판의 늦은 분리로 회차 B 로 통째로 옮겨진 꼴이다(회차 불변 트리거
+// 뒤로는 생기지 않아 장부 꼴로만 심는다). phase 4 가 완결 평가할 회차는 Chain 의 RoundID(옛 회차)가 아니라 잠금 뒤
+// 사슬 행에서 다시 읽은 round_id 다.
 func TestMarkChainEndedEvaluatesRereadRoundD55(t *testing.T) {
 	pool := newTestPool(t)
 	old := time.Now().Add(-time.Hour)

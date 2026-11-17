@@ -76,6 +76,8 @@ variables {
   rds_sg_id          = "sg-0rds0000000000000"
   auth_sg_id         = "sg-0auth000000000000"
   auth_port          = 18086
+  clip_sg_id         = "sg-0clip000000000000"
+  clip_port          = 18087
   s3_prefix_list_id  = "pl-0123456789abcdef0"
   proxy_ports = {
     live     = 18081
@@ -88,6 +90,7 @@ variables {
   mediamtx_image                = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-mediamtx@sha256:1111111111111111111111111111111111111111111111111111111111111111"
   nginx_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-nginx@sha256:2222222222222222222222222222222222222222222222222222222222222222"
   sidecar_image                 = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  timing_guard_image            = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:6666666666666666666666666666666666666666666666666666666666666666"
   loopback_sender_image         = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-loopback-sender@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   rds_endpoint                  = "pokeclip-prod-db.example.ap-northeast-2.rds.amazonaws.com"
   rds_db_name                   = "pokeclip"
@@ -100,6 +103,8 @@ variables {
   ecr_credential_helper_version = "0.12.0-3.amzn2023"
   compose_version               = "5.5.0"
   compose_sha256                = "ff42489f5a9b879d5d117c5ffea6defc27390b3286da8ad52cbc9c6ab5df590e"
+  broadcast_topic_arn           = "arn:aws:sns:ap-northeast-2:123456789012:pokeclipbroadcast.fifo"
+  edge_bounds_kvs_arn           = "arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 # EC2 user_data 한도 16 KiB 는 base64 를 풀기 전(압축본) 크기에 걸린다.
@@ -122,21 +127,89 @@ run "user_data_is_gzip_base64_under_16_kib" {
   }
 }
 
-# 가장 큰 렌더(응답기 · janitor · 제어면 상류 모두 켬)도 한도 안이다.
+# 가장 큰 렌더(응답기 · janitor · 제어면 상류 · 발행 목록 둘 · 새 꼴 쓰기 ·
+# 하한 Writer · 만료 창구 · 대리 창구 모두 켬)도 한도 안이다. 대리 창구는 키별
+# 값이라 켬 키로 잰다.
 run "largest_user_data_under_16_kib" {
   command = plan
 
   variables {
+    instances = {
+      a = { config_version = "7", cred_relay = true }
+    }
     ingest_auth_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
     janitor_enabled                     = true
     control_upstream                    = "127.0.0.1:19090"
     stream_key_resolve_url              = "http://auth.pokeclip.internal:18086"
     stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
+    lifecycle_publish_streams           = ["01ARZ3NDEKTSV4RRFFQ69G5FAV", "01BX5ZZKBKACTAV9WEVGEMMVRZ"]
+    playback_round_keys                 = true
+    edge_bounds_writer_enabled          = true
+    clip_internal_url                   = "http://clip.pokeclip.internal:18087"
+    clip_expiry_token_secret_arn        = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx"
+  }
+
+  assert {
+    condition = alltrue([
+      for text in ["REWIND_EDGE_BOUNDS_KVS_ARN: \"${var.edge_bounds_kvs_arn}\"", "CLIP_INTERNAL_URL: ${var.clip_internal_url}", "\n  cred-relay:\n"] :
+      strcontains(one([
+        for file in yamldecode(output.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), text)
+    ])
+    error_message = "가장 큰 렌더에 하한 Writer 의 KVS ARN · 만료 창구 주소 · 대리 창구 중계 가운데 빠진 것이 있다 — 크기 단언이 가장 큰 렌더를 재지 않는다."
   }
 
   assert {
     condition     = floor(length(aws_instance.this["a"].user_data_base64) / 4) * 3 < 16384
     error_message = "가장 큰 압축 user_data 가 16 KiB 이상이다 — 재회부."
+  }
+}
+
+# 대리 창구는 키별이다 — 켬 키(b)의 compose 만 중계 · 소비자 창구 설정을 싣고,
+# 끔 키(a)는 cred_relay = false 렌더 그대로다(설계 7.5 — 끔 렌더는 이 기능 전과
+# 바이트 동일). nginx 설정은 두 키가 같다.
+run "renders_cred_relay_compose_per_key" {
+  command = plan
+
+  variables {
+    instances = {
+      a = { config_version = "7" }
+      b = { config_version = "8", cred_relay = true }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for key, on in { a = false, b = true } : [
+        for file in yamldecode(output.rendered_user_data[key]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ] == [templatefile("../../../media-host/compose.yml.tmpl", merge(output.template_vars, { cred_relay = on }))]
+    ])
+    error_message = "키별 compose.yml 이 저장소 템플릿의 그 키 cred_relay 렌더(a 끔 · b 켬)가 아니다."
+  }
+
+  assert {
+    condition = [
+      for key in ["a", "b"] : [
+        for needle in ["\n  cred-relay:\n", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "/run/pokeclip-media/cred-"] :
+        strcontains(one([
+          for file in yamldecode(output.rendered_user_data[key]).write_files :
+          file.content if file.path == "/etc/pokeclip-media/compose.yml"
+        ]), needle)
+      ]
+    ] == [[false, false, false], [true, true, true]]
+    error_message = "중계 서비스 · 소비자 창구 env · 토큰 bind 가 켬 키(b)에만 있지 않다."
+  }
+
+  assert {
+    condition = [
+      for key in ["a", "b"] : [
+        for file in yamldecode(output.rendered_user_data[key]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/nginx.conf"
+      ]
+    ] == [for key in ["a", "b"] : [templatefile("../../../media-host/nginx/nginx.conf.tmpl", output.template_vars)]]
+    error_message = "nginx.conf 가 키마다 다르다(공통 렌더여야 한다)."
   }
 }
 
@@ -153,6 +226,7 @@ run "writes_files_with_owner_and_mode" {
       "/etc/pokeclip-media/compose.yml"                             = ["root:root", "0644"]
       "/etc/pokeclip-media/nginx.conf"                              = ["root:root", "0644"]
       "/etc/pokeclip-media/ingest-auth.env"                         = ["root:root", "0644"]
+      "/etc/pokeclip-media/sidecar.env"                             = ["root:root", "0644"]
       "/root/.docker/config.json"                                   = ["root:root", "0600"]
       "/etc/systemd/system/pokeclip-media.service"                  = ["root:root", "0644"]
       "/etc/systemd/system/pokeclip-media.service.d/10-bundle.conf" = ["root:root", "0644"]
@@ -185,8 +259,8 @@ run "renders_compose_and_nginx_from_repository_templates" {
     condition = [
       for file in yamldecode(output.rendered_user_data["a"]).write_files :
       file.content if file.path == "/etc/pokeclip-media/compose.yml"
-    ] == [templatefile("../../../media-host/compose.yml.tmpl", output.template_vars)]
-    error_message = "compose.yml 이 저장소 템플릿의 렌더가 아니다."
+    ] == [templatefile("../../../media-host/compose.yml.tmpl", merge(output.template_vars, { cred_relay = false }))]
+    error_message = "compose.yml 이 저장소 템플릿의 끔 키 렌더(cred_relay = false)가 아니다."
   }
 
   assert {
@@ -197,10 +271,23 @@ run "renders_compose_and_nginx_from_repository_templates" {
     error_message = "nginx.conf 가 저장소 템플릿의 렌더가 아니다."
   }
 
-  # 템플릿 변수 키 집합은 시험값 파일(render_vars.json)과 같다.
+  # 템플릿 변수 키 집합(공통 + 키별 cred_relay)은 시험값 파일(render_vars.json)과
+  # 같다.
   assert {
-    condition     = toset(keys(output.template_vars)) == toset(keys(jsondecode(file("../../../media-host/test/render_vars.json"))))
-    error_message = "템플릿 변수 키 집합이 infra/media-host/test/render_vars.json 과 다르다."
+    condition     = setunion(keys(output.template_vars), ["cred_relay"]) == toset(keys(jsondecode(file("../../../media-host/test/render_vars.json"))))
+    error_message = "템플릿 변수 키 집합(+ cred_relay)이 infra/media-host/test/render_vars.json 과 다르다."
+  }
+
+  # cred_relay 는 키별 값이라 공통 변수에 없다.
+  assert {
+    condition     = !contains(keys(output.template_vars), "cred_relay")
+    error_message = "template_vars 에 키별 값 cred_relay 가 있다."
+  }
+
+  # 기동 전 검사 서비스(POK-196 PDT)의 이미지는 검사 핀 변수 그대로다.
+  assert {
+    condition     = output.template_vars.timing_guard_image == var.timing_guard_image
+    error_message = "template_vars.timing_guard_image 가 var.timing_guard_image 가 아니다."
   }
 
   # README 「후속」: 문자 그대로 "journald" · janitor_enabled 는 bool(기본 true).
@@ -267,6 +354,61 @@ run "renders_rewind_public_base_url_for_sidecar" {
       ]), "REWIND_PUBLIC_BASE_URL: \"https://media.pokeclip.com\"")
     )
     error_message = "사이드카 env 에 REWIND_PUBLIC_BASE_URL(기본 https://media.pokeclip.com)이 없다."
+  }
+}
+
+# /dvr 하한 Writer(POK-525) — 사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 은 늘 한 줄이고
+# 따옴표로 렌더한다. 끔(기본)은 빈 값이라 사이드카가 Writer 를 띄우지 않는다.
+run "renders_empty_edge_bounds_kvs_arn_when_writer_off" {
+  command = plan
+
+  assert {
+    condition = length(regexall("(?m)^      REWIND_EDGE_BOUNDS_KVS_ARN: \"\"$", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]))) == 1
+    error_message = "Writer 끔인데 사이드카 env 에 빈 REWIND_EDGE_BOUNDS_KVS_ARN 한 줄이 없다."
+  }
+
+  assert {
+    condition     = !strcontains(output.rendered_user_data["a"], "key-value-store")
+    error_message = "Writer 끔인데 user_data 에 KVS ARN 이 있다."
+  }
+}
+
+# 켬은 두 모드(옛 · 응답기) 모두 같은 한 줄이다 — 4C 설정과 무관하다.
+run "renders_edge_bounds_kvs_arn_when_writer_on" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = true
+  }
+
+  assert {
+    condition = length(regexall("(?m)^      REWIND_EDGE_BOUNDS_KVS_ARN: \"arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1\"$", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]))) == 1
+    error_message = "Writer 켬(옛 모드)인데 사이드카 env 에 KVS ARN 한 줄이 없다."
+  }
+}
+
+run "renders_edge_bounds_kvs_arn_in_responder_mode" {
+  command = plan
+
+  variables {
+    ingest_auth_image                   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-ingest-auth@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    stream_key_resolve_url              = "http://auth.pokeclip.internal:18086"
+    stream_key_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/stream-key-resolve-token-MnOpQr"
+    edge_bounds_writer_enabled          = true
+  }
+
+  assert {
+    condition = length(regexall("(?m)^      REWIND_EDGE_BOUNDS_KVS_ARN: \"arn:aws:cloudfront::123456789012:key-value-store/00000000-0000-0000-0000-0000000000e1\"$", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]))) == 1
+    error_message = "Writer 켬(응답기 모드)인데 사이드카 env 에 KVS ARN 한 줄이 없다."
   }
 }
 
@@ -435,10 +577,11 @@ run "writes_media_env_and_docker_config" {
       "MEDIA_LIVE_PORT=18081",
       "INGEST_AUTH_DENYLIST_PARAM=/pokeclip/prod/media/ingest-auth-deny-tokens",
       "STREAM_KEY_RESOLVE_TOKEN_SECRET_ARN=",
+      "CLIP_EXPIRY_TOKEN_SECRET_ARN=",
       "MEDIA_CONFIG_VERSION=7",
       "MEDIA_BUNDLE_IMAGE=123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-host-bundle@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     ])
-    error_message = "media.env 의 줄(기대 compose 판 · ECR 호스트 · 비밀 ARN · 송출기 · live 포트 · 거부 목록 · 4C 토큰 비밀 · 구성 판 · 묶음)이 다르다."
+    error_message = "media.env 의 줄(기대 compose 판 · ECR 호스트 · 비밀 ARN · 송출기 · live 포트 · 거부 목록 · 4C 토큰 비밀 · 만료 토큰 비밀 · 구성 판 · 묶음)이 다르다."
   }
 
   assert {
@@ -487,6 +630,68 @@ run "writes_resolve_token_secret_arn_to_media_env" {
   }
 }
 
+# 60일 만료 창구(POK-551 c4) — 주소가 차면 compose 사이드카에 env 둘 · 토큰
+# 디렉터리 bind 가 렌더되고, 토큰 비밀 ARN 이 media.env 로 간다(시작 스크립트가
+# 두 모드 모두 읽는다).
+run "writes_clip_expiry_when_url_set" {
+  command = plan
+
+  variables {
+    clip_internal_url            = "http://clip.pokeclip.internal:18087"
+    clip_expiry_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx"
+  }
+
+  assert {
+    condition = contains(split("\n", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/media.env"
+    ])), "CLIP_EXPIRY_TOKEN_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx")
+    error_message = "media.env 의 CLIP_EXPIRY_TOKEN_SECRET_ARN 이 입력 ARN 이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for line in [
+        "      CLIP_INTERNAL_URL: http://clip.pokeclip.internal:18087",
+        "      CLIP_EXPIRY_TOKEN_FILE: /run/secrets/clip-expiry/token",
+        "        source: /run/pokeclip-media/clip-expiry",
+      ] :
+      contains(split("\n", one([
+        for file in yamldecode(output.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ])), line)
+    ])
+    error_message = "compose.yml 에 만료 env 둘 · 토큰 디렉터리 bind 가 없다."
+  }
+}
+
+# 주소가 비면(끔 · 롤백) ARN 을 넘겨도 media.env 는 빈 값이고 compose 에 만료
+# 글자가 없다 — 시작 스크립트가 쓰지 않을 토큰을 받지 않는다.
+run "clears_clip_expiry_when_url_empty" {
+  command = plan
+
+  variables {
+    clip_internal_url            = ""
+    clip_expiry_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:pokeclip/prod/expired-broadcasts-token-StUvWx"
+  }
+
+  assert {
+    condition = contains(split("\n", one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/media.env"
+    ])), "CLIP_EXPIRY_TOKEN_SECRET_ARN=")
+    error_message = "주소가 빈데 media.env 의 CLIP_EXPIRY_TOKEN_SECRET_ARN 이 빈 값이 아니다."
+  }
+
+  assert {
+    condition = !strcontains(one([
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]), "clip-expiry")
+    error_message = "주소가 빈데 compose.yml 에 만료 토큰 디렉터리가 있다."
+  }
+}
+
 # 응답기 IP 한도 설정(compose 파일 옆 ingest-auth.env)은 두 모드 모두 깐다.
 # 시작 스크립트는 렌더본이 정확히 INGEST_AUTH_IP_LIMIT=on|off 한 줄이 아니면
 # 응답기 모드 기동을 막는다(MEDIA START BLOCKED: ingest-auth ip-limit setting
@@ -526,6 +731,46 @@ run "writes_ingest_auth_env_ip_limit_off_in_responder_mode" {
       file.content if file.path == "/etc/pokeclip-media/ingest-auth.env"
     ] == ["INGEST_AUTH_IP_LIMIT=off\n"]
     error_message = "ingest_auth_ip_limit = \"off\" 인데 ingest-auth.env 가 정확히 한 줄 INGEST_AUTH_IP_LIMIT=off 가 아니다."
+  }
+}
+
+# 새 꼴 쓰기 스위치(compose 파일 옆 sidecar.env — 사이드카의 required env_file)는
+# 두 모드 모두 깐다. 시작 스크립트는 그 파일이 정확히 PLAYBACK_ROUND_KEYS=true|false
+# 한 줄이 아니면 기동을 막는다(MEDIA START BLOCKED: sidecar settings unavailable).
+# user_data 는 첫 부팅에만 쓰므로 그 뒤의 정본은 상자 안 파일이다.
+run "writes_sidecar_env_as_single_round_keys_line" {
+  command = plan
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+    ] == ["PLAYBACK_ROUND_KEYS=false\n"]
+    error_message = "sidecar.env 가 정확히 한 줄 PLAYBACK_ROUND_KEYS=false(기본 끔)가 아니다."
+  }
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+    ] == [templatefile("../../../media-host/sidecar.env.tmpl", { playback_round_keys = false })]
+    error_message = "sidecar.env 가 저장소 템플릿 sidecar.env.tmpl 의 렌더가 아니다."
+  }
+}
+
+run "writes_sidecar_env_round_keys_true" {
+  command = plan
+
+  variables {
+    playback_round_keys = true
+  }
+
+  assert {
+    condition = [
+      for file in yamldecode(output.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+    ] == ["PLAYBACK_ROUND_KEYS=true\n"]
+    error_message = "playback_round_keys = true 인데 sidecar.env 가 정확히 한 줄 PLAYBACK_ROUND_KEYS=true 가 아니다."
   }
 }
 
@@ -583,14 +828,17 @@ run "bootstrap_requires_every_bundle_file" {
       "bin/secret-count.sh",
       "bin/ingest-auth-deny-sync.sh",
       "bin/ingest-auth-ip-limit.sh",
+      "bin/sidecar-round-keys.sh",
       "bin/lib/ops.sh",
       "bin/lib/mtx_paths.sh",
       "bin/lib/deny_tokens.sh",
       "bin/lib/docker_config.sh",
       "bin/lib/render_files.sh",
+      "bin/lib/clip_expiry.sh",
+      "bin/lib/cred_relay.sh",
       "mediamtx.yml.tmpl",
     ]
-    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 14개(bin/ 여덟 · bin/lib/ 다섯 · mediamtx.yml.tmpl)와 다르다."
+    error_message = "부트스트랩의 REQUIRED_FILES 가 묶음 파일 17개(bin/ 아홉 · bin/lib/ 일곱 · mediamtx.yml.tmpl)와 다르다."
   }
 }
 

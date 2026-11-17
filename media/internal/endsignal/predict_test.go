@@ -193,7 +193,7 @@ func TestCloseWaitsForInflightHandlerP5(t *testing.T) {
 	if r := <-got; r.status != http.StatusServiceUnavailable {
 		t.Fatalf("상태 = %d, want 503", r.status)
 	}
-	changed, _, _ := f.snapshot()
+	changed, _ := f.snapshot()
 	if len(changed) != 1 {
 		t.Errorf("Changed = %v, want 1 번(커밋 결과 모름)", changed)
 	}
@@ -352,7 +352,7 @@ func TestTimeBoundsP10(t *testing.T) {
 		if tc.wantStatus != 202 {
 			continue
 		}
-		_, _, applied := f.snapshot()
+		_, applied := f.snapshot()
 		e := applied[0]
 		if e.ConnStartedAt.After(e.StoppedAt) || e.StoppedAt.After(testNow) {
 			t.Errorf("%s: StoppedAt=%v ConnStartedAt=%v — 순서가 어긋났다", tc.name, e.StoppedAt, e.ConnStartedAt)

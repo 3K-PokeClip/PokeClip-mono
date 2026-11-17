@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ThumbnailImage } from './ThumbnailImage';
 
@@ -28,6 +28,70 @@ describe('ThumbnailImage', () => {
 
     rerender(<ThumbnailImage src={OTHER} fallback={<span>자리표시</span>} />);
     expect(container.querySelector('img')).toHaveAttribute('src', OTHER);
+  });
+
+  it('placeholder를 주면 첫 사진이 다 나타날 때까지만 보이고, 주지 않으면 그리지 않는다', () => {
+    vi.useFakeTimers();
+    const wait = <span>받는 중</span>;
+    const { container, rerender } = render(
+      <ThumbnailImage src={SRC} fallback={<span>자리표시</span>} placeholder={wait} />,
+    );
+    expect(screen.getByText('받는 중')).toBeInTheDocument();
+    expect(container.querySelector('img')).toHaveAttribute('data-pending');
+    fireEvent.load(container.querySelector('img')!);
+    // 사진이 나타나는 동안(0.2초)은 아래에 남는다: 바로 걷으면 칸 바탕이 비친다
+    expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
+    expect(screen.getByText('받는 중')).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(screen.queryByText('받는 중')).toBeNull();
+    vi.useRealTimers();
+
+    // 못 받아 자리표시로 내려갔다가 새 사진이 오면 새 img라 다시 기다린다
+    fireEvent.error(container.querySelector('img')!);
+    expect(screen.getByText('자리표시')).toBeInTheDocument();
+    rerender(<ThumbnailImage src={OTHER} fallback={<span>자리표시</span>} placeholder={wait} />);
+    expect(screen.getByText('받는 중')).toBeInTheDocument();
+
+    rerender(<ThumbnailImage src={SRC} fallback={<span>자리표시</span>} />);
+    expect(screen.queryByText('받는 중')).toBeNull();
+    expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
+  });
+
+  it('이미 받은 사진이면(다른 화면에서 돌아옴) placeholder 없이 바로 보인다: load를 기다려 다시 페이드하지 않는다', () => {
+    const complete = vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+    const width = vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(640);
+    const { container } = render(
+      <ThumbnailImage
+        src={SRC}
+        fallback={<span>자리표시</span>}
+        placeholder={<span>받는 중</span>}
+      />,
+    );
+    expect(screen.queryByText('받는 중')).toBeNull();
+    expect(container.querySelector('img')).not.toHaveAttribute('data-pending');
+    complete.mockRestore();
+    width.mockRestore();
+  });
+
+  it('pending이면 사진이 없는 동안 자리표시 대신 placeholder를 보이고, 못 받으면 자리표시로 돌아간다', () => {
+    const wait = <span>받는 중</span>;
+    const { container, rerender } = render(
+      <ThumbnailImage src={null} fallback={<span>자리표시</span>} placeholder={wait} pending />,
+    );
+    expect(screen.getByText('받는 중')).toBeInTheDocument();
+    expect(screen.queryByText('자리표시')).toBeNull();
+
+    rerender(
+      <ThumbnailImage src={SRC} fallback={<span>자리표시</span>} placeholder={wait} pending />,
+    );
+    expect(container.querySelector('img')).toHaveAttribute('data-pending');
+    expect(screen.getByText('받는 중')).toBeInTheDocument();
+
+    fireEvent.error(container.querySelector('img')!);
+    expect(screen.getByText('자리표시')).toBeInTheDocument();
+    expect(screen.queryByText('받는 중')).toBeNull();
   });
 
   it('못 받은 뒤 같은 사진의 새 서명 주소가 오면 바로 다시 시도한다(갱신 시간을 기다리지 않는다)', () => {

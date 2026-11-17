@@ -51,6 +51,11 @@ export interface LiveData {
    */
   playheadMs: number | null;
   /**
+   * 재생 위치(playheadMs)를 카드 이동이 정했나(영상 없이 누른 카드 · 주소의 카드). 거짓이면 녹화 · 다시보기가 알린 자리다. 서버
+   * 기준점이 없을 때 카드 초는 녹화 시작 축이 아니라 키 누적 축일 수 있어 채팅 바닥이 그 숫자를 시계로 쓰지 않는다(POK-562)
+   */
+  playheadFromCard: boolean;
+  /**
    * 라이브 재생기를 실시간에서 충분히(← 한 번) 되감았을 때 그 자리(POK-326). 채팅이 그 시각까지의 줄만 보인다. 실시간에 있거나
    * 영상 시각을 모르면(목록에 시각 표시가 없음) null이고 채팅은 최신이다
    */
@@ -138,6 +143,7 @@ const INITIAL: LiveData = {
   startedAt: null,
   endedAt: null,
   playheadMs: null,
+  playheadFromCard: false,
   liveRewind: null,
   relation: null,
   timeBaseMs: null,

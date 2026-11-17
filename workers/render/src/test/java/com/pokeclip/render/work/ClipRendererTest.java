@@ -60,8 +60,10 @@ class ClipRendererTest {
         }
         JobEnvelope job = job(recipe);
 
-        List<ClipRenderer.Produced> produced = renderer().render(job, dir, Instant.now().plus(Duration.ofMinutes(2)),
+        ClipRenderer.Rendered rendered = renderer().render(job, dir, Instant.now().plus(Duration.ofMinutes(2)),
                 (percent, stage) -> stages.add(stage));
+        List<ClipRenderer.Produced> produced = rendered.files();
+        assertThat(rendered.layout()).as("옛 꼴은 결과 배치를 싣지 않는다").isNull();
 
         assertThat(produced).extracting(ClipRenderer.Produced::kind).containsExactly("video", "srt");
         JsonNode video = probe(produced.getFirst().file());
@@ -114,7 +116,7 @@ class ClipRendererTest {
         output.putArray("dividers").addObject().put("y", 0.1).put("thickness", 0.02).put("color", "#FF0000");
 
         List<ClipRenderer.Produced> produced = renderer().render(job(recipe), dir,
-                Instant.now().plus(Duration.ofMinutes(2)), (p, s) -> { });
+                Instant.now().plus(Duration.ofMinutes(2)), (p, s) -> { }).files();
 
         byte[] frame = frameAt(produced.getFirst().file(), 1080, 1920);
         assertThat(rgb(frame, 540, 60)).as("바탕").satisfies(c -> near(c, 0x00FF00));

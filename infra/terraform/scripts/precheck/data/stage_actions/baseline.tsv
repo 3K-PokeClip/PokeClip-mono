@@ -24,6 +24,8 @@ O7e	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
 O7e	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
 O7f	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
 O7f	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
+workers	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
+workers	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
 8	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00
 8	cloudtrail:LookupEvents	us-east-1	allow	2026-10-13T11:05+09:00
 8a	cloudtrail:LookupEvents	ap-northeast-2	allow	2026-10-13T11:05+09:00

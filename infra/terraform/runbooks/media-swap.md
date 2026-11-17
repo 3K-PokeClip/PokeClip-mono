@@ -27,7 +27,11 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
     것과 정확히 같은지 보는 확인입니다(아래 「plan 범위」).
 *   **설정 반영 교체**: 상자 설정(이미지 · 제어면 상류 · janitor · 판 등)을
     바꿀 때 떠 있는 상자를 고치지 않고 새 키의 상자로 바꾸는 교체입니다.
-    떠 있는 상자의 user_data 는 `ignore_changes` 로 바뀌지 않습니다.
+    떠 있는 상자의 user_data 는 `ignore_changes` 로 바뀌지 않습니다. 예외는
+    아래 「제자리 전환」 하나입니다(공개 전 한정).
+*   **제자리 전환**: 새 상자를 띄우지 않고, 떠 있는 상자 A 의 설정 파일 ·
+    설치 묶음을 그 자리에서 바꾼 뒤 유닛을 다시 띄우는 절차입니다(아래
+    「제자리 전환」). 재시작하는 동안 1–2분 끊깁니다.
 
 ## 언제 쓰나
 
@@ -36,9 +40,14 @@ c3 · O7e 에 해당합니다. 상자는 `prod/media` 루트가 만들고
 | 처음 기동(O7e) | 「O7e — 처음 기동」 | 없음 |
 | 상자 교체 · AMI 갱신 | 「정상 교체」 | 없는 시간대 |
 | 설정을 바꿈(M15 · O8a · I1-6 반영 · 다이제스트 · 판 · janitor) | 「설정 반영 교체」 → 「정상 교체」 | 없는 시간대 |
+| 새 상자를 띄울 수 없거나 설정 · 이미지만 바꿈 — 공개(O8) 전 한정 · 공개 뒤에는 1–2분 중단을 kty 가 감수할 때만 · 발행 목록(`lifecycle_publish_streams`) ID ≤ 1(옛 · 새 구성 각각 · 둘 다 차 있으면 같은 ID) | 「제자리 전환」 | 없는 시간대 · 송출 금지 구간 |
+| O8 앞에 응답기 모드로 바꾸며 계약9 발행을 켬(kty 2026-11-03) | 「O8a 당김 교체」 — 정상 교체와 순서가 다름 | 없는 시간대 · 송출 금지 구간 |
 | 방송이 있는데 바꿔야 함 | 「force」 | 있음 |
 | apply 가 중간에 실패함 | 「부분 실패 복구」 | — |
 | O7e 가 이미 끝나 하한 아래 사이드카가 도는 prod 에 M6 운영 SQL 을 적용함(대비 — 새 O7e 는 이 길로 가지 않음) | 「한 창 절차」 | 없는 시간대 |
+| PDT 판 2 생산자(c0 이미지)로 바꾸거나 · 사이드카를 되돌리거나 · 판 게이트 스위치를 바꿈(POK-196 PDT) | 「PDT 판 2 롤백 하한 · 판 게이트」 → 「설정 반영 교체」 | 운영 SQL · 교체는 없는 시간대 · 스위치는 방송 중 가능 |
+| 60일 만료의 사이드카 · 설치 묶음을 되돌리거나 · 만료 주소(`clip_internal_url`)나 만료 스위치를 바꿈(POK-551) | 「만료 롤백 하한 · 만료 스위치」 → 「설정 반영 교체」 | 교체는 없는 시간대 · 스위치는 방송 중 가능 |
+| IMDS 대리 창구를 켠 상자를 띄우거나 · 끄거나 · 켬 상자의 사이드카 · 설치 묶음을 바꾸거나 되돌림(POK-574) | 「대리 창구 하한 · 켬 상자」 → 「설정 반영 교체」 → 「대리 창구 켬 상자 확인」 | 없는 시간대 |
 
 **옛 모드 단서(모든 갈래):** 옛 모드 상자(`ingest_auth_image` 빈 구성 · M15
 PR revert 판 포함)를 서비스에 넣는 모든 갈래(정상 · 설정 반영 · force · 부분
@@ -46,6 +55,68 @@ PR revert 판 포함)를 서비스에 넣는 모든 갈래(정상 · 설정 반�
 README 「되돌리기 순서」 1(인바운드를 팀 IP 로 축소 · 확인)을 먼저 하고, 교체
 뒤 같은 절 3(팀 IP 밖 익명 송출 거부)을 확인합니다. 옛 모드는 익명 송출이라
 인바운드가 열린 채면 누구나 송출 · 탈취 · DVR 리셋을 할 수 있습니다.
+
+**치우개 단서(모든 갈래):** clip 치우개(clip `BROADCAST_REAPER_ENABLED` —
+[prod/platform](/infra/terraform/prod/platform/README.md) 「clip 치우개
+스위치」)는 마지막 조각 뒤로 30분 조용한 live 방송을 닫습니다. 켜진 채
+30분을 넘기면 그 사이 방송 중인 방송이 닫히고 되돌아오지 않습니다. 치우개가
+켜져 있고(platform 변수 `clip_broadcast_reaper_enabled` 기본 `true`) 이
+교체에서 30분 넘는 정지 · 공백이 예상되면 아래대로 합니다.
+
+1.  걸음에 들어가기 전에 끕니다. platform tfvars 를
+    `clip_broadcast_reaper_enabled = false` 로 바꾸고 plan 대조 → apply 전
+    기준 읽기(platform README 「clip 치우개 반영 확인」 첫 블록) →
+    apply(승인) 순서로 합니다. plan 기대 목록은
+    `module.clip.aws_ecs_task_definition.this` 교체와
+    `module.clip.aws_ecs_service.this` 갱신 둘뿐이고, 태스크 정의의 차이는
+    `BROADCAST_REAPER_ENABLED` 값 하나뿐이어야 합니다. 이미지 · 다른 env
+    차이가 보이거나 다른 자원이 바뀌면 apply 하지 않고 멈춥니다(plan
+    출력에서 보는 법은 platform README 「clip 치우개 스위치」 의 plan 대조).
+1.  apply 성공만으로는 들어가지 않습니다. platform README 「clip 치우개 반영
+    확인」 의 읽기 셋이 `1 PRIMARY COMPLETED <n> <n>` · `false` · apply 전과
+    같은 이미지 다이제스트를 낸 **뒤에** 교체 걸음에 들어갑니다. 새 태스크가
+    끝내 뜨지 않으면(`FAILED` · 배포가 하나로 모이지 않음) 꺼지지 않은
+    상태로 보고 교체에 들어가지 않습니다 — kty 회부입니다.
+1.  걸음 도중 공백이 길어질 것 같으면(부분 실패 · force 포함) 그 자리에서
+    끕니다. 남은 여유는 30분 − 이미 지난 공백 − 재배포 몇 분입니다.
+1.  다시 켜기: 그 갈래의 끝 확인(예: 「정상 교체」 7 의 일관성)이 끝난 뒤
+    장부에 새 조각이 들어오는지 봅니다. 보는 수단은 런타임 1단-가 런북 「M6
+    읽기 질의」 의 흐름(실행기 흐름 · `make_read` · 질의 원문을 kty 에게
+    보이고 승인)입니다. 질의는 live 세션마다 장부의 마지막 조각 시각을
+    냅니다(회차 `round_id` 와 함께 — 오판 감지에도 씁니다). 모든 행의
+    `last_wall` 이 교체를 마친 시각보다 뒤면 통과입니다. 통과하지
+    못하면(`last_wall` 이 교체 전이거나 비어 있음) 되켜지 않고, 몇 분 뒤 다시
+    읽습니다. 계속 통과하지 못하면 kty 회부입니다.
+
+    ```shell
+    cat >"${payload}/ledger-tail.sql" <<'SQL'
+    SET TRANSACTION READ ONLY;
+    SET ROLE media_owner;
+    SELECT l.stream_id, l.round_id, g.start_wall_utc AS last_wall,
+           pg_catalog.now() AS read_at
+      FROM stream_sessions l
+      LEFT JOIN LATERAL (SELECT s.start_wall_utc FROM stream_segments s
+                          WHERE s.stream_id = l.stream_id
+                          ORDER BY s.seq DESC LIMIT 1) g ON true
+     WHERE l.state = 'live';
+    RESET ROLE;
+    SQL
+    ```
+
+    방송이 없는 시간대라 행이 없으면 끝 확인만으로 되켜고, 첫 방송 시작 뒤
+    30분 안에 같은 질의로 그 방송의 조각이 쌓이는지 확인합니다(장부가
+    망가졌으면 그때 치우개가 그 방송을 닫습니다).
+1.  되켤 때도 `true` 로 plan 대조 → apply 전 기준 읽기 → apply(승인)
+    순서로 하고, 같은 읽기 셋이
+    `1 PRIMARY COMPLETED <n> <n>` · `true` · apply 전과 같은 이미지
+    다이제스트를 내는지 봅니다.
+1.  꺼 둔 시각 · 되켠 시각을 실행 기록에 남깁니다. 무기한 꺼 둔 채로 두지
+    않습니다 — 꺼져 있는 동안 종료 편지를 놓친 방송은 live 로 남습니다.
+1.  교체 뒤 clip 로그에 `broadcast.reaper.ended` 줄이 찍혔는데 그 방송의
+    송출이 이어지면 오판입니다. 감지 · 복구(방송자에게 OBS 플러그인에서
+    송출을 정상 종료하고 10초쯤 뒤에 다시 켜거나, 5분 넘게 쉬었다 켜라고
+    안내 — 회차 규칙은 그 절)는 platform README 「clip 치우개 오판 감지 ·
+    복구」 를 따릅니다.
 
 ## 준비
 
@@ -96,6 +167,29 @@ media_ssm() {  # media_ssm <상자 키> <스크립트 파일> [인자 …]
 *   `media.env` 를 쓰는 상자 스크립트는 첫 줄에서 읽어 들입니다
     (`set -a; . /etc/pokeclip-media/media.env; set +a`). 그 파일에는 비밀 값이
     없습니다.
+*   **`-` 로 시작하는 인자는 `media_ssm` 에 넘기지 않습니다.** jq 의
+    `--args` 가 그 인자를 jq 옵션으로 읽어 실패합니다(2026-11-04
+    `--passphrase` 실사고). 그런 인자는 상자 스크립트 안에 고정합니다(예:
+    아래 「정상 교체 3」 의 `loopback-pp.sh`).
+*   **`bin/lib/ops.sh` 를 읽는 상자 스크립트는 bash 로 넘깁니다.**
+    `AWS-RunShellScript` 는 스크립트를 `sh` 로 돌립니다. `ops.sh` 의 함수
+    이름(`ops::say` 꼴)은 sh(POSIX 모드)에서 쓸 수 없는 이름이라, 읽는
+    순간 `not a valid identifier` 로 실패합니다(2026-11-04 상자에서 확인).
+
+그런 스크립트는 본문을 아래 꼴로 감싸 bash 에 넘깁니다. `media_ssm` 이 첫
+줄로 넣은 `set --` 인자가 그대로 bash 의 `$1` … 이 됩니다. 끝 줄 `B` 는
+들여 쓰지 않습니다.
+
+```shell
+exec /bin/bash -s -- "$@" <<'B'
+. /opt/pokeclip-media/bin/lib/ops.sh
+# 본문
+B
+```
+
+*   이 꼴에서는 표준 입력이 스크립트 본문 자체입니다. 표준 입력을 읽을 수
+    있는 명령에는 `</dev/null` 을 붙입니다 — 붙이지 않으면 그 명령이 남은
+    본문을 읽어 버려 뒤 명령이 깨집니다.
 
 ### plan 범위
 
@@ -103,12 +197,20 @@ apply 마다 plan 파일을 만들고, 바뀌는 관리 자원 목록이 그 걸
 목록과 같을 때만 apply 합니다. 하나라도 다르면 apply 하지 않고 kty 에게
 보고합니다.
 
+plan 과 apply 는 다른 블록입니다. 먼저 plan 블록으로 목록을 냅니다.
+
 ```shell
 terraform -chdir=infra/terraform/prod/media plan -out="${work}/media.plan"
 terraform -chdir=infra/terraform/prod/media show -json "${work}/media.plan" \
   | jq -r '.resource_changes[] | select(.mode == "managed")
       | select(.change.actions != ["no-op"])
       | "\(.change.actions | join(",")) \(.address)"'
+```
+
+목록이 아래 표의 그 걸음 기대 목록과 같은지 대조하고, kty 의 실행 직전
+승인을 받은 뒤에 apply 블록을 돌립니다.
+
+```shell
 terraform -chdir=infra/terraform/prod/media apply "${work}/media.plan"
 ```
 
@@ -118,12 +220,31 @@ terraform -chdir=infra/terraform/prod/media apply "${work}/media.plan"
 | ingest 전환 | `delete,create module.media_host.aws_lb_target_group_attachment.ingest` 한 줄 — NLB 대상 등록 교체만 |
 | http 전환 | `delete,create module.media_host.aws_lb_target_group_attachment.http["live"]` · `["control"]` · `["playback"]` 세 줄 — ALB 대상 등록 교체 3건만 |
 | A 회수 | `delete module.media_host.aws_instance.this["<A>"]` 한 줄 |
+| O8a 당김 B 기동 | `create module.media_host.aws_instance.this["<B>"]` 한 줄 + `update module.media_host.aws_iam_role_policy.media` 한 줄(`BroadcastPublish` — 「O8a 당김 교체」 걸음 0 의 Sid 목록에 `RewindDelete` 가 없으면 그 문도). user_data 차분은 「변경 있음」 만, 정책 차분은 Sid · 동작만 옮깁니다(주제 ARN 원문 금지) |
+| 제자리 전환 | `update module.media_host.aws_instance.this["<A>"]` 한 줄 — 태그 `ConfigVersion` 만(user_data 는 `ignore_changes` 라 차분 없음). 그 밖의 속성이 바뀌면 apply 하지 않습니다 |
+| POK-574 머지 뒤 첫 B 기동(켬 · 끔 모두) | `create module.media_host.aws_instance.this["<B>"]` 한 줄 + `update module.media_host.aws_iam_role_policy.media` 한 줄(`EdgeBoundsKvs` 에서 GetKey 가 빠짐 — 공유 자원이라 A 에도 곧바로 걸리고, 상자에서 부르는 곳은 없습니다). **A 의 `aws_instance` 는 no-op 여야 합니다** — IMDS IPv6 리터럴(`http_protocol_ipv6 = "disabled"`)을 더한 판이라, 차분이 보이면 멈추고 보고합니다(prod 실측값도 disabled 라 차분이 없어야 함). 그 뒤 B 기동은 위 「B 기동」 한 줄입니다 |
 
 *   설정 반영 교체의 B 기동에서 공유 자원(인스턴스 역할 정책 · SG 규칙 ·
     거부 목록 파라미터)이 함께 바뀌면, 그 변경이 이번 설정 변경의 의도인지
     kty 가 보고 승인합니다. 공유 자원은 A 에도 곧바로 걸립니다.
 *   A 의 `aws_instance` 에 `update` 가 보이면 apply 하지 않습니다 — 교체
-    모델(`ignore_changes`) 밖의 변경입니다.
+    모델(`ignore_changes`) 밖의 변경입니다. 유일한 예외는 위 표의 「제자리
+    전환」 태그 한 줄입니다.
+*   **어느 키든 `aws_instance.this[*]` 의 `metadata_options` 가 바뀌는
+    `update` 면 apply 하지 않습니다(POK-574).** IMDS 설정은 `ignore_changes`
+    밖이라 떠 있는 상자에 약 20초 안에 반영됩니다. 켬 키를 끔으로 바꾸면
+    증상 없이 격리가 풀리고(홉 2), 끔 키를 켬으로 바꾸면 그 상자의
+    컨테이너가 자격을 잃어 기록이 멈춥니다. 켬 · 끔은 새 키 상자로만
+    바꿉니다(아래 「대리 창구 롤백」). 아래가 빈 출력이어야 합니다.
+
+    ```shell
+    terraform -chdir=infra/terraform/prod/media show -json "${work}/media.plan" \
+      | jq -r '.resource_changes[]
+          | select(.address | startswith("module.media_host.aws_instance.this["))
+          | select(.change.actions | index("update"))
+          | select(.change.before.metadata_options != .change.after.metadata_options)
+          | .address'
+    ```
 
 ### 대상 그룹 상태 읽기
 
@@ -478,7 +599,7 @@ tg_health
 | 5 | ingest 전환 | NLB = B 1대 healthy |
 | 6 | http 전환 | ALB 셋 = B 1대 healthy |
 | 7 | 일관성 확인(읽기) | 네 그룹 모두 B 하나 · healthy |
-| 8 | A 회수 | 하루 관찰 뒤 |
+| 8 | A 회수 | 하루 관찰 뒤(PDT c0 교체는 앞당김 — 아래 8) |
 
 ### 정상 교체 2 — B 기동
 
@@ -494,7 +615,9 @@ tg_health
 
 1.  plan 범위 = B 인스턴스 생성 한 줄(위 「plan 범위」) → apply(승인).
 1.  기동 판정 → 5분 뒤 관찰 판정. 인자는 그 구성의 서비스 집합입니다
-    (응답기를 채웠으면 `ingest-auth` 를 넣습니다).
+    (응답기를 채웠으면 `ingest-auth` 를, IMDS 대리 창구 켬 키면
+    `cred-relay` 를 넣습니다 — 예 `cred-relay,janitor,mediamtx,nginx,sidecar`).
+    켬 키 B 는 관찰 판정 뒤 「대리 창구 켬 상자 확인」 을 함께 돕니다.
 
     ```shell
     media_ssm b "${work}/start-check.sh" janitor,mediamtx,nginx,sidecar
@@ -510,20 +633,82 @@ tg_health
 B 상자 안에서 시험 신호를 보내고 프록시 경유 재생목록이 200 인지 봅니다.
 출력은 판정 줄 하나입니다(media-host README 「루프백 헬스」).
 
+**루프백 전 확인.** 시험 `ingestStreamId` 는 시험 방송에도 쓰는 키입니다.
+그 키 방송이 다른 상자에서 도는 중에 루프백을 보내면 루프백 조각이 그 방송
+회차에 끼어듭니다. 2026-11-16 상자 a 루프백 조각이 상자 b 시험 방송의 seq
+7125 를 차지해 그 방송의 DVR 이 멈췄습니다(POK-591). 아래 확인 1 · 2 가 모두
+통과할 때만 루프백을 보냅니다. 걸리면 루프백을 보내지 않고 기다립니다.
+**같은 키로 방송하는 중에는 그 키로 시험 송출을 하지 않습니다.**
+
+확인 1 이 쓰는 래퍼입니다. `paths-list.sh` 는 목록을 표준 출력에, 개수 줄
+`PATHS LIST <n>` 을 표준 오류에 냅니다(아래 「force」 와 같은 계약).
+`media_ssm` 은 표준 출력만 보이므로 이 래퍼는 표준 오류를 표준 출력에
+합칩니다. 목록 원문을 저장하는 force 의 `paths-list.sh` 래퍼와 이름을 나눕니다.
+
+```shell
+cat > "${work}/paths-list-all.sh" <<'SH'
+set -a; . /etc/pokeclip-media/media.env; set +a
+/opt/pokeclip-media/bin/paths-list.sh 2>&1
+SH
+```
+
+1.  **확인 1 — 서비스가 도는 상자마다 송출 중 목록에 시험 ID 가 없습니다.**
+    `media_ids` 의 상자마다 송출 중 목록을 받습니다. 다른 방송이 있어도 시험
+    ID 만 없으면 통과입니다.
+
+    ```shell
+    pre="${work}/pre-<상자 키>.txt"
+    media_ssm <상자 키> "${work}/paths-list-all.sh" > "${pre}"
+    tail -n 1 "${pre}"                                # SSM Success
+    grep -x 'PATHS LIST [0-9]*' "${pre}"              # 개수 n
+    grep -c -v -e '^PATHS ' -e '^SSM ' -e '^$' "${pre}"  # n 과 같아야 함
+    grep -c -x -F <시험 ingestStreamId> "${pre}"      # 0
+    ```
+
+    *   통과 = 끝 줄 `SSM Success` · `PATHS LIST <n>` 한 줄 · 목록 줄 수 =
+        n · 시험 ID 줄 0 입니다. 넷 가운데 하나라도 아니면 통과가 아닙니다.
+    *   **실패한 조회는 「0」 처럼 읽힙니다.** `PATHS FAIL <단계>` ·
+        `PATHS LIST INCOMPLETE` 면 목록이 비어 마지막 두 줄이 0 을 냅니다.
+        끝 줄과 개수 줄을 먼저 봅니다. `media_ssm` 은 표준 출력 뒤에 빈 줄을
+        하나 더 붙이므로(AWS CLI text 출력) 줄 수는 빈 줄을 빼고 셉니다. 출력이 SSM 표준 출력 한도(24,000
+        바이트)에 닿으면 뒤가 잘려 개수 줄이 없습니다. 다시 받아도 통과하지
+        않으면 루프백을 보내지 않고 kty 에게 보고합니다.
+    *   유닛을 멈춘 상자는 MediaMTX 가 없어 송출이 있을 수 없습니다. 그
+        상자의 `stopped-check.sh`(아래 「한 창 절차 7′ — A 정지」)가 `MEDIA
+        STOPPED OK` 일 때만 대상에서 빼고, 뺀 상자와 그 판정 줄을 결과 기록에
+        적습니다. `PATHS FAIL sidecar` 로 멈춘 상자라고 짐작하지 않습니다 —
+        사이드카만 멈춘 상자도 같은 줄을 냅니다.
+
+1.  **확인 2 — 그 키 방송이 지금 없고, 끝난 지 6분이 지났습니다.** 시험 키를
+    쓰는 쪽(시험 방송을 하는 사람 · 세션)에 물어 확인합니다. 같은 스트림은
+    앞 방송 마지막 조각 끝에서 재접속 창 300초 안이면 같은 회차로 이어지고,
+    6분은 거기에 여유를 둔 값입니다(아래 「POK-525 교체 걸음」 4.8 과 같은
+    까닭). 한계: 앞 회차가 `live` 로 남아 있으면 6분 뒤에도 이어질 수
+    있습니다.
+
+1.  **알림.** 확인한 상대에게 루프백이 끝날 때까지 그 키로 송출을 시작하지
+    말라고 알립니다.
+
 ```shell
 cat > "${work}/loopback.sh" <<'SH'
 set -a; . /etc/pokeclip-media/media.env; set +a
 /opt/pokeclip-media/bin/loopback-health.sh "$@"
 SH
-media_ssm b "${work}/loopback.sh" <시험 ingestStreamId>
+cat > "${work}/loopback-pp.sh" <<'SH'
+set -a; . /etc/pokeclip-media/media.env; set +a
+/opt/pokeclip-media/bin/loopback-health.sh --passphrase "$1"
+SH
+media_ssm b "${work}/loopback.sh" <시험 ingestStreamId>      # 옛 모드
+media_ssm b "${work}/loopback-pp.sh" <시험 ingestStreamId>   # 응답기 모드
 ```
 
-*   인자는 B 의 송출 인증 모드로 고릅니다(위 2 의 서비스 집합과 같은 기준).
-    `ingest_auth_image` 가 빈 구성(옛 모드 — O7 · 되돌리기 포함)은 passphrase
-    없이, 찬 구성(응답기 모드)은 `--passphrase` 를 앞에 붙입니다
-    (`media_ssm b "${work}/loopback.sh" --passphrase <ID>` — media-host README
-    「송출 인증 두 모드」 · 「루프백 헬스」). 응답기 모드에서는 기본 갈래가
-    거부되는 것이 정상입니다.
+*   스크립트는 B 의 송출 인증 모드로 고릅니다(위 2 의 서비스 집합과 같은
+    기준). `ingest_auth_image` 가 빈 구성(옛 모드 — O7 · 되돌리기 포함)은
+    passphrase 없이 `loopback.sh` 를, 찬 구성(응답기 모드)은
+    `--passphrase` 를 붙이는 `loopback-pp.sh` 를 씁니다(media-host README
+    「송출 인증 두 모드」 · 「루프백 헬스」). `--passphrase` 를 `media_ssm`
+    인자로 넘기지 않습니다(위 「SSM 명령 보내기」). 응답기 모드에서는 기본
+    갈래가 거부되는 것이 정상입니다.
 *   `LOOPBACK FAIL <단계>` 면 교체를 멈추고 B 를 회수합니다(A 는 그대로).
 
 ### 정상 교체 4 — 방송 경로 수
@@ -567,7 +752,8 @@ media_ids | jq -r '.b'
 
 ### 정상 교체 8 — A 회수
 
-하루 관찰한 뒤 `instances` 에서 A 를 뺍니다. plan 범위 = A 인스턴스 삭제 한
+하루 관찰한 뒤 `instances` 에서 A 를 뺍니다(PDT c0 교체는 「PDT 배포 순서」
+4 에서 앞당깁니다 — 회수 직전 확인은 같음). plan 범위 = A 인스턴스 삭제 한
 줄 → apply(승인). 그 전에는 A 를 「부분 실패 복구」 의 되돌릴 곳으로 둡니다.
 예외: 「한 창 절차」 를 도는 중이면 A 는 하한 아래 이미지라, 그 절의 「A 를
 다시 띄울 때」 조건을 지킨 뒤에만 A 로 되돌립니다. 그때 A 회수는 「한 창
@@ -575,10 +761,723 @@ media_ids | jq -r '.b'
 A 로 되돌릴 때 A 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서(README
 「되돌리기 순서」 1 먼저 · 되돌린 뒤 3 확인)를 따릅니다.
 
+## POK-525 교체
+
+POK-525(조각 키를 업로드 때부터 회차 경로에)를 prod 에 넣는 **한 번의**
+교체입니다 — 옛 꼴만 읽는 이미지의 상자 A 를 POK-525 이미지의 상자 B 로
+바꾸고, B 가 새 꼴을 쓰기 시작하게 합니다. 「정상 교체」 를 그대로 밟되,
+A 를 배출 · 정지한 **뒤에만** B 의 새 꼴 쓰기를 켜고, 첫 새 꼴 행 뒤에
+트리거를 깝니다. 설계 r9.4 9-3 · 9-4 와 계획 r2 4-7 · 8절입니다.
+
+이 절(「POK-525 교체」 · 롤백 · 다음 교체)의 Q1 · Q2 · Q2-B · Q3 · Q4 는
+runtime-1a 「POK-525 읽기 질의」 입니다. 「O8a 당김 교체」 절의 Q1 – Q4
+(runtime-1a 「발행 잔여 질의」)와 이름만 같고 다른 질의입니다.
+
+*   방송이 없는 시간대에 합니다. 실행자 · 승인 규칙은 이 런북 머리와 같고,
+    걸음마다 kty 가 승인합니다.
+*   DB 를 읽고 쓰는 걸음(Q1 · Q2 · Q2-B · Q3 · Q4 · 운영 SQL 2 · 롤백 짝)의 SQL 과
+    보내는 법은 [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md)
+    「POK-525 운영 SQL 2 · 읽기 질의」 입니다. 이 절에서는 이름으로만
+    부릅니다.
+
+용어:
+
+*   **새 꼴 · 옛 꼴**: 되감기 조각 키의 두 꼴입니다 — 새 꼴
+    `dvr/{stream}/{round}/seg/{seq}.m4s` · 옛 꼴 `dvr/{stream}/seg/{seq}.m4s`.
+    A 의 이미지는 새 꼴을 읽지 못합니다(조각 키 문법에서 거절).
+*   **새 꼴 쓰기 스위치**: B 상자 파일 `/etc/pokeclip-media/sidecar.env` 한 줄
+    (`PLAYBACK_ROUND_KEYS=true|false`)입니다. 상자가 처음 뜰 때 tfvars
+    `playback_round_keys`(모듈 기본 false)로 쓰이고, 그 뒤에는 상자 안
+    `sidecar-round-keys.sh on|off` 로만 바꿉니다(media-host README
+    「판정 줄」). 사이드카는 이 파일을 **컨테이너를 만들 때만** 읽으므로,
+    켜져 있는지는 파일이 아니라 실행 중 사이드카의 기동 신호
+    `playback_key_layout`(`layout=legacy|round`)로 판정합니다.
+*   **교체 걸음 4.N**: 아래 「POK-525 교체 걸음」 의 4.1–4.12 입니다(설계 9-3
+    의 번호와 같음).
+*   **POK-525 하한**: PR Ⓑ2(회차 키 · 스위치)의 머지 커밋 `fcb6e0dd` 를
+    조상으로 둔 커밋으로 빌드한 사이드카 이미지입니다. 그 앞 커밋의 이미지(A
+    의 이미지 · prod 선출시 판 d03980cc 포함)가 하한 아래입니다. 판정은 「M6
+    운영 SQL 경계 · 롤백 하한」 과 같은 꼴입니다.
+
+    ```shell
+    git fetch origin
+    git merge-base --is-ancestor fcb6e0dd <이미지의 빌드 커밋 SHA> \
+      && echo 'POK-525 하한 이상' || echo 'POK-525 하한 아래'
+    ```
+
+*   **/dvr 하한 Writer**: 사이드카 안에서 열린 회차마다 /dvr 하한(엣지가 그
+    아래 조각을 막는 seq)을 원장 표 `stream_edge_bounds` 에 올리고 CloudFront
+    KVS 에 사본을 쓰는 몫입니다(PR Ⓒ). 회차가 닫히면 KVS 키를 지우고(해제)
+    120초 유예 뒤 원장 행을 지웁니다 — 원장 행이 남은 회차는 국면이 `vod`
+    로 넘어가지 않습니다. 스위치는 prod/media tfvars
+    `edge_bounds_writer_enabled` 이고, 켜면 상자의 사이드카
+    `REWIND_EDGE_BOUNDS_KVS_ARN` 에 런타임 1단 출력 KVS ARN 이 들어갑니다.
+    user_data 로만 들어가 떠 있는 상자는 바뀌지 않습니다. 신호 · 사람 복구는
+    media README 「/dvr 하한 Writer」 입니다.
+
+*   **롤백 하한**: 어디까지 A 로 되돌릴 수 있는가입니다. 기준은 **첫 새 꼴
+    행**(Q1 ≥ 1)입니다. 그 전(스위치 켜기 전 · 켰다 껐는데 새 꼴 행 0)이면 A
+    로 곧바로 되돌릴 수 있고, 그 뒤면 POK-525 하한 이상 이미지끼리만
+    되돌립니다 — 하한 아래 이미지는 이미 쓴 새 꼴 행을 읽지 못합니다. 아래
+    「POK-525 롤백」 이 이 기준으로 갈래를 나눕니다.
+
+### POK-525 교체 선행
+
+1.  걸음 0 이 끝나 있습니다 — PR Ⓐ(상자 역할의 되감기 객체 삭제 권한
+    `RewindDelete`) 머지본으로 `prod/media` apply(plan 변경 = 정책 문 하나)
+    → SSM 으로 상자 역할의 put · delete 한 번(종료 0). 설계 r9.4 9-3 1 ·
+    계획 r2 8절 걸음 0 이고, 이 절의 걸음이 아닙니다.
+1.  PR Ⓑ1(회차 불변) · Ⓑ2(회차 키 · 스위치) · Ⓒ(하한 원장 · Writer)가 모두
+    머지돼 있습니다. **Ⓒ 가 머지되기 전에는 이 절을 시작하지 않습니다.**
+1.  B 의 사이드카 이미지 · 설치 묶음을 빌드한 커밋이 셋을 모두 조상으로
+    둡니다([prod 산출물 런북](/infra/terraform/runbooks/prod-artifacts.md)
+    기록의 빌드 커밋 SHA) — 위 판정이 「POK-525 하한 이상」 입니다.
+1.  운영 SQL 1 — 런타임 1단-가 런북 「M6 스키마 재실행」 을 그 빌드 커밋 이상의
+    재실행 SHA 로 돌아 `VERIFY OK`. `60_round_frozen.sql`(운영 SQL 2)은 넣지
+    않습니다(교체 걸음 4.9 몫).
+1.  `prod/runtime` 을 그 SHA 로 다시 apply 합니다 — PR Ⓒ 가 더한 /dvr 하한
+    KVS 그릇과 출력 `edge_bounds_kvs_arn` 입니다. **Ⓒ 머지 뒤 이 apply 전에는
+    `prod/media` 가 어떤 plan 이든 그 출력 이름으로 멈춥니다(긴급 apply
+    포함)** — `prod/media` 가 그 출력을 필수로 읽기 때문입니다(prod/media
+    README 「앞 루트 출력」). 그래서 Ⓒ 머지와 이 apply 사이를 짧게 두고, 그
+    사이 `prod/media` 를 바꿔야 하면 이 apply 를 먼저 합니다.
+1.  B 의 tfvars — `instances` 에 `config_version` 을 올린 새 키 B, 이미지
+    다이제스트는 위 빌드, `playback_round_keys` 는 적지 않거나 `false`
+    (B 는 **끈 채** 뜹니다), `edge_bounds_writer_enabled = true`(B 의 /dvr
+    하한 Writer 켬 — KVS ARN 은 tfvars 칸이 없고 런타임 출력에서만
+    옵니다). 이 스위치는 user_data 로만 들어가 A 는 바뀌지 않습니다.
+1.  Ⓒ 머지 뒤 첫 `prod/media` apply(보통 4.1)의 plan 에는 공유 인스턴스
+    역할 정책의 문 하나(`EdgeBoundsKvs` — 그 KVS 하나의 Describe ·
+    UpdateKeys. POK-574 전까지는 GetKey 도)가 더해집니다. 스위치와 무관하게 늘
+    붙고, A 도 같은 역할이라 그 순간부터 A 에도 이 권한이 생깁니다(A 의
+    이미지는 Writer 가 없어 쓰지 않음). 승인 때 B 인스턴스와 함께 이 한 줄을
+    봅니다.
+1.  사이드카 `LOG_LEVEL` 을 `info` 보다 높게(`warn` · `error`) 두지 않습니다.
+    `playback_key_layout` 줄은 끔이면 INFO, 켬이면 트리거가 없을 때(4.7) WARN
+    · 있을 때(4.9 뒤) INFO 입니다. 등급을 높이면 그 아래 줄이 사라져, 그 줄을
+    기다리는 대조가 `journal` 로 실패합니다 — `warn` 이면 off · 트리거 뒤의 on
+    · 복원 묶음의 legacy 대조, `error` 면 4.7 의 on 까지. 복원 대조가 실패하면
+    `restore-failed` 이고, 아래 `layout-check.sh` 는 `LAYOUT none` 으로 NOT
+    OK 를 냅니다. prod compose 는 `LOG_LEVEL` 을 적지 않아 `info` 입니다.
+
+### POK-525 교체 상자 스크립트
+
+「상자 스크립트」 셋(`start-check.sh` · `watch-check.sh` · `paths.sh`)과
+「한 창 절차 7′ — A 정지」 의 `stop.sh` · `stopped-check.sh` 에 아래를 더해
+작업 디렉터리에 써 둡니다.
+
+```shell
+cat > "${work}/round-keys.sh" <<'SH'
+/opt/pokeclip-media/bin/sidecar-round-keys.sh "$@"
+SH
+printf 'systemctl disable pokeclip-media\n' > "${work}/disable.sh"
+printf 'systemctl restart pokeclip-media\n' > "${work}/restart.sh"
+printf 'systemctl enable pokeclip-media\n' > "${work}/enable.sh"
+printf 'systemctl start pokeclip-media\n' > "${work}/start.sh"
+printf '%s\n' \
+  "pgrep -af 'sidecar-round-keys[.]sh' || echo 'ROUND KEYS PROC 0'" \
+  > "${work}/round-keys-ps.sh"
+```
+
+*   `round-keys-ps.sh` 는 상자에서 아직 도는 `sidecar-round-keys.sh` 프로세스를
+    줄마다 내고, 없으면 `ROUND KEYS PROC 0` 한 줄을 냅니다. 「POK-525 롤백」 의
+    `lock` · 켬 중단 갈래가 씁니다.
+
+**사이드카 layout 판정**(`layout-check.sh` — 인자: 없음, 또는 Q1 의
+`round_keys` 값). 실행 중 사이드카가 하나인지 보고, 그 컨테이너 ID 로 거른
+태그 저널의 마지막 `playback_key_layout` 줄을 읽습니다.
+
+```shell
+cat > "${work}/layout-check.sh" <<'SH'
+fail() { echo "LAYOUT CHECK FAIL $1"; exit 2; }
+[ "$#" -le 1 ] || fail usage
+if [ "$#" -eq 1 ]; then
+  case "$1" in '' | *[!0-9]*) fail usage ;; esac
+fi
+ids="$(docker ps -q --no-trunc --filter status=running \
+  --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+layout=""
+frozen=""
+if [ "${running}" = 1 ]; then
+  # 파일이 아니라 실행 중 컨테이너의 기동 줄로 본다(env_file 은 만들 때만 읽힌다).
+  log="$(journalctl -t pokeclip-media-sidecar "CONTAINER_ID_FULL=${ids}" \
+    -q --no-pager -o cat)" || fail journal
+  line="$(printf '%s\n' "${log}" | grep -F '"msg":"playback_key_layout"' \
+    | tail -n 1)"
+  layout="$(printf '%s\n' "${line}" \
+    | sed -n 's/.*"layout":"\([a-z]*\)".*/\1/p')"
+  frozen="$(printf '%s\n' "${line}" \
+    | sed -n 's/.*"round_frozen":"\([a-z]*\)".*/\1/p')"
+fi
+echo "SIDECAR_RUNNING ${running}"
+echo "LAYOUT ${layout:-none}"
+echo "ROUND_FROZEN ${frozen:-none}"
+ok=0
+# 트리거는 absent 만 통과다 — unknown(조회 실패)은 없음을 확인한 것이 아니다.
+if [ "${running}" = 1 ] && [ "${layout}" = legacy ] \
+  && [ "${frozen}" = absent ]; then
+  ok=1
+fi
+if [ "$#" -eq 0 ]; then
+  if [ "${ok}" = 1 ]; then echo "SIDECAR LEGACY OK"; exit 0; fi
+  echo "SIDECAR LEGACY NOT OK"
+  exit 1
+fi
+echo "Q1 $1"
+if [ "${ok}" = 1 ] && [ "$1" = 0 ]; then echo "BEFORE ON OK"; exit 0; fi
+echo "BEFORE ON NOT OK"
+exit 1
+SH
+```
+
+| 줄 | 통과 | 뜻 |
+|---|---|---|
+| `SIDECAR_RUNNING` | `1` | 실행 중 사이드카 컨테이너 수 |
+| `LAYOUT` | `legacy` | 그 컨테이너의 마지막 기동 줄의 layout. 줄이 없으면 `none` |
+| `ROUND_FROZEN` | `absent` | 그 기동 때 회차 불변 트리거 조회 결과. `present` 면 운영 SQL 2 가 이미 깔렸다 — 켜기 전 상태가 아니다. `unknown`(조회 실패) · `none`(줄 없음)이면 트리거가 없는지 모른다 — NOT OK |
+| `Q1` | `0` | 인자로 준 Q1 값(인자가 있을 때만) |
+| `SIDECAR LEGACY OK` · `NOT OK` | OK | 인자 없음 — 위 셋 |
+| `BEFORE ON OK` · `NOT OK` | OK | 인자 있음 — 위 넷(「켜기 전」 선언 판정) |
+| `LAYOUT CHECK FAIL <단계>` | — | `usage` · `docker`(컨테이너 조회 실패) · `journal`(저널 조회 실패) — 판정이 아니다. 다시 봅니다 |
+
+`ROUND_FROZEN unknown` 은 그 컨테이너가 뜰 때 트리거 조회가 실패한
+것입니다. 기동 줄은 컨테이너를 만들 때 한 번만 나와 다시 재도 같습니다 —
+멈추고 kty 에게 보고합니다.
+
+**정지 유지 판정**(`disabled-check.sh` — 인자 없음). A 유닛이 부팅 때 다시
+뜨지 않게 됐는지 봅니다.
+
+```shell
+cat > "${work}/disabled-check.sh" <<'SH'
+# is-enabled 는 disabled 에서도 종료 1 이라 종료 코드가 아니라 낱말로 가른다.
+# 조회가 실패하면(빈 출력) unknown 이고 NOT OK 다.
+state="$(systemctl is-enabled pokeclip-media 2>/dev/null)" || :
+echo "ENABLED ${state:-unknown}"
+if [ "${state}" = disabled ]; then
+  echo "MEDIA DISABLED OK"; exit 0
+fi
+echo "MEDIA DISABLED NOT OK"
+exit 1
+SH
+```
+
+*   통과 = `MEDIA DISABLED OK`(`ENABLED disabled`). `enabled` 나 조회 실패
+    (`ENABLED unknown`)는 NOT OK 입니다.
+*   `layout-check.sh` · `disabled-check.sh` 는 `infra/media-host/test/
+    sidecar_round_keys_ops_test.sh` 가 이 런북의 here-document 를 그대로
+    뽑아 가짜 docker · journalctl · systemctl 로 돌립니다(사례 R16 · R17).
+
+**하한 Writer 판정**(`edge-check.sh` — 인자 없음). 실행 중 사이드카 하나의
+**지금 프로세스**가 낸 /dvr 하한 Writer 기동 줄을 읽습니다. 기동 줄은
+프로세스마다 넷 가운데 하나입니다 — `edge_bounds_started`(Writer 켜짐) ·
+`_disabled`(ARN 빔) · `_config_invalid`(ARN 꼴 밖 — 뒤이어 `_disabled`) ·
+`_degraded`(KVS 클라이언트를 못 엶).
+
+```shell
+cat > "${work}/edge-check.sh" <<'SH'
+fail() { echo "EDGE CHECK FAIL $1"; exit 2; }
+ids="$(docker ps -q --no-trunc --filter status=running \
+  --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+[ "${running}" = 1 ] || fail "running ${running}"
+# 같은 컨테이너가 다시 시작하면(on-failure) 앞 프로세스의 줄이 그 컨테이너
+# 저널에 남는다 — 지금 프로세스의 시작 시각(State.StartedAt) 뒤 줄만 본다.
+started_at="$(docker inspect --format '{{.State.StartedAt}}' "${ids}")" \
+  || fail inspect
+since="$(date -d "${started_at}" +%s)" || fail started-at
+log="$(journalctl -t pokeclip-media-sidecar "CONTAINER_ID_FULL=${ids}" \
+  --since "@${since}" -q --no-pager -o cat)" || fail journal
+# 마지막 줄이 아니라 있는 줄로 고른다 — 꼴 밖 ARN 은 config_invalid 뒤
+# disabled 를 낸다. 뒤에 오는 이름이 앞 이름을 덮는다.
+msg=none
+for m in disabled degraded config_invalid started; do
+  if printf '%s\n' "${log}" | grep -qF "\"msg\":\"edge_bounds_${m}\""; then
+    msg="edge_bounds_${m}"
+  fi
+done
+echo "SINCE ${since}"
+echo "EDGE ${msg}"
+if [ "${msg}" = edge_bounds_started ]; then echo "EDGE STARTED OK"; exit 0; fi
+echo "EDGE STARTED NOT OK"
+exit 1
+SH
+```
+
+*   통과 = `EDGE STARTED OK`(`EDGE edge_bounds_started`). 그 밖 낱말이면
+    NOT OK 이고, 뜻과 처리는 media README 「/dvr 하한 신호」 입니다.
+    `EDGE none` 은 지금 프로세스가 아직 그 줄까지 오지 못했거나(갓 뜸 ·
+    기동 단계에서 죽음) 줄을 내기 전에 다시 시작한 것입니다 — 잠시 뒤
+    다시 봅니다.
+*   시작 시각은 `lifecycle-check.sh`(「O8a 당김 — 운영 감시」)와 같은 꼴로
+    초 단위로 자릅니다. 앞 프로세스가 지금 프로세스와 같은 초에 기동 줄을
+    냈으면 그 줄도 들어옵니다.
+*   `EDGE CHECK FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
+*   이 스크립트는 아직 시험이 뽑아 돌리지 않습니다(위 둘과 다름).
+
+### POK-525 교체 걸음
+
+| 걸음 | 동작 | 통과 |
+|---|---|---|
+| 4.1 | B 기동(**끈 채** · 하한 Writer 켬) — 「정상 교체」 2. apply 를 시작한 시각을 `<since>` 로 적음 | 기동 판정 넷(`PREREQ_FAIL 0` · `START_BLOCKED 0` · `SIDECAR_DB` · `MEDIA WATCH OK`) · `SCHEMA_NOT_READY 0` · B `layout-check.sh`(인자 없음) `SIDECAR LEGACY OK` · B `edge-check.sh` `EDGE STARTED OK` |
+| 4.2 | B 루프백(옛 꼴) — 「정상 교체」 3 | `LOOPBACK OK` · Q1 = 0 |
+| 4.3 | 경로 수 → ingest 전환 → http 전환 → 일관성 — 「정상 교체」 4–7. ingest 전환 뒤 `<cut>` 을 적음 | 각 걸음의 통과 |
+| 4.4 | A 배출 — A `paths.sh` → Q2 | A `PATHS 0` · Q2 세 행 `waiting` 0 |
+| 4.5 | A 정지 · 끔 — `stop.sh` → `disable.sh` | `MEDIA STOPPED OK` · `MEDIA DISABLED OK` |
+| 4.6 | 켜기 전 확인 — Q1 다시 · A 판정 다시 · B 「켜기 전」 선언 판정 | Q1 0 · `MEDIA STOPPED OK` · `MEDIA DISABLED OK` · `BEFORE ON OK` |
+| 4.7 | B `paths.sh` → `round-keys.sh on` | B `PATHS 0` · `SIDECAR ROUND KEYS OK on` |
+| 4.8 | 켬 뒤 루프백(첫 새 꼴 쓰기 · 4.2 루프백 끝에서 6분 넘게 지난 뒤) — 「정상 교체」 3 과 같은 명령 → Q3 | `LOOPBACK OK` · Q3 `matched` 1 이상 · `mismatched` 0 |
+| 4.9 | B `paths.sh` → 운영 SQL 2(`60_round_frozen.sql` → `40_verify.sql`) | B `PATHS 0` · `ROUND FROZEN OK` · `VERIFY OK` |
+| 4.10 | 시험 방송(시험 키) → 끝낸 뒤 국면 `vod` → Q4 | Q3 `matched` 늘고 `mismatched` 0 · Q4 `pass` `t`(아래 4.10) |
+| 4.11 | A 회수 — 시험 방송이 통과한 날 | Q2 0 · A `MEDIA STOPPED OK` · `MEDIA DISABLED OK` → plan 범위 A 삭제 한 줄 |
+| 4.12 | 결정 9 확정 — prod tfvars `playback_round_keys = true` | plan 범위 0 줄 |
+
+```shell
+media_ssm b "${work}/layout-check.sh"                # 4.1
+media_ssm b "${work}/edge-check.sh"
+media_ssm a "${work}/paths.sh"                       # 4.4 · Q2 앞
+media_ssm a "${work}/stop.sh"                        # 4.5
+media_ssm a "${work}/disable.sh"
+media_ssm a "${work}/stopped-check.sh"
+media_ssm a "${work}/disabled-check.sh"
+media_ssm a "${work}/stopped-check.sh"               # 4.6 — A 판정 다시
+media_ssm a "${work}/disabled-check.sh"
+media_ssm b "${work}/layout-check.sh" <Q1 값>        # 4.6
+media_ssm b "${work}/paths.sh"                       # 4.7 · 4.9 직전
+media_ssm b "${work}/round-keys.sh" on               # 4.7
+```
+
+*   **4.1 · 4.2 — 끈 채 시작.** B 가 끈 채 쓰는 행은 모두 옛 꼴이라 아직 도는
+    A 의 업로더 · 발행 · 동결이 모두 읽습니다 — 겹침이 길어져도 안전합니다.
+    4.1 의 `SIDECAR LEGACY OK` 를 보기 전에는 루프백을 하지 않습니다 — 켜진
+    B 의 루프백은 A 가 못 읽는 새 꼴 행을 만듭니다. 4.2 의 Q1 이 0 이
+    아니면 멈추고 kty 에게 보고합니다.
+*   **4.1 — 하한 Writer.** `EDGE STARTED OK` 가 아니면 멈추고 kty 에게
+    보고합니다. `EDGE edge_bounds_disabled` 면 tfvars 스위치를,
+    `_config_invalid` 면 런타임 출력 ARN 을, `_degraded` 면 그 줄의 `err` 를
+    봅니다. 끈 채인 동안은 옛 꼴만 써 Writer 가 하한을 올릴 회차가 없고(원장
+    행 0) KVS 에 키도 없습니다. /dvr 하한 함수(`dvr_floor_enabled`)가 붙어
+    있어도 키가 없는 회차는 통과라 시청자 영향은 없습니다.
+*   **4.3 — A 는 아직 돕니다.** 전환 동안 A 가 살아 있어 제어면 502 창이
+    없습니다. `<cut>` = `tg_health` 의 `ingest` 가 B 한 대 healthy 가 된
+    시각 + 30초(등록 해제 지연)입니다.
+*   **4.4 — A 배출.** A 를 멈추면 A 디스크에만 있는 조각의 업로드가
+    멈추고, B 에는 그 파일이 없어 정산 창(15분) 뒤 그 조각은 VOD 의 GAP 으로
+    굳습니다. 그래서 Q2 가 0 일 때만 4.5 로 갑니다. 0 이 아니면 기다렸다
+    다시 잽니다. **창 안에 0 이 안 되면 여기서 멈춥니다** — 끈 채 B 로
+    운영해도 안전하고, 다음 창에 4.4 부터 다시 합니다. `bytes_null` 이 0 이
+    아니면 kty 에게 보고합니다.
+*   **4.5 — 유닛으로 멈추고 끔.** 사이드카 컨테이너만 멈추면 mediamtx ·
+    nginx 가 끝날 때 유닛(`Restart=always`)이 compose 전체를 다시 띄워
+    되살아나고, 유닛이 enable 이면 재부팅에도 뜹니다. `stop` 은 정지를
+    유지하고 `disable` 은 부팅 자동 기동을 끊습니다. `mask` 는 쓰지 않습니다
+    — 유닛 파일이 `/etc/systemd/system` 에 직접 깔려 있어 실패합니다. 정지
+    뒤 A 를 손으로 `start` 하지 않습니다(「POK-525 롤백」 의 「켜기 전」
+    복귀만 예외).
+*   **4.6 — 여기까지는 A 로 곧바로 돌아갈 수 있습니다**(「POK-525 롤백」 의
+    「켜기 전」). 4.6 의 Q1 은 `<since>` 그대로입니다.
+*   **4.7 — 스위치 켬.** 직전에 B `PATHS 0` 을 봅니다 — 켠 직후 실방송이
+    첫 새 꼴 행을 만들면 A 복귀가 일찍 닫힙니다. 기대하는 신호:
+    *   새 사이드카의 기동 줄은 `layout=round round_frozen=absent` WARN 한
+        줄입니다(트리거는 4.9 에서 깔림 — 정상).
+    *   사이드카만 다시 만들어 mediamtx · nginx 와 송출은 그대로이고, 재생성
+        수 초 동안 제어면이 502 이며 그 사이 늦은 4D(종료 신호)는 503 ·
+        502 로 재시도를 소진할 수 있습니다. `round-keys.sh on` 을 보낸
+        시각과 OK 를 본 시각을 적습니다.
+    *   OK 를 본 시각이 Q3 의 `<on>` 입니다.
+    *   `SIDECAR ROUND KEYS FAIL …` 이면 「POK-525 롤백」 의 켬 실패 갈래
+        (판정 줄 끝에 따라 셋)로, 판정 줄 없이 끝났으면(SSM 취소 · 시간
+        초과) 켬 중단 갈래로 갑니다.
+*   **4.8 — 이 순간부터 A 복귀는 닫힙니다**(롤백 하한). Q3 의 `mismatched`
+    가 0 이 아니면 멈추고 kty 에게 보고합니다.
+    *   4.8 루프백은 **4.2 루프백이 끝나고 6분이 넘게 지난 뒤** 보냅니다. 합류는
+        앞 세션 마지막 조각 끝에서 재접속 창 300초 안에만 일어나고, 6분은 거기에
+        여유를 둔 값입니다. 그 안이면 4.2 와 같은 시험 스트림이라 4.2 의 회차로
+        이어질 수 있고, 그러면 한 회차에 옛 꼴(4.2)과 새 꼴(4.8 · 4.10) 조각이
+        섞여 4.10 의 Q4 가 `not_round_keys` 1 이상으로 `f` 를 냅니다. 6분이
+        지나도 4.2 세션이 아직 `live` 로 남아 있으면 같은 세션으로 이어지는데,
+        그때도 Q4 는 `f` 를 냅니다(`<on>` 뒤에 시작한 세션이 없으면 `round_id`
+        가 비고, 있으면 그 회차에 4.2 의 옛 꼴이 섞여 `not_round_keys` 1 이상) —
+        4.11 로 가지 않고 kty 에게 보고합니다. [엣지 시험 런북](edge-tests.md)
+        「/dvr 하한 걸음」 의 「새 시험 방송으로 재개」 도 같은 까닭으로 6분을
+        기다리고, 새 회차가 직전 회차와 다른지 봅니다.
+*   **4.9 — 운영 SQL 2.** 직전에 B `PATHS 0` 을 다시 봅니다(트리거를 만드는
+    동안 세션 쓰기가 막힘). 보내는 법 · 실패 갈래는 런타임 1단-가 런북
+    「POK-525 운영 SQL 2 적용」 입니다. B 는 다시 띄우지 않습니다 — 다음
+    기동부터 `round_frozen=present` 입니다. A 는 4.5 에서 멈춰 트리거 있는
+    DB 에서 돈 적이 없습니다(트리거에 거절돼 사라지는 A 의 늦은 4D 가
+    없음).
+*   **4.10 — 시험 방송.** 시험 키로 송출하고 끝냅니다. 시험 키의 스트림은 Q4 의
+    `<test>`(4.2 · 4.8 루프백과 같은 시험 스트림)여야 합니다 — 다른 스트림이면
+    Q4 가 이 방송이 아니라 4.8 루프백의 회차를 판정합니다. 통과는 셋입니다.
+    1.  키 새 꼴 — Q3(`<on>` 그대로)의 `matched` 가 늘고 `mismatched` 0.
+    1.  방송을 끝낸 뒤 그 회차의 국면이 `vod` 로 넘어감. 하한 Writer 는
+        5분마다 원장에 올리므로, 시험 방송은 **10분 넘게** 보내 그 회차에
+        원장 행이 생기게 합니다. 원장 행은 첫 발행 뒤 Margin(60초)이 지난
+        다음 올림 틱(5분 주기)에 생겨 늦어도 약 6분이고, 10분은 여기에
+        여유를 둔 값입니다. 그러면 B 사이드카 저널에 그 회차의
+        `dvr_floor_released`(KVS 하한 키를 지움) 한 줄이 나오고, 120초 유예
+        뒤 원장 행이 지워져야 넘어갑니다. 넘어가는 시각은 해제 · 재조회
+        주기의 합(약 2–3.5분) 뒤이고 상한이 아닙니다. 해제도 30초는
+        주기일 뿐이라, Writer 의 올림 패스(5분마다 — 해제와 한 작업에서
+        차례로 돎)가 길면 그만큼 밀립니다. 재조회는 30초마다
+        `ending` 스트림을 이름순으로 한 묶음에 담고, 보류 틱마다 커밋 표지가
+        쓰고 남은 상태 읽기 칸(`REWIND_PLAYBACK_READ_MAX`)만큼 묶음 앞에서
+        읽습니다. 칸이 모자라면 남은 스트림은 다음 보류 틱에 이어 읽고, 묶음을
+        다 읽기 전에는 새 묶음을 담지 않습니다 — `ending` 스트림이 많으면 그만큼
+        늦어집니다. 10분이 넘도록 `ending` 이면
+        runtime-1a 「POK-525 원장 질의」 로 그 회차 행의 `state` 를 봅니다.
+        `sample` 은 상태마다 앞 10개뿐이라 그 회차가 빠질 수 있으므로, 그
+        절의 「한 스트림만 보기」 대로 `<test>` 로 좁혀 돌립니다.
+        `released_stuck` 이면 같은 절의 「`released_stuck` 판정」 대로 5분
+        뒤 다시 봅니다.
+    1.  **업로드 · 발행 정상 · VOD 문서 URI 새 꼴** — 국면이 `vod` 가 된 뒤
+        Q4(`<on>` · `<test>`)의 `pass` 가 `t`: 그 회차 조각(컷오프 이상)의
+        ③(되감기 조각) 미업로드 0 · 그 회차 새 꼴이 아닌 키 0 · GAP 기록 0 · 최신 세션
+        `vod_state` 가 `frozen`(`frozen_with_gaps` 아님)이고 VOD 문서 키
+        있음 · 회차 닫힘.
+
+    국면 `vod` 하나로는 넘어가지 않습니다 — `frozen_with_gaps` 도 국면이
+    `vod` 이고, 정산 기한까지 못 올라간 조각은 GAP 줄로 마감됩니다. Q4 가
+    `f` 면 4.11 로 가지 않고 어긋난 열(`not_uploaded` · `gaps` 등)을 kty
+    에게 보고합니다. 4.8 뒤라 A 로 돌아가는 갈래는 없습니다 — 원인을 고쳐
+    시험 방송을 다시 합니다(「POK-525 롤백」 의 「켠 뒤 · 새 꼴 행 1
+    이상」). 어긋난 열이 `not_round_keys` 하나뿐이면 먼저 4.8 이 4.2 의
+    회차로 이어졌는지(위 4.8 — 6분)를 봅니다. 그렇다면 배포 이상이 아니므로,
+    그 회차가 닫힌 뒤(마지막 조각 끝에서 6분 넘게) 시험 방송을 새로 해 새
+    회차의 Q4 를 봅니다.
+*   **4.11 — A 회수를 앞당깁니다.** 4.8 뒤 A 는 되돌릴 곳이 아니라 「정상
+    교체」 8 의 하루 관찰을 쓰지 않습니다. 회수 직전 Q2 · A 판정 둘을 다시
+    봅니다.
+*   **4.12 — 결정 9 (가) 확정.** 운영자의 실제 `prod/media/terraform.tfvars`
+    (저장소 밖 — 저장소에는 `terraform.tfvars.example` 만)에
+    `playback_round_keys = true` 를 적고 plan 을 봅니다. 떠 있는 상자의
+    user_data 는 `ignore_changes` 라 B 는 바뀌지 않고, 다음 상자부터 켬으로
+    뜹니다. plan 범위의 목록이 **비어 있어야** 합니다 — 한 줄이라도 있으면
+    apply 하지 않고 kty 에게 보고합니다. 비어 있으면 적용할 것이 없습니다
+    (tfvars 기록만 남음). 모듈 기본값은 false 그대로입니다.
+
+### POK-525 롤백
+
+**「켜기 전」 선언 판정** — 둘 다 참일 때만 「켜기 전」 으로 A 복귀를
+엽니다. ⓐ B `layout-check.sh <Q1 값>` 이 `BEFORE ON OK` — 지금 실행 중
+사이드카의 마지막 기동 줄이 `layout=legacy` · `round_frozen=absent` ⓑ 그
+인자 Q1 이 방금 잰 값(`<since>` 그대로)으로 0. 파일 값은 보지 않습니다 —
+파일을 끔으로 되돌려도 실행 중 컨테이너는 켬일 수 있습니다. Q1 ≥ 1 이면
+「켠 뒤 · 새 꼴 행 1 이상」 입니다. `layout=legacy` 하나만으로는 A 복귀
+근거가 아닙니다 — Q1 0 과 트리거 없음 확인(4.9 를 돌리지 않음 ·
+`ROUND_FROZEN absent`)이 함께 필요합니다.
+
+`rolled-back` 판정 줄은 이 판정을 대신하지 않습니다. 스크립트는 복원
+재생성이 만든 컨테이너가 `layout=legacy` 줄을 내고 그 대조 직후 실행 중
+사이드카 하나인 것까지 보지만, 판정 줄을 낸 뒤 그 컨테이너가 계속 도는지와
+Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실행 중 사이드카
+`layout=legacy` · 트리거 `absent` ∧ Q1 재측정 0」 을 이 판정으로 따로
+봅니다.
+
+상태마다 판정과 방법입니다.
+
+*   **켜기 전**(4.1–4.6)
+    *   판정: 스위치 끔 · 트리거 없음 · 「켜기 전」 선언 판정.
+    *   방법: 아래 「켜기 전 복귀」.
+*   **켬 실패 · 바뀐 것 없음**(4.7)
+    *   판정: `SIDECAR ROUND KEYS FAIL lock` · `not-running` · `write` ·
+        `config`(종료 1) · `usage`(종료 2) — 뒤에 `rolled-back` ·
+        `restore-failed` 가 붙지 않습니다. 스크립트가 스위치 파일을 바꾸기
+        전에 멈춰 파일 · 실행 중 사이드카가 그대로입니다(media-host README
+        「판정 줄」).
+    *   방법: 「켜기 전」 그대로입니다.
+        *   `lock` — 다른 `round-keys.sh` 실행이 잠금을 쥐었거나 잠금 파일을
+            열지 못한 것입니다. 이 스크립트는 동시에 둘을 돌리지 않습니다 —
+            B 에서 아직 도는 SSM 명령이 없는지(아래 명령이 `0`) 확인한 뒤
+            같은 `on` 을 다시 보냅니다(승인). 다시 보내도 `lock` 이면 kty
+            에게 보고합니다.
+
+            ```shell
+            aws ssm list-commands --instance-id "$(media_ids | jq -er .b)" \
+              --filters key=Status,value=InProgress --query 'length(Commands)'
+            media_ssm b "${work}/round-keys-ps.sh"
+            ```
+
+            SSM 명령이 0 이어도 상자에서 `sidecar-round-keys.sh` 프로세스가
+            아직 도는지 `round-keys-ps.sh` 로 봅니다 — SSM 취소가 자식
+            스크립트까지 끝내지 않아 취소된 명령의 스크립트가 계속 돌 수
+            있습니다(로컬 연습 2026-11-03 에서 관찰 · prod 미확인). 돌면 끝날
+            때까지 기다린 뒤(`ROUND KEYS PROC 0`) 다시 보냅니다.
+
+        *   그 밖 — 판정 줄을 kty 에게 보고하고, 다시 켤지는 kty 가
+            정합니다. 다시 켜면 4.6(Q1 · A 판정 · `BEFORE ON OK`)부터
+            합니다.
+*   **켬 실패 · `rolled-back`**(4.7)
+    *   판정: `SIDECAR ROUND KEYS FAIL <단계> rolled-back` — 스크립트가 복원
+        묶음(파일 끔 → 재생성 → 그 컨테이너 legacy 대조)을 마쳤습니다.
+    *   방법: Q1 을 다시 재고 「켜기 전」 선언 판정 → `BEFORE ON OK` 면
+        「켜기 전」. Q1 ≥ 1 이면 「켠 뒤 · 새 꼴 행 1 이상」, Q1 0 인데 NOT
+        OK 면 아래 「restore-failed 처리」.
+*   **켬 실패 · `restore-failed`**(4.7)
+    *   판정: `SIDECAR ROUND KEYS FAIL <단계> restore-failed` — 파일 · 실행
+        상태 미확정.
+    *   방법: 아래 「restore-failed 처리」.
+*   **켬 중단**(4.7)
+    *   판정: 판정 줄 없이 끝남 — 종료 130 · 143(INT · TERM) · SSM
+        `Cancelled` · `TimedOut`. 스크립트는 신호를 받으면 복원 묶음 없이
+        끝나고(강제 종료면 트랩도 돌지 않음), 파일은 이미 켬일 수 있고 실행 중
+        사이드카는 미확정입니다.
+    *   방법: `on` 을 다시 보내지 않습니다. 먼저 `round-keys-ps.sh` 로 상자에서
+        `sidecar-round-keys.sh` 프로세스가 아직 도는지 봅니다 — SSM 취소가
+        자식 스크립트까지 끝내지 않을 수 있습니다(위 `lock` 갈래). 돌면 끝날
+        때까지(`ROUND KEYS PROC 0`) 기다립니다. 그 실행의 판정 줄은 표준
+        출력에만 나와(저널에 남기지 않음) 취소된 명령의 SSM 출력에 실리지
+        않을 수 있습니다 — 판정 줄이 없으면 이 갈래 그대로 갑니다. 그다음
+        아래 「restore-failed 처리」 를 그대로 — `off` → 결과 갈래대로 손 처리
+        → Q1 재측정 · 「켜기 전」 선언 판정.
+*   **켠 뒤 · 새 꼴 행 0**(4.7 OK · 4.8 전)
+    *   판정: Q1 0 · 트리거 없음.
+    *   방법: `round-keys.sh off` → `OK off` 면 「켜기 전」 선언 판정. 그
+        밖이면 「restore-failed 처리」 의 `off` 결과 갈래.
+*   **켠 뒤 · 새 꼴 행 1 이상**(4.8 뒤)
+    *   판정: Q1 ≥ 1.
+    *   방법: A 로 돌아가지 않습니다. 고친 이미지로 「설정 반영
+        교체」(POK-525 하한 이상끼리). 새 꼴 쓰기만 멈추려면 `round-keys.sh
+        off`(이미 쓴 새 꼴 행은 같은 이미지가 계속 읽음). A 의 이미지 ·
+        d03980cc · 그 밖의 하한 아래 이미지 금지.
+*   **트리거 결함**(4.9 뒤)
+    *   판정: 정당한 세션 UPDATE 가 23514 `stream_sessions.round_id is
+        frozen`.
+    *   방법: 런타임 1단-가 런북 「POK-525 트리거 롤백 짝」(손 SQL · 승인) →
+        고친 60 파일 PR → 다시 4.9. A 복귀 수단이 아닙니다.
+
+/dvr 하한 갈래는 위 상태와 따로, 어느 걸음에서든 생길 수 있습니다. 상태
+판정은 media README 「/dvr 하한 신호」, 절차는 「/dvr 하한 사람 복구」
+입니다.
+
+*   **엣지 거절**(/dvr 하한 함수를 붙인 뒤 운영 중 — 시청자 404 ·
+    `dvr_floor_blocks_list`. 판정 C′ 도중의 같은 관찰은 엣지 시험 런북의
+    「보류 · 즉시 kty 보고」 이고 끌지는 kty 가 정함)
+    *   방법: `dvr_floor_enabled = false` 로 prod/edge apply 해 `/dvr/*` 에서
+        함수를 뗍니다(1순위 · 실행 직전 승인). plan 범위는
+        `update module.media.aws_cloudfront_distribution.this` 한 줄이고,
+        함수 · 로그 그룹 · 경보는 남깁니다. 원인을 고친 뒤 다시 켭니다 —
+        [엣지 시험 런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의
+        2단 · 판정 C′ 입니다(C′ 결과 둘 — 「통과」 면 켠 채 두고, 「보류 ·
+        즉시 kty 보고」 면 켠 채 6.6 을 열어 둠 · 다시 끌지는 kty 판단).
+        함수 코드가 원인이면 같은 런북의
+        「붙은 채 함수 코드 고치기」 차례(고친 PR 머지 전에 끔)를 따릅니다.
+
+        ```shell
+        terraform -chdir=infra/terraform/prod/edge plan -input=false \
+          -var dvr_floor_enabled=false -out="${work}/edge-dvr-off.plan"
+        terraform -chdir=infra/terraform/prod/edge show -json \
+          "${work}/edge-dvr-off.plan" \
+          | jq -r '.resource_changes[] | select(.mode == "managed")
+              | select(.change.actions != ["no-op"])
+              | "\(.change.actions | join(",")) \(.address)"'
+        ```
+
+        목록이 위 한 줄과 같을 때만, kty 실행 직전 승인 뒤 apply 합니다.
+
+        ```shell
+        terraform -chdir=infra/terraform/prod/edge apply \
+          "${work}/edge-dvr-off.plan"
+        ```
+
+    *   apply 뒤 떼어졌는지는 [엣지 시험 런북](edge-tests.md) 「/dvr 하한
+        끄기」 의 확인 둘(배포 설정의 `/dvr/*` 연결 · 표지 요청)로 봅니다.
+        하한 값 · 회차와 무관해 회차가 닫힌 뒤에도 성립합니다.
+
+*   **Writer 만 문제**(`edge_bounds_write_failing` 이 풀리지 않음 ·
+    `dvr_floor_release_overdue` · `edge_bounds_degraded`)
+    *   `edge_bounds_degraded` 는 먼저 그 줄의 `err` 를 고치고 사이드카를
+        재기동합니다(media README 「/dvr 하한 사람 복구」). 못 고칠 때만
+        아래 방법으로 갑니다.
+    *   방법: 엣지를 먼저 끔(함수가 붙어 있을 때만 — 위 「엣지 거절」 의
+        `dvr_floor_enabled = false` apply) → `edge_bounds_writer_enabled =
+        false` 로 「설정 반영 교체」 → 고친 뒤 `true` 로 다시 교체. 꺼진
+        동안 닫힌 미해제 회차는 `ending` 에 묶이고
+        (`edge_bounds_unreleased_without_writer`) Writer 가 돌아오면
+        풀립니다.
+    *   엣지는 Writer 를 되살린 교체 뒤 다시 켭니다 — [엣지 시험
+        런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의 2단 · 판정 C′.
+    *   `dvr_floor_release_overdue` 만이면(`pass=release` 의
+        `edge_bounds_write_failing` 이 함께 나와도) 엣지는 끄지 않습니다 —
+        피해는 그 회차 VOD 가 열리지 않는 것뿐입니다.
+    *   **Writer 없는 상자로 바꾸기 전에 해제 뒤 120초를 기다립니다.**
+        옛 상자의 Writer 가 KVS 키를 지우고 해제를 적은 행은 120초 유예 뒤에
+        지워집니다. 그 안에 옛 상자를 멈추면 지울 몫이 Writer 없는 상자의
+        감시만 남습니다(그 감시도 유예가 지난 해제 행은 지움). 옛 상자를
+        멈추기 직전 runtime-1a 「POK-525 원장 질의」 에서
+        `released_settling` 0 을 봅니다.
+*   원장 표 · KVS 그릇 · IAM 문은 어느 갈래에서도 지우지 않습니다.
+*   **해체 · KVS 그릇 교체는 지금 할 수단이 없습니다.** 스위치
+    (`dvr_floor_enabled = false`)는 `/dvr/*` 부착만 떼고, dvr-floor 함수의
+    KVS 연결은 남습니다.
+    연결이 남은 그릇의 교체 · 삭제는 DeleteKeyValueStore 가 쓰는 중인
+    그릇으로 거절합니다(409 — [prod/edge](../prod/edge/README.md)
+    「/dvr 하한(POK-525)」 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).
+    연결을 떼려면 함수를 지워야 하는데 `O7f` 묶음에
+    `cloudfront:DeleteFunction` 이 없습니다. 그래서 해체 · 그릇 교체 앞에
+    함수 삭제 승인 경로(`O7f` 에 DeleteFunction 행 추가 · 별도 승인)가 먼저
+    있어야 하고, 이것은 POK-525 PR 범위 밖입니다.
+
+**켜기 전 복귀**(A 로 돌아감 — 실행 직전마다 승인):
+
+1.  A 를 멈췄으면(4.5 뒤) A 에서 `systemctl enable pokeclip-media` →
+    `systemctl start pokeclip-media` → A 기동 판정(「정상 교체」 2 의
+    `start-check.sh`). 4.5 전이면 A 는 아직 돌고 있어 이 걸음이 없습니다.
+
+    ```shell
+    media_ssm a "${work}/enable.sh"
+    media_ssm a "${work}/start.sh"
+    media_ssm a "${work}/start-check.sh" <A 의 서비스 집합>
+    ```
+
+1.  활성 키를 A 로 — `ingest_active_key` · `http_active_key` 를 A 로(「정상
+    교체」 5 · 6 의 역 · plan 범위 같음) → 일관성(「정상 교체」 7 — 네 그룹
+    A 하나).
+1.  `<cut2>` = `tg_health` 의 `ingest` 가 A 한 대 healthy 가 된 시각 +
+    30초를 적습니다.
+1.  Q2-B — 세 행 모두 `waiting` 0 이 될 때까지 기다립니다. B 디스크에만
+    있는 미완료 업로드를 셉니다(`<cut>` 앞에 B 가 만든 조각도 셈). 창 안에
+    0 이 안 되면 B 를 **끈 채** 그대로 둡니다 — A · B 둘 다 옛 꼴만 써서
+    안전합니다. 0 이 되기 전에는 B 를 회수하지 않습니다.
+1.  B 회수 — plan 범위 = B 인스턴스 삭제 한 줄 → apply. B 는 끈 채였으므로
+    정지 · disable 없이 회수합니다.
+
+**restore-failed 처리**(파일 · 실행 상태 미확정):
+
+1.  `round-keys.sh off` 를 보냅니다. 결과마다:
+    *   `SIDECAR ROUND KEYS OK off` — 새 사이드카가 끔으로 떴습니다. 3 으로.
+    *   `SIDECAR ROUND KEYS FILE off` — 실행 중 사이드카를 확인하지 못해
+        파일만 끔으로 썼습니다. 2 로.
+    *   `SIDECAR ROUND KEYS FAIL recreate` · `journal` · `verify` — 파일은
+        이미 끔이고 실행 중 사이드카가 미확정입니다. 2 로.
+    *   `SIDECAR ROUND KEYS FAIL write` — 파일이 그대로입니다. SSM 으로
+        `/etc/pokeclip-media/sidecar.env` 를 손으로 정확히
+        `PLAYBACK_ROUND_KEYS=false` 한 줄(`root:root 0644`)로 씁니다(명령
+        원문을 kty 에게 보이고 승인). 스크립트와 같은 차례로 씁니다 — 자리가
+        링크가 아닌 일반 파일인지 먼저 보고, 같은 디렉터리의 임시 파일에 써
+        `chown 0:0` · `chmod 0644` 한 뒤 `mv -f` 로 바꿉니다(제자리에 `>` 로
+        덮어쓰지 않습니다). 2 로.
+    *   `SIDECAR ROUND KEYS FAIL lock` — 다른 실행이 잠금을 쥐어(또는 잠금
+        파일을 열지 못해) 아무것도 바꾸지 않았습니다. 동시에 둘을 돌리지
+        않습니다 — 아직 도는 SSM 명령 · 상자 프로세스가 없는지 위 「켬 실패
+        · 바뀐 것 없음」 의 `list-commands` · `round-keys-ps.sh` 로 확인한 뒤
+        1 을 다시 합니다. 다시 해도 `lock` 이면 kty 에게 보고합니다.
+    *   `SIDECAR ROUND KEYS FAIL config` · `usage` — 스크립트가 설정 · 인자
+        검사에서 멈춰 파일 · 사이드카가 그대로입니다. kty 에게 보고하고,
+        설정 · 인자를 고친 뒤 1 을 다시 합니다.
+1.  B 유닛 재시작 — **방송 없는 창에서만** 합니다. 시작 스크립트가 compose
+    전체를 `--force-recreate` 로 다시 띄워 mediamtx 도 내려가므로(`start-
+    media.sh` 머리 9) 진행 중 송출이 끊깁니다. 직전에 B `PATHS 0` 을 보고
+    `restart.sh` → B 기동 판정(`start-check.sh`).
+1.  Q1 을 다시 재고 「켜기 전」 선언 판정 → `BEFORE ON OK` 면 「켜기 전」.
+    Q1 ≥ 1 이면 「켠 뒤 · 새 꼴 행 1 이상」. `LAYOUT legacy` 인데
+    `ROUND_FROZEN` 이 `absent` 가 아니면 멈추고 kty 에게 보고합니다.
+1.  그래도 `LAYOUT legacy` 가 아니면 B 사이드카만 멈추고 kty 에게
+    회부합니다. 송출은 mediamtx 가 계속하고, 색인은 사이드카가 다시 뜰 때
+    디스크의 녹화를 따라잡습니다. 컨테이너 단독 정지는 media-host README
+    「운영 규칙」 1 이 금지하는 꼴이라, 이 자리의 예외로 kty 승인을 따로
+    받습니다(`on-failure` 정책이라 다음 유닛 재기동까지 사이드카가 멈춘 채
+    있습니다).
+
+```shell
+media_ssm b "${work}/round-keys.sh" off
+media_ssm b "${work}/paths.sh"          # 재시작 직전 PATHS 0
+media_ssm b "${work}/restart.sh"
+media_ssm b "${work}/start-check.sh" <4.1 과 같은 서비스 집합>
+media_ssm b "${work}/layout-check.sh" <Q1 값>
+printf 'docker compose -p pokeclip-media -f /etc/pokeclip-media/compose.yml stop sidecar\n' \
+  > "${work}/sidecar-stop.sh"           # 4 — 승인 뒤에만
+media_ssm b "${work}/sidecar-stop.sh"
+```
+
+### POK-525 다음 교체
+
+이 교체 뒤의 교체(옛 상자 B → 새 상자 C)입니다. C 는 처음부터 켬으로
+뜨고(4.12 의 tfvars), 트리거는 이미 있습니다. 순서는 **「정상 교체」 1–7 →
+옛 상자 배출 → 정지 → 회수** 이고, 아래 표가 그 전부입니다. 번호는 이 표
+안의 것입니다.
+
+「POK-525 교체」 의 걸음 표(4.1–4.12)를 따라 밟지 않습니다. 그 표의 통과
+줄은 끈 채 뜨는 새 상자와 트리거 없는 DB 를 전제로 해서, 켬으로 뜨는 C 에
+대면 교체가 막힙니다 — 4.1 의 `SIDECAR LEGACY OK` 는 늘 NOT OK, 4.2 의 Q1 은
+C 루프백이 새 꼴이라 1 이상, 4.10 의 Q3 · Q4 는 `<on>` 이 없습니다. 이 교체가
+그 표에서 빌려 쓰는 것은 옛 상자 배출(4.4)과 정지(4.5) 둘뿐입니다.
+
+| # | 동작 | 통과 | 바탕 |
+|---|---|---|---|
+| 0 | 선행 조건 확인(아래) | 하한 이상 둘 · 트리거 있음 | — |
+| 1 | 시간대를 고르고 스트리머에게 알린다 | — | 정상 교체 1 |
+| 2 | C 기동(**켬** · 같은 AZ · 등록 안 함) | 기동 판정 넷(`PREREQ_FAIL 0` · `START_BLOCKED 0` · `SIDECAR_DB` · `MEDIA WATCH OK`) | 정상 교체 2 |
+| 3 | C 루프백(대상 그룹 밖) | `LOOPBACK OK` | 정상 교체 3 |
+| 4 | B · C 방송 경로 수 | B `PATHS 0` | 정상 교체 4 |
+| 5 | ingest 전환 — `<cut>` 을 적음 | NLB = C 1대 healthy | 정상 교체 5 |
+| 6 | http 전환 | ALB 셋 = C 1대 healthy | 정상 교체 6 |
+| 7 | 일관성 확인(읽기) | 네 그룹 모두 C 하나 · healthy | 정상 교체 7 |
+| 8 | B 배출 — B `paths.sh` → Q2 | B `PATHS 0` · Q2 세 행 `waiting` 0 | POK-525 교체 4.4 |
+| 9 | B 정지 · 끔 — `stop.sh` → `disable.sh` | `MEDIA STOPPED OK` · `MEDIA DISABLED OK` | POK-525 교체 4.5 |
+| 10 | B 회수 — **하루 관찰 뒤** | 회수 직전 Q2 0 · B `MEDIA STOPPED OK` · `MEDIA DISABLED OK` → plan 범위 B 삭제 한 줄 | 정상 교체 8 · 회수 직전 확인은 4.11 |
+
+```shell
+media_ssm b "${work}/paths.sh"            # 8 · Q2 앞
+media_ssm b "${work}/stop.sh"             # 9
+media_ssm b "${work}/disable.sh"
+media_ssm b "${work}/stopped-check.sh"
+media_ssm b "${work}/disabled-check.sh"
+```
+
+상자 스크립트는 「POK-525 교체 상자 스크립트」 와 같이 작업 디렉터리에 써
+둡니다.
+
+**쓰지 않는 것** — 「POK-525 교체」 의 다음 걸음 · 판정은 이 교체에
+없습니다.
+
+*   `layout-check.sh` 의 끝 판정(4.1 · 4.6). 켬으로 뜬 C 에는 늘 `SIDECAR
+    LEGACY NOT OK` 입니다. C 의 켬 여부는 통과 조건이 아닙니다 — 보려면 그
+    출력의 `LAYOUT` 줄(`round`)만 읽습니다.
+*   Q1(4.2 · 4.6) — C 는 처음부터 새 꼴을 씁니다.
+*   4.6–4.9(켜기 전 확인 · 켬 · 켬 뒤 루프백 · 운영 SQL 2) — 결정 9 (가)로
+    이번 교체에서 끝난 일회성 걸음입니다.
+*   4.10 시험 방송(Q3 · Q4) — 「정상 교체」 에 없는 걸음이고, 판정 질의가 이
+    교체에 없는 `<on>` 을 씁니다.
+*   4.11 의 회수 앞당김과 4.12(tfvars 는 이미 켬).
+*   「POK-525 롤백」 의 갈래 — 모두 A → B 교체의 켬 전후를 가르는 갈래입니다.
+
+걸음마다:
+
+*   **8 · 9 — 옛 상자 배출 · 정지는 빠지지 않습니다.** B 의 이미지가 새 꼴을
+    읽어도 B 디스크에만 있는 미완료 업로드는 C 가 대신 올리지 못합니다(C 에는
+    그 파일이 없음). 그래서 7 뒤 Q2(`<cut>` = `tg_health` 의 `ingest` 가 C 한
+    대 healthy 가 된 시각 + 30초 · `<test>` = 3 의 C 루프백 시험 스트림)가 0
+    이 된 뒤에만 B 를 멈춥니다. 창 안에 0 이 안 되면 B 를 띄운 채 절차를
+    여기서 멈추고, 다음 창에 8 부터 다시 합니다(4.4 와 같음). 정지는 4.5 와
+    같이 유닛으로 `stop` → `disable` 이고 `mask` 는 쓰지 않습니다.
+*   **10 — 회수는 「정상 교체」 8 그대로 하루 관찰 뒤입니다.** B 는 POK-525
+    하한 이상이라 C 가 쓴 새 꼴 행을 읽습니다 — 되돌릴 곳으로 남습니다. 4.11
+    이 하루 관찰을 쓰지 않은 까닭(A 는 새 꼴을 못 읽음)이 여기에는 없습니다.
+    관찰 동안 B 로 되돌려야 하면, B 는 9 에서 멈춰 있으니 B 에서 `enable.sh`
+    → `start.sh` → 기동 판정(`start-check.sh`)을 먼저 보고 활성 키를 B 로
+    돌립니다(「정상 교체」 5 · 6 의 역 → 7). 그 뒤 C 를 회수하기 전의 배출
+    판정은 이 런북에 아직 없습니다 — kty 에게 보고합니다.
+
+**선행 조건**(0) — 하나라도 아니면 이 절이 아니라 「POK-525 교체」 를
+처음부터 씁니다.
+
+1.  B · C 의 이미지가 모두 POK-525 하한 이상(위 「POK-525 하한」 판정)입니다.
+1.  트리거가 이미 있습니다. 첫 다음 교체(B → C)에서는 4.9 의 기록(`ROUND
+    FROZEN OK` · `VERIFY OK`)으로 판정합니다 — B 는 4.9 뒤 다시 뜨지 않아
+    사이드카 기동 줄이 늘 `round_frozen=absent` 입니다. 트리거 뒤에 뜬 옛
+    상자는 기동 줄로도 볼 수 있는데, 옛 상자에 `layout-check.sh` 를 돌려 끝
+    판정(`SIDECAR LEGACY …`)이 아니라 `ROUND_FROZEN` 줄만 읽습니다
+    (`present` 가 통과).
+
 ## 설정 반영 교체
 
 M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 · 도구 판 ·
-`janitor_enabled` 를 바꿀 때입니다. 떠 있는 상자는 고치지 않습니다.
+`janitor_enabled` 를 바꿀 때입니다. 떠 있는 상자는 고치지 않습니다. 예외는
+아래 「제자리 전환」 입니다(공개 전 한정).
 
 1.  tfvars 의 설정을 바꿉니다.
 1.  B 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를 따릅니다 — README
@@ -594,6 +1493,960 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
 *   compose 판을 바꾸면 `compose_sha256` 도 함께 바꿉니다. 하나만 바꾸면 B 가
     `MEDIA PREREQ FAIL compose-version` 으로 막힙니다 — 그대로 B 를 회수하고
     고칩니다.
+*   **MediaMTX 설정은 컨테이너 재시작(유닛 stop · start)으로만 바꿉니다.**
+    다음 셋은 하지 않습니다 — ① `/run/pokeclip-media/mediamtx.yml` 고치기
+    ② Control API 의 설정 변경(`/v3/config/…`) ③ 그 밖의 핫 리로드(설정을
+    떠 있는 프로세스에 다시 읽히는 것). `hlsAlwaysRemux`(시청자가 없어도
+    송출 시점부터 HLS 목록을 만드는 설정)가 켜진 상태에서 설정을 바꿔
+    경로를 다시 만들면, 그 중의 경합으로 muxer(HLS 목록 · 조각을 만드는
+    MediaMTX 내부 부품)가 없어져 그 경로에 500 이 이어질 수 있습니다
+    (bluenviron/mediamtx#6315 — 열림(2026-11-07 확인) · 우리 판 해당). 그렇게 되면 요청이
+    와도 스스로 복구하지 않습니다. 새 상자는 기동이 곧 재시작이고, 제자리 전환도 stop →
+    교체 → start 로 이 규칙을 지킵니다.
+
+## 제자리 전환 — 떠 있는 상자의 설정을 바꿀 때
+
+새 상자를 띄우지 않고, 떠 있는 상자 A 의 설정 파일 · 설치 묶음(스크립트 ·
+MediaMTX 템플릿이 든 이미지)을 그 자리에서 바꾼 뒤 유닛을 다시 띄웁니다.
+2026-11-04 O8a 때 새 상자 재고가 없어 A 를 제자리에서 바꾼 일(kty 「그냥
+바로 여기다가 prod 띄워」)을 일반화한 절차입니다. 실행자 · 승인 규칙은 이
+런북 머리와 같습니다.
+
+**쓰는 조건:**
+
+*   **공개(O8) 전에만 씁니다.** 공개 뒤에는 재시작 동안 1–2분 끊기는 것을
+    kty 가 감수할 때만 씁니다.
+*   새 상자를 띄울 수 없을 때(재고 부족 등)나, 설정 · 이미지만 바꿀 때
+    (POK-529 사이드카 배포 등)입니다. AMI · 인스턴스 유형 · 공유 자원(역할
+    정책 · SG 규칙 · 거부 목록 파라미터) 변경은 이 절로 하지 않습니다 —
+    「설정 반영 교체」 입니다.
+*   방송 0(A 의 `PATHS 0`) · 송출 금지 구간을 지킵니다.
+*   **IMDS 대리 창구(POK-574):** 켬 · 끔은 제자리로 바꾸지 않습니다(위 「plan
+    범위」 의 `metadata_options` 멈춤). 켬 상자의 제자리 전환은 사이드카 ·
+    설치 묶음이 둘 다 대리 창구 하한 이상일 때만 합니다(아래 「대리 창구
+    하한 칸별 규칙」).
+*   MediaMTX 설정의 반영도 이 절의 재시작으로만 합니다(「설정 반영 교체」
+    의 bluenviron/mediamtx#6315 규칙).
+*   계약9 발행(broadcast.started · ended)이 켜진 구성이면 아래 「계약9 회차
+    확인」 을 지킵니다.
+
+**계약9 회차 확인:** `PATHS 0` 이어도, started 를 발행한 회차가 아직
+닫히는 중(정산 창 15분)일 수 있습니다. 그때 사이드카를 재기동하면 게이트
+준비가 실패해 꺼진 게이트로 강등되고, 그 회차가 ended 없이 닫힐 수
+있습니다(「O8a 당김 — 운영 감시」 의 재기동 강등). 그래서 옛 구성이나 새
+구성의 발행 목록(`lifecycle_publish_streams`)이 차 있으면 아래 셋을
+지킵니다. 둘 다 비어 있으면 이 확인은 하지 않습니다.
+
+**적용 범위 — 시험 ID 하나일 때만.** 발행 잔여 질의는 시험 ID 하나의
+회차만 셉니다. 그래서 옛 구성 · 새 구성의 발행 목록이 각각 비었거나 그
+시험 ID 하나만 담을 때만 이 절차로 전환합니다. 목록에 ID 가 둘 이상이거나
+`*` 가 있으면, 다른 ID 의 열린 회차가 질의에 잡히지 않은 채 재기동 강등으로
+ended 없이 닫힐 수 있습니다. 그 구성이면 제자리 전환을 하지 않고 kty 에게
+회부합니다(멈춤 자리). 옛 구성과 새 구성이 서로 다른 시험 ID 를 하나씩
+담을 때(예: 옛 `[X]` · 새 `[Y]`)도 같습니다. 질의 한 번은 시험 ID 하나만
+보므로 어느 ID 로 물을지 정할 수 없습니다 — kty 회부입니다.
+
+1.  **재기동 전 — 걸음 2 직전 · 원복 직전.** 발행 잔여 질의
+    ([런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md) 「발행
+    잔여 질의」)로 Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 을 봅니다. 시험 회차가
+    생기기 전이면 Q4 0 행입니다. 「O8a 당김 교체」 의 종료 감시 · 롤백과
+    같은 판정입니다. 하나라도 아니면 멈춥니다.
+    *   Q3 > 0(회차가 아직 열림): 재기동하지 않습니다. 게이트가 켜진 지금
+        사이드카(M-B 통과)가 회차를 닫고 ended 를 발행할 때까지 기다렸다가
+        다시 봅니다.
+    *   Q1 > 0 ∧ Q3 = 0(회차 닫힘 · ended 없음): kty 회부(멈춤 자리 —
+        「O8a 당김 — 롤백」 표의 같은 행).
+    *   Q2 > 0(SNS 재시도 중): 「O8a 당김 — 롤백」 표의 Q2 행을 따릅니다.
+1.  **POK-529 사이드카가 배포되기 전 구성**(재기동 강등이 남은 판)이면,
+    그 구성의 선행 조건과 판정을 그대로 따릅니다. 송출 금지 구간을 열고
+    Q1 = 0 · `rounds` ≥ 1(시험 회차 전이면 Q4 0 행)을 보는 「O8a 당김
+    교체」 의 게이트 공존 규칙과, 기동 뒤의 M-B 판정입니다.
+1.  **전환 뒤.** 걸음 3 의 기동 판정 · 관찰 판정 뒤에 M-B(`lifecycle-check.sh`
+    — 「O8a 당김 — 상자 스크립트」)를 봅니다. **M-B 통과가 루프백의 선행
+    조건입니다** — 루프백은 시험 회차를 새로 만들므로, 게이트가 꺼진
+    사이드카 앞에서 회차를 열지 않습니다(「O8a 당김 교체」 걸음 13 과 같은
+    순서). `M-B NOT OK` 면 루프백 없이 걸음 3 의 실패 갈래로 갑니다. 루프백
+    뒤에는 「O8a 당김 — 운영 감시」 의 종료 감시를 돕니다. 위 1 의 질의가
+    Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 이고 ended 가 발행될 때까지입니다.
+    상한(30분)을 넘기거나 Q1 > 0 ∧ Q3 = 0 이면 kty 회부입니다. 송출이 다시
+    붙으면 그 절의 송출 감시 주기로 돌아갑니다.
+    *   **이 절의 감시는 M-B 만 봅니다.** 운영 감시 절의 주기는 M-B · M-A
+        를 함께 보지만, M-A(옛 상자 정지 유지)는 정지 · 차단한 별도 퇴역
+        상자가 있을 때의 판정입니다. 제자리 전환은 상자 하나(`a_key`)를 그
+        자리에서 바꾸므로 퇴역 상자가 없습니다. 그래서 M-B 는 지금
+        `a_key` 에서 보고, M-A 는 보지 않습니다. 운영 감시 절의 「M-A
+        불통과 → 정지 · 차단」 갈래를 떠 있는 A 에 적용하지 않습니다 — A 는
+        활성 상자입니다. 별도 퇴역 상자가 따로 있을 때만 그 상자에 M-A 를
+        봅니다.
+
+이 절은 그 판정들을 가리키기만 합니다. 질의 본문 · 입력(시험 ID · 시각)과
+시험 회차의 뜻은 런타임 1단-가 런북 「발행 잔여 질의」 가, M-B 의 통과 조건
+· `lifecycle-check.sh` 본문은 「O8a 당김 — 운영 감시」 · 「O8a 당김 — 상자
+스크립트」 가 정본입니다.
+
+**기록과 실물의 어긋남:** A 의 user_data 는 첫 부팅 판 그대로입니다
+(`ignore_changes`). 제자리 전환 뒤에는 상자 안 파일 · 태그 `ConfigVersion`
+과 user_data 가 어긋납니다. 이 어긋남의 정본은 이월 기록(K11 — 2026-11-04
+첫 제자리 전환)과 이 절차의 실행 기록입니다.
+
+**재부팅해도 바꾼 파일이 남는 근거:** user_data 는 cloud-init
+`#cloud-config` 의 `write_files` · `runcmd` 입니다
+(`modules/media_host/user_data.tf`). cloud-init 은 이 둘을 인스턴스당 한 번만
+돕니다. `ignore_changes = [ami, user_data_base64]`(`modules/media_host/main.tf`)
+라 인스턴스 속성도 바뀌지 않습니다. 「인스턴스당 한 번」 은 cloud-init 문서
+근거이고, 이 상자에서 재부팅으로 확인한 실측은 아직 없습니다 — 첫 실행 뒤
+여유가 있으면 재부팅해 해시를 대조합니다(kty 선택).
+
+### 제자리 전환 선행
+
+1.  **바꾸기 전 렌더본을 뽑습니다.** tfvars 를 고치기 **전에** A 의 지금
+    렌더본(user_data 가 상자에 쓰는 `write_files` 파일)을 파일별로 씁니다.
+    `terraform console` 이 모듈 출력 `rendered_user_data` 를 읽습니다(읽는
+    동안 상태를 잠그고 바로 풉니다). 파일 이름은 경로의 `/` 를 `__` 로 바꾼
+    것입니다. 값에 비밀은 없지만 ARN 이 있어 작업 디렉터리 밖에 두지
+    않습니다.
+1.  tfvars 에서 `instances.<A>.config_version` 을 올리고, 바뀐 다이제스트
+    (사이드카 · 묶음 `image_digests.bundle` 등)를 넣습니다.
+1.  **새 렌더본을 뽑아 비교합니다.** 다른 파일은 아래 허용 집합 안이어야
+    합니다. 그 밖의 파일(journald 설정 · docker 설정)이 다르거나 한쪽에만
+    있으면 멈추고 kty 에게 회부합니다. 허용 집합 안이어도 **옛 렌더본에만
+    있는 파일**(`diff -rq` 의 `Only in …/render-old`)이면 멈추고 kty 에게
+    회부합니다 — 상자 스크립트는 새 렌더본에 있는 파일만 쓰므로 그 파일은
+    상자에 옛 내용 그대로 남습니다(아래 `only_old` 가 `STOP only-old` 를
+    냄).
+    *   `etc__pokeclip-media__*`(compose · media.env · nginx · env 파일들)
+    *   `etc__systemd__system__pokeclip-media.service` · 그 drop-in
+    *   `usr__local__sbin__pokeclip-media-bootstrap` — 묶음이 바뀔 때만
+        다릅니다. 첫 부팅에만 도는 파일이라 제자리에 쓰지 않습니다.
+    *   **허용 집합 안이어도 내용 diff 는 kty 가 읽고 승인합니다.**
+        compose · nginx · media.env 처럼 상자에 실제로 쓰는 파일의 바뀐 줄을
+        `diff -ru` 로 보입니다(아래 명령). tfvars PR 리뷰로 갈음하지
+        않습니다 — PR 은 tfvars 줄만 보이고, 템플릿을 거친 렌더 결과는
+        보이지 않기 때문입니다. 렌더본에는 계정 ID 가 든 ARN 이 있어 diff 는
+        이 기계 화면에서만 보이고 채팅 · 티켓에 붙이지 않습니다. 승인 전에는
+        apply · 상자 스크립트로 가지 않습니다.
+1.  **묶음이 바뀌면 무엇을 싣는지 확인하고 kty 가 승인합니다.** 새
+    렌더본의 `MEDIA_BUNDLE_IMAGE` 가 옛 렌더본과 다르면 묶음이 바뀌는
+    것입니다.
+    *   빌드 커밋은 이 변경의 머지 커밋(또는 kty 가 정한 커밋)으로
+        고정합니다. 고정해야 아래 diff · 승인한 내용과 실제로 싣는 내용이
+        같아집니다. 머지 커밋도 그 앞 develop 이력을 다 담으므로, 실제
+        방어선은 아래 diff · 승인입니다.
+    *   빌드 · 필수 파일 대조는
+        [prod 산출물 런북](/infra/terraform/runbooks/prod-artifacts.md)
+        「media-host-bundle」 그대로입니다. 필수 파일 목록의 정본은
+        `modules/media_host/templates/bootstrap.sh.tftpl` 의
+        `REQUIRED_FILES` 이고, 이 절은 사본을 두지 않습니다.
+    *   옛 묶음(옛 렌더본의 `MEDIA_BUNDLE_IMAGE` — 상자 표지
+        `bundle-installed` 와 같아야 함)과 새 묶음을 이 기계에서 꺼내
+        설치 범위의 해시 목록을 만듭니다(아래 `bundle_sums`).
+    *   바뀐 파일 목록이 「옛 묶음 커밋 → 빌드 커밋」 의 git 누적 변경과
+        같아야 합니다. 옛 묶음 커밋은 그 다이제스트를 빌드한 커밋입니다
+        (prod 산출물 런북 「기록」 — 2026-11-04 의 A 는 `8e7b329c`). 다르면
+        멈춥니다.
+    *   **승인 범위는 그 누적 변경 전부입니다.** 예: 2026-11-04 develop
+        기준으로 이미 POK-525 몫(`bin/lib/ops.sh` · `bin/start-media.sh` ·
+        새 `bin/sidecar-round-keys.sh` — 3파일 366줄)이 있고, 여기에 O8a
+        결함 묶음의 `mediamtx.yml.tmpl` 한 줄(`hlsAlwaysRemux`)이
+        더해집니다. POK-529 가 그보다 먼저 머지됐으면 그 몫도 더해지고,
+        늦게 머지되면 그 몫은 없습니다. kty 가 diff 를 읽고 승인하기 전에는
+        묶음을 바꾸지 않습니다.
+1.  plan 범위 = 「제자리 전환」 한 줄(위 「plan 범위」 표) → apply(승인).
+    그 밖의 차분은 공유 자원 주의를 따릅니다.
+
+렌더본 · 묶음을 뽑는 함수입니다. 저장소 뿌리에서 돌립니다.
+
+```shell
+a_key="<A>"   # 제자리로 바꿀 상자의 키(예: a)
+
+# render_files <디렉터리> — 상자 a_key 의 렌더본을 파일별로 쓴다.
+render_files() {
+  local file_path expr
+  expr='base64encode(jsonencode({for f in yamldecode('
+  expr+="module.media_host.rendered_user_data[\"${a_key}\"]).write_files"
+  expr+=' : f.path => f}))'
+  mkdir -m 0700 "$1" || return 2
+  printf '%s\n' "${expr}" \
+    | terraform -chdir=infra/terraform/prod/media console | tr -d '"\n' \
+    | base64 -d >"$1.json" || return 2
+  jq -e 'length > 0' "$1.json" >/dev/null || return 2
+  while IFS= read -r file_path; do
+    jq -j --arg p "${file_path}" '.[$p].content' "$1.json" \
+      >"$1/$(printf '%s' "${file_path#/}" | sed 's|/|__|g')" || return 2
+  done < <(jq -r 'keys[]' "$1.json")
+}
+
+# bundle_sums <묶음 이미지> <디렉터리> — 묶음을 꺼내 설치 범위(bin · bin/lib
+# 의 파일 · 템플릿)의 해시 목록을 <디렉터리>.sums 에 쓴다.
+bundle_sums() {
+  local cid rc
+  docker pull --quiet --platform linux/arm64 "$1" >/dev/null || return 2
+  cid="$(docker create --platform linux/arm64 "$1" /bundle-not-run)" || return 2
+  mkdir -m 0700 "$2" && docker cp "${cid}:/bundle/." "$2/"
+  rc=$?
+  docker rm "${cid}" >/dev/null
+  [ "${rc}" -eq 0 ] || return 2
+  (cd "$2" && find bin bin/lib -maxdepth 1 -type f | LC_ALL=C sort \
+    | xargs shasum -a 256 && shasum -a 256 mediamtx.yml.tmpl) >"$2.sums"
+}
+```
+
+선행 1 · 3 · 4 의 명령입니다. 1 은 tfvars 를 고치기 전, 3 · 4 는 고친 뒤에
+돌립니다.
+
+```shell
+render_files "${work}/render-old" || { echo "STOP render-old"; }   # 선행 1
+render_files "${work}/render-new" || { echo "STOP render-new"; }   # 선행 3
+diff -rq "${work}/render-old" "${work}/render-new"      # 허용 집합 안인지
+# only_old — 옛 렌더본에만 있는 허용 집합 파일마다 STOP 줄을 낸다.
+only_old() {
+  local f
+  for f in "${work}/render-old"/etc__pokeclip-media__* \
+    "${work}/render-old"/etc__systemd__system__pokeclip-media.service*; do
+    [ -e "${work}/render-new/${f##*/}" ] || echo "STOP only-old ${f##*/}"
+  done
+}
+only_old                                                # 빈 출력
+diff -ru "${work}/render-old" "${work}/render-new"      # kty 가 읽고 승인
+jq -r 'to_entries[]
+  | select(.key | test("^/etc/(pokeclip-media|systemd/system)/"))
+  | select(.value.permissions != "0644") | .key' \
+  "${work}/render-new.json"                             # 빈 출력
+bundle_of() {
+  sed -n 's/^MEDIA_BUNDLE_IMAGE=//p' "$1/etc__pokeclip-media__media.env"
+}
+old_bundle="$(bundle_of "${work}/render-old")"
+new_bundle="$(bundle_of "${work}/render-new")"
+if [ "${old_bundle}" != "${new_bundle}" ]; then          # 선행 4
+  bundle_sums "${old_bundle}" "${work}/bundle-old" \
+    || { echo "STOP bundle-old"; }
+  bundle_sums "${new_bundle}" "${work}/bundle-new" \
+    || { echo "STOP bundle-new"; }
+  cat "${work}/bundle-old.sums" "${work}/bundle-new.sums" | LC_ALL=C sort \
+    | uniq -u | awk '{ print $2 }' | LC_ALL=C sort -u \
+    >"${work}/bundle-changed.txt"
+  git diff --name-only --no-renames <옛 묶음 커밋> <빌드 커밋> -- \
+    infra/media-host/bin infra/media-host/mediamtx.yml.tmpl \
+    | sed 's|^infra/media-host/||' | LC_ALL=C sort >"${work}/bundle-git.txt"
+  diff "${work}/bundle-changed.txt" "${work}/bundle-git.txt"   # 빈 출력
+  diff -ru "${work}/bundle-old" "${work}/bundle-new"          # kty 가 읽고 승인
+fi
+```
+
+*   **`STOP …` 줄이 나오면 멈춥니다.** 렌더본 · 묶음을 뽑지 못한 것이라 그
+    뒤의 diff · 승인은 빈 입력이나 지난 결과를 볼 수 있습니다. 원인을 고쳐
+    그 함수부터 다시 돌립니다. 다시 돌리기 전에 그 함수가 만든
+    `<디렉터리>` 와 `<디렉터리>.json` · `<디렉터리>.sums` 를 지웁니다 —
+    `mkdir -m 0700` 에 `-p` 가 없어, 남아 있으면 다시 돌려도 실패합니다.
+*   `git diff` 의 `--no-renames` 는 옮긴 파일을 옛 이름 삭제 · 새 이름
+    추가 두 줄로 냅니다. 해시 목록 비교(`bundle-changed.txt`)도 두 이름을
+    모두 내므로 같은 꼴로 맞춥니다.
+*   설정 파일의 쓰기 모드는 모두 `0644` 입니다(`user_data.tf` 의
+    `write_files`). 위 `jq` 가 빈 출력이 아니면 상자 스크립트의 `0644` 가
+    틀린 것이라 멈춥니다.
+*   묶음 이미지는 ECR 에 있습니다. 꺼내기 전에 ECR 에 로그인합니다(prod
+    산출물 런북과 같은 방법).
+
+### 제자리 전환 상자 스크립트
+
+상자 스크립트는 둘로 만듭니다. 본문(`inplace-body.sh`)은 고정이고, 이
+기계가 렌더본 · 해시 목록을 머리에 붙여 `inplace.sh` 를 만듭니다. 본문은
+bash 로 돕니다(위 「SSM 명령 보내기」 의 bash 규칙 — 새 묶음의
+`check_env_line` 이 bash 함수입니다).
+
+본문이 하는 일은 차례대로 이렇습니다.
+
+1.  `PATHS 0` 이 아니면 멈춥니다.
+1.  **설정 파일 기준 대조.** 허용 집합의 파일마다 상자 파일의 해시를 봅니다.
+    새 렌더본과 같으면 그대로(`SAME`), 옛 렌더본과 같으면 바꿀
+    대상(`WRITE`)입니다. 둘 다 아니면(없음 포함) 멈추고 kty 에게
+    회부합니다(`INPLACE FAIL baseline …`) — 운영 중 상자에서 바뀌는 파일은
+    렌더본으로 덮지 않습니다. 병합 규칙은 미리 두지 않습니다.
+    *   `ingest-auth.env` 도 상자에서 바뀌는 파일입니다. IP 한도 끄기 ·
+        켜기(media-host README 「IP 한도 끄기 · 켜기」 의
+        `ingest-auth-ip-limit.sh`)가 이 파일을 다시 씁니다. 그 스크립트를
+        쓴 적이 있으면 이 파일이 `baseline` 에 걸릴 수 있습니다.
+    *   `INPLACE FAIL baseline <이름>` 이면 상자는 그대로입니다(stop 전).
+        그 줄과 상자 파일의 지금 값(비밀 없는 설정 파일만 · `cat`)을 kty
+        에게 보이고, 「지금 값을 살릴지 · 새 렌더본으로 덮을지」 를 kty 가
+        정합니다. 정하기 전에는 다시 보내지 않습니다. 선행 5 의 태그 apply
+        를 이미 했으면 아래 「stop 전에 포기할 때」 도 봅니다.
+1.  **`sidecar.env` 는 따로 다룹니다.** 첫 부팅 뒤 정본은 상자 안
+    파일입니다(`PLAYBACK_ROUND_KEYS` — POK-525 스위치 · `prod/media`
+    `variables.tf` 의 `playback_round_keys` 설명). 새 `start-media.sh` 는 이
+    파일이 `check_env_line` 을 통과하지 않으면
+    `MEDIA START BLOCKED: sidecar settings unavailable` 로 기동을 막습니다.
+    통과 조건은 링크 아닌 일반 파일 · 64바이트 이하 · 내용이 정확히
+    `PLAYBACK_ROUND_KEYS=true` 또는 `=false` 한 줄입니다. 본문은 기동할
+    `start-media.sh`(묶음이 바뀌면 새 묶음의 것)에서 그 함수를 그대로 꺼내
+    stop 전에 같은 판정을 합니다.
+    *   있고 통과: 건드리지 않습니다(`KEEP`).
+    *   없음: 새 렌더본 값으로 씁니다(`WRITE … absent`). 다른 파일처럼
+        백업 · 원복을 탑니다.
+    *   있는데 통과하지 않음: 쓰기 전에 멈춥니다(`INPLACE FAIL
+        sidecar-env` — kty 회부).
+    *   새 묶음의 `start-media.sh` 에서 함수를 찾지 못하면 멈춥니다
+        (`INPLACE FAIL check-env-line` — 함수 꼴이 바뀐 것이라 본문의 `sed`
+        를 고칩니다). 꺼낸 함수를 `eval` 로 읽지 못한 때도 같습니다.
+    *   묶음이 그대로이면 지금 시작 스크립트를 봅니다. `check_env_line`
+        이라는 이름이 파일에 아예 없을 때만 판정 없이 둡니다(`KEEP …
+        unchecked` — 이 판정이 없는 구판). 이름은 있는데 함수를 꺼내지
+        못했거나, 파일이 없거나 읽지 못하면 구판인지 추출 실패인지 가를 수
+        없으므로 멈춥니다(`INPLACE FAIL check-env-line`).
+1.  **묶음이 바뀌면** 표지가 옛 묶음인지, 상자의 `bin/` 트리 ·
+    `mediamtx.yml.tmpl` 해시가 옛 묶음과 같은지 봅니다. 어긋나면
+    멈춥니다. 그다음 새 묶음을 `docker pull` · `docker create` ·
+    `docker cp` 로 꺼내, 해시 목록이 이 기계에서 승인한 새 묶음과 같은지
+    봅니다(`BUNDLE CHANGE`).
+1.  바꿀 설정 파일을 같은 파일 시스템의 임시 디렉터리에 써서 해시를
+    확인합니다. 여기까지 실패하면 상자는 그대로입니다. 바꿀 것이 하나도
+    없으면 `INPLACE NOTHING` 으로 끝납니다(재시작 없음).
+1.  `systemctl stop pokeclip-media`(옛 `stop-media.sh` 로 멈춤).
+1.  **백업** `/etc/pokeclip-media/rollback-v<옛 판>-<UTC>/`(0700) — 바꿀
+    파일(없던 파일은 `<이름>.absent` 표지) · 묶음이 바뀌면
+    `/opt/pokeclip-media/bin` 트리 · `mediamtx.yml.tmpl` ·
+    `bundle-installed`. `BACKUP <경로>` 줄을 기록해 둡니다(원복에 씁니다).
+1.  임시 파일을 `mv` 로 제자리에 놓습니다. 묶음은 bootstrap 과 같은 소유 ·
+    모드(bin 0755/0755 · lib 0755/0644 · 템플릿 0644)로 새 트리에 설치해
+    해시를 다시 본 뒤 바꾸고, 표지에 새 이미지를 씁니다. 유닛 · drop-in 이
+    바뀌었으면 `systemctl daemon-reload`.
+1.  `systemctl start pokeclip-media` → 5초 뒤 `UNIT <상태>`. `active` 일
+    때만 `INPLACE OK` 이고, 그 밖의 상태면 `INPLACE FAIL unit stopped` 로
+    0 이 아니게 끝납니다. 유닛이 `Type=simple` 이라 `systemctl start` 는
+    성공한 뒤에도 곧 죽을 수 있기 때문입니다. 5초 뒤에 죽는 경우는 걸음 3
+    의 판정이 잡습니다.
+
+stop 뒤의 실패는 `INPLACE FAIL <단계> stopped` 입니다 — 유닛이 멈춘
+채이므로 바로 「제자리 전환 원복」 으로 갑니다(`BACKUP` 줄이 없으면 백업
+전 실패라 바뀐 파일이 없습니다 — `systemctl start` 만 합니다).
+
+`BACKUP` 줄이 없는 `stopped` 실패의 명령입니다(실행 직전 승인).
+`start.sh` 는 「POK-525 교체 상자 스크립트」 가 만드는 것과 같은 한 줄
+파일입니다. 기동 판정은 옛
+구성의 서비스 집합으로 봅니다.
+
+```shell
+printf 'systemctl start pokeclip-media\n' > "${work}/start.sh"
+media_ssm "${a_key}" "${work}/start.sh"
+media_ssm "${a_key}" "${work}/start-check.sh" <옛 구성의 서비스 집합>
+```
+
+```shell
+cat > "${work}/inplace-body.sh" <<'SH'
+set -u
+readonly C=/etc/pokeclip-media
+readonly BIN=/opt/pokeclip-media/bin
+readonly MARKER=/var/lib/pokeclip-media/bundle-installed
+export DOCKER_CONFIG=/root/.docker   # SSM 환경에 HOME 이 없을 수 있음
+# fail — 임시 디렉터리(prep · stage · new_root)를 지우고 판정 줄을 낸다(stop
+# 뒤면 원본은 백업에 있다).
+fail() {
+  [ -z "${prep:-}" ] || rm -rf -- "${prep}"
+  [ -z "${stage:-}" ] || rm -rf -- "${stage}"
+  [ -z "${new_root:-}" ] || rm -rf -- "${new_root}"
+  echo "INPLACE FAIL $1"
+  exit 2
+}
+sha() { sha256sum "$1" </dev/null | cut -d' ' -f1; }
+# tree_sums <뿌리> <템플릿> — 묶음 설치 범위의 해시 목록(이 기계의
+# bundle_sums 와 같은 꼴).
+tree_sums() {
+  (cd "$1" && find bin bin/lib -maxdepth 1 -type f | LC_ALL=C sort \
+    | xargs sha256sum) </dev/null || return 1
+  (cd "$(dirname "$2")" && sha256sum "$(basename "$2")") </dev/null
+}
+# install_tree <원천> <대상> <디렉터리 모드> <파일 모드> — bootstrap 과 같음.
+install_tree() {
+  local f
+  install -d -o root -g root -m "$3" "$2" || return 1
+  for f in "$1"/*; do
+    [ -f "${f}" ] || continue
+    install -o root -g root -m "$4" "${f}" "$2/${f##*/}" || return 1
+  done
+}
+set -a; . "${C}/media.env" </dev/null || fail media-env; set +a
+p="$("${BIN}/paths-count.sh" </dev/null)"; echo "${p}"
+[ "${p}" = "PATHS 0" ] || fail paths
+
+prep="$(mktemp -d "${C}/.inplace-new.XXXXXX")" || fail prep
+writes="" sidecar=""
+while read -r name old new b64; do
+  [ -n "${name}" ] || continue
+  path="/${name//__//}"
+  if [ "${name}" = etc__pokeclip-media__sidecar.env ] \
+    && { [ -e "${path}" ] || [ -L "${path}" ]; }; then
+    sidecar=present
+    continue
+  fi
+  if [ "${name}" = etc__pokeclip-media__sidecar.env ] && [ ! -e "${path}" ]
+  then
+    echo "WRITE ${name} absent"
+  elif [ ! -f "${path}" ] || [ -L "${path}" ]; then
+    fail "baseline ${name}"
+  elif [ "$(sha "${path}")" = "${new}" ]; then
+    echo "SAME ${name}"
+    continue
+  elif [ "$(sha "${path}")" = "${old}" ]; then
+    echo "WRITE ${name}"
+  else
+    fail "baseline ${name}"
+  fi
+  [ "${b64}" != - ] || fail "content ${name}"
+  printf '%s' "${b64}" | base64 -d >"${prep}/${name}" \
+    && chown 0:0 "${prep}/${name}" && chmod 0644 "${prep}/${name}" \
+    && [ "$(sha "${prep}/${name}")" = "${new}" ] || fail "prep ${name}"
+  writes="${writes} ${name}"
+done <<<"${FILES}"
+
+stage=""
+if [ "${NEW_BUNDLE}" != "$(cat "${MARKER}" </dev/null)" ]; then
+  [ "$(cat "${MARKER}" </dev/null)" = "${OLD_BUNDLE}" ] || fail bundle-marker
+  [ "$(tree_sums /opt/pokeclip-media "${C}/mediamtx.yml.tmpl")" \
+    = "${OLD_SUMS}" ] || fail bundle-baseline
+  stage="$(mktemp -d)" || fail stage
+  docker pull --quiet "${NEW_BUNDLE}" </dev/null >/dev/null || fail pull
+  cid="$(docker create "${NEW_BUNDLE}" /bundle-not-run </dev/null)" \
+    || fail create
+  docker cp "${cid}:/bundle/." "${stage}/" </dev/null
+  rc=$?
+  docker rm "${cid}" </dev/null >/dev/null
+  [ "${rc}" -eq 0 ] || fail copy
+  [ "$(tree_sums "${stage}" "${stage}/mediamtx.yml.tmpl")" = "${NEW_SUMS}" ] \
+    || fail bundle-new
+  echo "BUNDLE CHANGE"
+else
+  echo "BUNDLE SAME"
+fi
+
+if [ -n "${sidecar}" ]; then
+  start="${stage:-/opt/pokeclip-media}/bin/start-media.sh"
+  [ -f "${start}" ] || fail check-env-line
+  fn="$(sed -n '/^check_env_line() {$/,/^}$/p' "${start}" </dev/null)" \
+    || fail check-env-line
+  # 0 = 이름이 있음 · 1 = 이름이 없음 · 그 밖 = 읽기 실패.
+  grep -q check_env_line "${start}" </dev/null
+  named=$?
+  if [ -n "${fn}" ]; then
+    { eval "${fn}" && declare -F check_env_line >/dev/null; } \
+      || fail check-env-line
+    check_env_line "${C}/sidecar.env" PLAYBACK_ROUND_KEYS=true \
+      PLAYBACK_ROUND_KEYS=false || fail sidecar-env
+    echo "KEEP etc__pokeclip-media__sidecar.env"
+  elif [ -z "${stage}" ] && [ "${named}" -eq 1 ]; then
+    # 묶음이 그대로이고 지금 시작 스크립트에 이 판정이 아예 없다 — 막히지
+    # 않는다. 이름은 있는데 함수를 못 꺼냈으면 아래 fail 이다.
+    echo "KEEP etc__pokeclip-media__sidecar.env unchecked"
+  else
+    fail check-env-line
+  fi
+fi
+if [ -z "${writes}" ] && [ -z "${stage}" ]; then
+  rmdir "${prep}"; echo "INPLACE NOTHING"; exit 0
+fi
+
+systemctl stop pokeclip-media </dev/null || fail "stop stopped"
+echo "UNIT_STOPPED $(systemctl is-active pokeclip-media)"
+bk="${C}/rollback-v${OLD_VERSION}-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -m 0700 "${bk}" || fail "backup stopped"
+for name in ${writes}; do
+  path="/${name//__//}"
+  if [ -e "${path}" ]; then
+    cp -p "${path}" "${bk}/${name}" || fail "backup stopped"
+  else
+    : >"${bk}/${name}.absent" || fail "backup stopped"
+  fi
+done
+if [ -n "${stage}" ]; then
+  cp -a "${BIN}" "${bk}/bin" && cp -p "${C}/mediamtx.yml.tmpl" "${bk}/" \
+    && cp -p "${MARKER}" "${bk}/" || fail "backup stopped"
+fi
+echo "BACKUP ${bk}"
+
+for name in ${writes}; do
+  mv -f "${prep}/${name}" "/${name//__//}" || fail "write stopped"
+done
+rmdir "${prep}"; prep=""
+if [ -n "${stage}" ]; then
+  new_root="$(mktemp -d /opt/pokeclip-media/.bin-new.XXXXXX)" \
+    && install_tree "${stage}/bin" "${new_root}/bin" 0755 0755 \
+    && install_tree "${stage}/bin/lib" "${new_root}/bin/lib" 0755 0644 \
+    && install -o root -g root -m 0644 "${stage}/mediamtx.yml.tmpl" \
+      "${new_root}/mediamtx.yml.tmpl" \
+    && [ "$(tree_sums "${new_root}" "${new_root}/mediamtx.yml.tmpl")" \
+      = "${NEW_SUMS}" ] || fail "bundle-install stopped"
+  rm -rf -- "${BIN}" && mv "${new_root}/bin" "${BIN}" \
+    && mv -f "${new_root}/mediamtx.yml.tmpl" "${C}/mediamtx.yml.tmpl" \
+    && printf '%s\n' "${NEW_BUNDLE}" >"${MARKER}" || fail "bundle-swap stopped"
+  rmdir "${new_root}"; new_root=""; rm -rf -- "${stage}"; stage=""
+  echo "BUNDLE INSTALLED"
+fi
+case "${writes}" in
+  *etc__systemd__*)
+    systemctl daemon-reload </dev/null || fail "daemon-reload stopped" ;;
+esac
+echo "WRITE OK"
+systemctl start pokeclip-media </dev/null || fail "start stopped"
+sleep 5
+state="$(systemctl is-active pokeclip-media </dev/null)"
+echo "UNIT ${state}"
+[ "${state}" = active ] || fail "unit stopped"
+echo "INPLACE OK"
+SH
+```
+
+이 기계에서 `inplace.sh` 를 만듭니다. 머리에는 옛 판 · 옛 · 새 묶음 ·
+해시 목록과 허용 집합 파일의 「이름 · 옛 해시 · 새 해시 · 내용」 줄이
+들어갑니다. 내용(base64)은 옛 · 새가 다른 파일과 `sidecar.env` 에만
+싣습니다.
+
+```shell
+# 없는 파일은 - 다. echo - 는 zsh 에서 빈 줄이라 printf 로 낸다.
+sha_of() {
+  if [ -f "$1" ]; then shasum -a 256 "$1" | cut -d' ' -f1
+  else printf '%s\n' -; fi
+}
+env_of() { sed -n "s/^$1=//p" "$2/etc__pokeclip-media__media.env"; }
+{
+  printf '%s\n' "exec /bin/bash -s -- \"\$@\" <<'B'"
+  printf 'OLD_VERSION=%s\n' \
+    "$(env_of MEDIA_CONFIG_VERSION "${work}/render-old")"
+  printf 'OLD_BUNDLE=%s\n' "$(env_of MEDIA_BUNDLE_IMAGE "${work}/render-old")"
+  printf 'NEW_BUNDLE=%s\n' "$(env_of MEDIA_BUNDLE_IMAGE "${work}/render-new")"
+  printf "OLD_SUMS='%s'\n" "$(cat "${work}/bundle-old.sums" 2>/dev/null)"
+  printf "NEW_SUMS='%s'\n" "$(cat "${work}/bundle-new.sums" 2>/dev/null)"
+  printf "FILES='\n"
+  for f in "${work}/render-new"/etc__pokeclip-media__* \
+    "${work}/render-new"/etc__systemd__system__pokeclip-media.service*; do
+    n="${f##*/}"
+    o="$(sha_of "${work}/render-old/${n}")"
+    h="$(sha_of "${f}")"
+    b=-
+    if [ "${o}" != "${h}" ] \
+      || [ "${n}" = etc__pokeclip-media__sidecar.env ]; then
+      b="$(base64 <"${f}" | tr -d '\n')"
+    fi
+    printf '%s %s %s %s\n' "${n}" "${o}" "${h}" "${b}"
+  done
+  printf "'\n"
+  cat "${work}/inplace-body.sh"
+  printf 'B\n'
+} >"${work}/inplace.sh"
+# inplace.sh 는 첫 줄(exec … <<'B')과 끝 줄(B) 사이가 heredoc 이라 그대로
+# bash -n 하면 본문을 보지 않는다. 앞뒤 줄을 떼고 본다.
+bash -n "${work}/inplace-body.sh" \
+  && sed '1d;$d' "${work}/inplace.sh" | bash -n && echo SYNTAX OK
+only_old   # 빈 출력 — STOP only-old 가 나오면 inplace.sh 를 보내지 않는다
+wc -c "${work}/inplace.sh"   # 결과 기록에 옮긴다
+# 크기 시험용 — 첫 줄 true 뒤에 inplace.sh 전부를 주석으로 단다(더 크다).
+{ printf 'true\n'; sed 's/^/# /' "${work}/inplace.sh"; } \
+  >"${work}/size-probe.sh"
+wc -c "${work}/size-probe.sh"
+```
+
+*   **SSM 인자 크기:** `inplace.sh` 는 바뀐 파일 내용을 base64 로 실어
+    커집니다. 보내기 전에 위 `wc -c` 값을 기록하고, 아래 「제자리 전환
+    걸음」 2 에서 크기 시험(`size-probe.sh`)을 먼저 보냅니다.
+*   `size-probe.sh` 는 상자에서 `true` 만 하고 아무것도 쓰지 않습니다.
+    나머지 줄은 `inplace.sh` 의 줄마다 `# ` 를 붙인 주석이라, 크기와
+    따옴표 · 줄바꿈의 꼴이 `inplace.sh` 이상입니다. 이것이 받아지면
+    `inplace.sh` 도 크기로 거절되지 않습니다.
+*   `send-command` 가 크기로 거절하면 상자에서는 아무것도 돌지 않습니다.
+    그때는 나눠 보내지 말고 멈춰 kty 에게 회부합니다. SSM 의 상한 값은 이
+    런북에서 확인하지 않았습니다.
+
+### 제자리 전환 걸음
+
+1.  「제자리 전환 선행」 1–5 를 끝냅니다(렌더본 내용 diff 의 kty 승인 ·
+    묶음이 바뀌면 묶음 승인까지).
+    발행 목록이 찬 구성이면 이 걸음 바로 뒤에 위 「계약9 회차 확인」 1 · 2
+    를 봅니다. 통과하지 않으면 2 로 가지 않습니다.
+1.  크기 시험 → 전환입니다(둘 다 실행 직전 승인). 위 만드는 블록에서
+    `SYNTAX OK` 가 나오고 `STOP only-old` 가 없어야 여기로 옵니다.
+    *   `media_ssm "${a_key}" "${work}/size-probe.sh"` → 끝 줄이 `SSM
+        Success` 여야 합니다. 거절 · 실패면 `inplace.sh` 를 보내지
+        않고 kty 에게 회부합니다(위 「SSM 인자 크기」).
+    *   `media_ssm "${a_key}" "${work}/inplace.sh"`. 줄마다 읽는 법은 위
+        「제자리 전환 상자 스크립트」 입니다. `BACKUP <경로>` 줄을 결과
+        기록에 옮깁니다. `INPLACE FAIL … stopped` 면 바로 아래 원복으로
+        갑니다. `stopped` 가 없는 `INPLACE FAIL` 은 상자가 그대로이므로
+        원인을 고쳐 다시 만듭니다. 고치지 않고 접으면 아래 「stop 전에
+        포기할 때」 입니다.
+1.  기동 판정 → 5분 뒤 관찰 판정(인자는 그 구성의 서비스 집합 — 위 「정상
+    교체 2」 와 같은 기준) → (발행 목록이 찬 구성이면) M-B → 루프백
+    차례입니다. 응답기 모드면 루프백은 `loopback-pp.sh` 입니다(위 「정상
+    교체 3」). 발행 목록이 찬 구성이면 M-B 와 질의 재확인(위 「계약9 회차
+    확인」 3)도 이 걸음의 판정이고, **`M-B OK` 가 나와야 루프백을
+    보냅니다.** 루프백 뒤의 종료 감시도 M-B 만 봅니다(위 「계약9 회차 확인」
+    3 — 퇴역 상자가 없어 M-A 없음). 루프백을 보내기 전에 위 「정상 교체 3」
+    의 「루프백 전 확인」 을 먼저 합니다. 그 확인에서 걸리면 원복이 아니라
+    기다림입니다(아래 실패 갈래가 아닙니다).
+
+    ```shell
+    media_ssm "${a_key}" "${work}/start-check.sh" <서비스 집합>
+    media_ssm "${a_key}" "${work}/watch-check.sh" <MAINPID> <WATCH FROM>
+    # 발행 목록이 찬 구성만. M-B OK 가 아니면 루프백으로 가지 않는다.
+    media_ssm "${a_key}" "${work}/lifecycle-check.sh" <전환 시각 — epoch 초>
+    # 옛 모드(ingest_auth_image 빈 구성)면 loopback-pp.sh 대신 loopback.sh
+    # (passphrase 없음 — 위 「정상 교체 3」).
+    media_ssm "${a_key}" "${work}/loopback-pp.sh" <시험 ingestStreamId>
+    ```
+
+    *   **실패 갈래:** 기동 판정 · 관찰 판정 · 루프백 · M-B 가운데 하나라도
+        통과하지 않으면 진행하지 않습니다. 기록한 `BACKUP` 경로를 명시해 아래
+        「제자리 전환 원복」 을 하고, 판정 줄 그대로 kty 에게 보고합니다.
+        `INPLACE FAIL unit stopped` 도 같은 갈래입니다. 원복 전 확인은 그
+        절 머리에 있습니다.
+
+1.  기록: 이월 기록(K11 형식)에 백업 경로 · 옛 판 → 새 판 · 태그 · 묶음
+    다이제스트 · 어긋남(위 「기록과 실물의 어긋남」)을 남깁니다.
+1.  (kty 선택) 재부팅 대조 — 재부팅 뒤 바꾼 파일의 해시가 새 렌더본과
+    같은지, 기동 판정이 다시 통과하는지 봅니다.
+1.  작업 디렉터리의 `render-*` · `bundle-*` 는 아래 「정리」 에서 함께
+    지웁니다.
+
+**stop 전에 포기할 때:** 크기 거절 · `stopped` 없는 `INPLACE FAIL` ·
+`baseline` 에서 kty 가 포기를 고른 경우처럼 상자를 바꾸기 전에 전환을
+접으면, 상자는 옛 구성 그대로입니다. 그런데 선행 5 의 apply 로 태그
+`ConfigVersion` 과 tfvars 는 이미 새 판입니다. tfvars 의 `config_version` ·
+다이제스트를 옛 값으로 되돌려 apply 합니다(plan 범위는 「제자리 전환」 태그
+한 줄 · 승인 — 아래 원복 절의 같은 줄과 같음). 상자 원복 · 재기동은 하지
+않습니다.
+
+### 제자리 전환 원복
+
+**원복 전 확인:** 발행 목록이 찬 구성(옛 · 새 어느 쪽이든)이면 먼저 위
+「계약9 회차 확인」 1 · 2 를 봅니다. 원복도 사이드카를 재기동하기 때문입니다.
+통과하지 않으면 원복하지 않고 그 갈래를 따릅니다. 다만 Q3 > 0 의 「기다림」
+은 게이트가 켜진 사이드카(M-B 통과)가 떠 있을 때만입니다. 전환이 실패해
+그런 사이드카가 없으면 기다리지 않고 kty 에게 회부합니다.
+
+기록해 둔 `BACKUP` 경로를 **명시해서** 되돌립니다. 「가장 최근 백업」 을
+자동으로 고르지 않습니다 — 백업이 여럿이면(2026-11-04 의
+`rollback-v1-…` 등) 틀린 판을 고를 수 있습니다. 순서는 stop → 복원 →
+daemon-reload → start → 기동 판정입니다.
+
+```shell
+cat > "${work}/inplace-rollback.sh" <<'SH'
+exec /bin/bash -s -- "$@" <<'B'
+set -u
+readonly C=/etc/pokeclip-media
+readonly BIN=/opt/pokeclip-media/bin
+readonly MARKER=/var/lib/pokeclip-media/bundle-installed
+fail() { echo "ROLLBACK FAIL $1"; exit 2; }
+[ "$#" -eq 1 ] || fail usage
+bk="$1"
+case "${bk}" in *..*) fail usage ;; "${C}"/rollback-v*) ;; *) fail usage ;; esac
+[ -d "${bk}" ] && [ ! -L "${bk}" ] || fail no-backup
+systemctl stop pokeclip-media </dev/null || fail stop
+for f in "${bk}"/*; do
+  name="${f##*/}"
+  case "${name}" in
+    bin | mediamtx.yml.tmpl | bundle-installed) ;;
+    *.absent)
+      gone="${name%.absent}"
+      rm -f -- "/${gone//__//}" || fail "remove ${name}" ;;
+    *) cp -p "${f}" "/${name//__//}" || fail "copy ${name}" ;;
+  esac
+done
+if [ -d "${bk}/bin" ]; then
+  rm -rf -- "${BIN}" && cp -a "${bk}/bin" "${BIN}" \
+    && cp -p "${bk}/mediamtx.yml.tmpl" "${C}/mediamtx.yml.tmpl" \
+    && cp -p "${bk}/bundle-installed" "${MARKER}" || fail bundle
+fi
+systemctl daemon-reload </dev/null || fail daemon-reload
+systemctl start pokeclip-media </dev/null || fail start
+sleep 5
+echo "RESTORED ${bk}"
+echo "UNIT $(systemctl is-active pokeclip-media)"
+B
+SH
+media_ssm "${a_key}" "${work}/inplace-rollback.sh" <BACKUP 경로>
+```
+
+*   그 뒤 기동 판정 · 관찰 판정을 다시 돕니다(되돌린 구성의 서비스 집합).
+    발행 목록이 찬 구성이면 「계약9 회차 확인」 3 도 봅니다.
+*   tfvars 의 `config_version` · 다이제스트도 되돌려 apply 합니다(plan
+    범위는 「제자리 전환」 태그 한 줄).
+*   되돌린 구성이 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를 따릅니다.
+*   `ROLLBACK FAIL` 이면 유닛이 멈춘 채일 수 있습니다. 그 줄 그대로 kty
+    에게 보고하고, 다음 동작은 kty 가 정합니다.
+
+## O8a 당김 교체 — 발행 켠 B 로 옮길 때
+
+O8 앞(kty 2026-11-03 — O8a 1–4 를 O8 앞으로 당김)에 옛 모드 A 를 응답기
+모드 B 로 바꾸면서, 같은 교체에서 사이드카 계약9 발행(broadcast.started ·
+ended → SNS FIFO → clip · chat 큐)을 시험 계정 하나에만 켭니다. NLB 공개
+(O8a 5) · `8a` 묶음 · 주기 판정은 O8 뒤 그대로입니다. 실행자 · 승인 규칙은
+이 런북 머리와 같고, 직전 점검은
+[단계 직전 점검 런북](/infra/terraform/runbooks/stage-precheck.md) 의 「O8a
+당김 교체」 행입니다.
+
+**정상 교체와 다른 점 넷:**
+
+1.  **루프백은 A 정지 뒤입니다**(정상 교체 3 은 전환 전). 루프백도 시험
+    회차를 만들고, 게이트가 꺼진 A 사이드카가 그 회차를 닫으면 ended 가 영영
+    적재되지 않습니다.
+1.  **A 는 전환 직후 정지하고 유닛을 disable 합니다.** 인스턴스는 롤백
+    대상으로 하루 남기되 띄워 두지 않습니다(정상 교체 8 의 「하루 관찰」 동안
+    A 가 떠 있지 않음).
+1.  **롤백은 발행 잔여 질의 Q1–Q3 를 본 뒤에만** 합니다(질의는
+    [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md) 「발행 잔여
+    질의」 · 순서는 아래 「O8a 당김 — 롤백」).
+1.  **발행 목록 계정이 송출하는 동안 운영 감시(M-B · M-A)를 돕니다**(아래
+    「운영 감시」).
+
+**게이트 공존 규칙:** 같은 DB 에 붙은 사이드카는 모두 게이트가 켜져 있어야
+합니다 — media-host README 「계약9 발행」. 꺼졌을 수 있는 사이드카(옛 모드 ·
+빈 목록 · 기동 판정 전)를 DB 에 붙이기 전에는 아래 송출 금지 구간을 열고
+Q1 = 0 · `rounds` ≥ 1 을 봅니다(시험 회차가 생기기 전이면 Q4 0 행).
+
+**송출 금지 구간:** kty · 시험 계정을 포함해 팀 IP 에서 송출하는 누구도
+송출하지 않습니다(O8a 5 전이라 NLB 인바운드는 팀 IP 뿐). 기계 차단이 없는
+사람의 규칙이라 시작 · 끝 시각을 `date` 출력으로 적고, 구간 안의 판정
+직전에 B 의 `PATHS` 를 한 번 더 봅니다.
+
+*   (ㄱ) 걸음 8(B 기동 판정) – 12(A 정지 · 차단).
+*   (ㄴ) 걸음 32(목록 `*` 인 C 로 교체)의 Q1 확인부터 B 정지 · 차단까지.
+*   (ㄷ) 롤백 · 발행 끄기 교체의 Q1 확인부터 옛 상자 정지 · 차단까지.
+
+### O8a 당김 교체 걸음
+
+| 걸음 | 동작 | 통과 | 실패 시 · 멈춤 |
+|---|---|---|---|
+| 0-a | 읽기 확인 — A 사이드카 다이제스트가 M6 하한 이상인지(M6 정산 · 회차 닫힘 스캔을 도는 판인지) | 기록 | 다르면 kty 보고. 하한 아래면 롤백에 「한 창 절차 — A 를 다시 띄울 때」 조건을 더함(아래 롤백 표) |
+| 0-b | 런타임 출력 `broadcast_topic_arn` 실재(이름만 · 값 가림) | 출력 이름 있음 | 없으면 런타임 재적용 필요 → kty 회부 |
+| 0-c | 지금 적용된 역할 정책의 Sid 목록 | Sid 목록 기록 | 걸음 6 plan 기대를 이 결과로 정함 |
+| 0-d | 상자 root `cli_history` 꺼짐 | 꺼짐 | 켜져 있으면 kty 보고(비밀 동작 전) |
+| 0-e | Q4 기준선 | Q4 0 행 | 0 이 아니면 출처 확인 뒤 kty 보고 |
+| 0-f | P47 진입 경로 — 미디어 ALB 의 scheme · 리스너 · SG 출발지 · CloudFront 원본 검증 상태 · NLB SG 가 팀 IP 송출을 받는지 | 경로 기록(값 가림) | 팀 IP → NLB 송출 경로가 없으면 걸음 14 · 15 는 kty 회부(대안 설계 안 함) |
+| 0-g | 사이드카 시험의 「게이트 꺼짐이면 ended 생략」 사례 이름 | 사례 이름 | 없으면 POK-196 세션 통지(차단 아님) |
+| 0-h | POK-196 세션 통지 · 확인 — 발행 켜기 착수 · 게이트 공존 규칙 · 중복 여부 · 후속(사이드카 강등 근본 수정) 요청 | 회신(후속 수락 여부 포함) | 중복이면 kty 회부. 후속 거절이면 kty 회부(O8a 5 개통 조건이라) |
+| 0-i | A 차단 수단(아래 「A 차단」) | disable 만 · disable + mask 중 하나로 확정 | 판정 불가면 disable + mask(보수 — 롤백 ④ 에서 둘 다 되돌림). mask 가 실패하면 아래 「A 차단」 대로 kty 회부 |
+| 1–3 | PR 머지 → 응답기 이미지(재빌드 권장 · arm64) → 직전 점검(`O7e` 묶음 · `sns:Publish` 손 판정 · 2-3 · 이벤트) | 허용 · PASS · 예상 밖 이벤트 0 | 2 실패면 432e3495 사용. 3 이 거부 · 변경이면 멈추고 kty 보고 |
+| 4 | A 에서 resolve 미리 부르기(media-host README 「O8a 2 전 필수 조건」 5) | `code=200` | 실패면 4C 원인 해소 전 진행 금지 |
+| 5–6 | tfvars(응답기 다이제스트 · `stream_key_resolve_url` · `lifecycle_publish_streams = [<시험 ID>]` · `instances.b`) → plan 범위(위 표 「O8a 당김 B 기동」) → apply | 기대와 일치 | 기대 밖 차분이면 apply 안 함 |
+| 7 | (관찰) A 태그 저널 `lifecycle_disabled reason=no_topic` 건수 — 공유 역할 정책이 A 에도 걸렸지만 env 가 없어 발행하지 않음 | 기록 | — |
+| 8 | B 기동 판정(`start-check.sh ingest-auth,janitor,mediamtx,nginx,sidecar` · 관찰 판정) · 응답기 `ingestauth_started` 의 `"auth_channel":"resolve-token"` · `end_signal_disabled` 0 · `lifecycle-check.sh <걸음 8 시각>` · Q4 · 사이드카 컨테이너 id 기록. **(ㄱ) 시작** | `MEDIA START OK` · `MEDIA WATCH OK` · `M-B OK` · Q4 0 행 | `lifecycle_disabled` 면 B 에 송출하지 않고 B 를 고쳐 재교체. outbox 행이 없어 A 는 그대로 안전 |
+| 9–11 | 정상 교체 4(A · B `PATHS 0`) → 5(ingest) → 6 · 7(http · 일관성) | 정상 교체와 같음 | 9 가 0 이 아니면 멈춤. 10 · 11 의 되돌림 = 전환 역적용(outbox 0 행이라 조건 없음) |
+| 12 | A 정지 · 차단 — A 업로드 적체 0(「한 창 절차 7′」 의 앞 조건) → A `PATHS 0` → `stop.sh` → `stopped-check.sh` → `disable.sh` → `blocked-check.sh disabled` → Q4. **(ㄱ) 끝** | `M-A OK` · Q4 0 행 — DB 에 붙은 사이드카 = B 하나 | 적체가 안 빠지면 송출하지 않고 기다림 · 창을 넘기면 kty 보고 |
+| 13 | M-A · M-B · **`Q3_all` = 0**(시험 ID 의 열린 회차 — `started_at` 조건 없음) → B 루프백 `--passphrase` · 상자 안 익명 SRT 거부. 끝나면 종료 감시 | `LOOPBACK OK` · 익명 거부 | 실패면 아래 롤백 표 「걸음 12 뒤」 |
+| 14 | O8a 3 거부 셋(B `PATHS 0` 일 때 — 잘못된 passphrase · 익명 · 다른 사용자 경로) | 셋 다 거부 · outbox 행 수 변화 0 | 0-f 에서 송출 경로가 없었으면 kty 회부. 하나라도 수락되면 즉시 kty 보고 · O8 금지 · 그 회차도 시험 회차로 종료 판정 |
+| 15 | 유지 시험 송출(팀 IP → NLB → B · O8a 3 정상 키 · O8a 4 출발지 보존) — 22 끝까지. 송출 감시 시작 | B `PATHS` 1 | 0-f 에서 송출 경로가 없었거나 붙지 않으면 kty 회부 |
+| 16 | 상자 루프백 `…/<시험 ID>/index.m3u8?cookieCheck=1` — Bearer 없이 · 있게 | 401 · 200 쌍 | 401 아니면 실패 → O8 금지 · kty 보고 |
+| 17 | started 판정 — 시험 회차 sequence 1 `published` · B `lifecycle_published` · clip `broadcast.intake.handled` · chat `LINK_REFUSED` · DLQ 0(상한 5분) | 전부 | `published` 아님 → kty 보고 · 원인 수정 뒤 `published` 확인(송출은 유지) |
+| 18–20 | O7f 10 · 11(7-R) · 12 — [엣지 시험 런북](/infra/terraform/runbooks/edge-tests.md) · [엣지 비밀 런북](/infra/terraform/runbooks/edge-secrets.md) 「T6b 대체 절차」 | 런북 판정 | 18 실패면 kty 보고. 19 는 재판정이 허용 아니면 시작 안 함 · 복원 실패면 즉시 kty 보고(영향 = `/live` 만). 20 은 실패 항목 kty 보고 |
+| 21 | O8a 3 팀 IP 밖 송출 거부 | 거부 | 허용되면 즉시 보고 · O8 금지 |
+| 22 | P47-가 — 0-f 결과에 따른 진입 경로에서 유지 송출 중 부하(media-host README 「O8a 2 전 필수 조건」 2). 새 송출 수락은 여기서 재지 않음 — 같은 시험 ID 는 `overridePublisher: no` 로 거부되고, 기존 HLS 의 200 은 수락 증거가 아님 | 도달률 95% 이상(아래) · `budget_exhausted` 수 · 유지 송출 끊김 여부 · auth 지표 기록 | 외부에서 Bearer 없이 닿는 경로가 없으면 「외부 진입 경로 없음」 과 증거(scheme · SG · 직접 연결 실패)를 보고하고, 상자 안 부하는 kty 결정 없이 하지 않음. 응답기 장애가 보이면 부하 중단 · 보고. 유지 송출이 끊기면 그것도 결과 — 종료 감시로 바꾸고 걸음 24 로 |
+| 23 | **송출 끄기 직전** M-B · M-A → kty 가 유지 송출을 끈다(시각 기록) | `M-B OK` · `M-A OK` | M-B 불통과면 끄지 않음 → 「운영 감시」 (가). M-A 불통과면 A 차단 재적용 뒤 다시 판정 |
+| 24 | 1차 종료 대기 — 종료 감시 · Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 · ended `lifecycle_published` · clip ended 처리 · clip 기록 종료(상한 30분) | 전부 | 상한을 넘기면 kty 보고 · A 재기동 · B 정지 · 발행 끄기 금지. 강등 · 부활은 「운영 감시」 (나). **Q1 > 0 ∧ Q3 = 0 = 자동 복구 경로 없음 → kty 회부(멈춤 자리)** |
+| 25 | 1단-나 ② 9 · 10([런타임 런북](/infra/terraform/runbooks/runtime-1a.md)) — ② 9 는 이 절의 증거와 대조표로 갈음 | 런북 판정 | 갈음 불가 항목이 재기동 · 송출이면 감시 규칙 적용 |
+| 26 | P47-나 — 앞 회차 전부 닫힌 뒤 같은 진입 경로 · 같은 부하에서 루프백으로 새 송출 수락 지연. 직전 M-B · M-A, 끝나면 종료 감시 | 도달률 95% 이상 · 새 송출 수락 지연 · `budget_exhausted` 수 → 걸음 22 결과와 함께 O8 전 kty 보고 | 새 송출 장애가 보이면 부하 중단 · 보고 |
+| 27 | 최종 종료 판정 — 시험 회차 전부(Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 · ended published · clip 처리) · 감시 기록(상한 30분) | 전부 | 걸음 24 와 같음(Q1 > 0 ∧ Q3 = 0 = kty 회부) |
+| 28–29 | 종료 뒤 시험 · `secret-count --passphrase` box · ssm | 런북 판정 · 둘 다 0 | 29 가 0 아니면 정리 · 보고 |
+| 30 | 하루 관찰 뒤 A 회수 — `blocked-check.sh` · A 업로드 적체 0 · Q1 = 0 · `rounds` ≥ 1 | `M-A OK` · 회수 완료 | 조건 미충족이면 보류. A 가 되살아났으면 정지 · 차단 뒤 Q1 · Q3(「운영 감시」 M-A 불통과) |
+| 31 | O8 | O8 런북 | — |
+| 32 | (O8a 5 직전 · D4) 목록 `*` 인 C 로 교체 — (ㄴ) 시작 → Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1 → C 기동 · `lifecycle-check.sh`(C) → 전환 → **B 정지 · disable · `blocked-check.sh`(B)** → (ㄴ) 끝 → 하루 뒤 회수 직전 `blocked-check.sh`(B) 다시 | `M-B OK`(C) · `M-A OK`(B) | C 가 꺼진 채 뜨면 C 를 즉시 정지 · Q1 확인 · 금지 유지. 후속 수정이 배포 전이면 C 도 운영 감시 대상 |
+
+*   **시험 회차** = 머리 세션의 `stream_id` 가 시험 ID 이고 `started_at` 이
+    걸음 8 시각 이후인 회차 전부입니다. 회차 수를 고정하지 않습니다 — 루프백
+    회차가 끝나고 300초 안에 유지 송출이 붙으면 같은 회차로 이어집니다.
+*   **`rounds` ≥ 1**(발행 잔여 질의의 시험 회차 수): 걸음 13 뒤에 Q1 · Q2 ·
+    Q3 를 판정으로 쓰는 자리는 모두 이 조건을 함께 봅니다. 시험 ID · 시각
+    입력이 틀려 시험 회차를 하나도 잡지 못하면 Q1 · Q2 · Q3 가 전부 0 으로
+    나오기 때문입니다. 0 이면 멈추고 입력을 다시 봅니다. 걸음 13 루프백이
+    회차를 만들지 못하고 실패한 경우만 0 이 맞고, 그때는 걸음 13 전과 같이
+    Q4 로 봅니다(아래 롤백 표 「걸음 12 뒤」 행).
+*   **도달률**(걸음 22 · 26)은 B nginx live 접근 줄 수 · 응답기 read 판정
+    줄 수를 보낸 요청 수로 나눈 값이고, 95% 이상이어야 합니다. 미달이면 그
+    측정은 무효입니다 — 부하 요청이 엣지(CloudFront 함수 · 서명)에서 막히면
+    응답기 부하로 재지 못하기 때문입니다.
+*   걸음 0-f · 0-h · 14 · 15 · 22 · 24 · 27 의 「kty 회부 · 보고」 와 아래
+    「Q1 > 0 ∧ Q3 = 0」 은 대안을 고르지 않는 **멈춤 자리**입니다.
+
+### O8a 당김 — 운영 감시
+
+사이드카는 재기동 때 게이트 준비(`privilege_check` · `privilege` ·
+`sns_client` · `assembly`)가 실패하면 꺼진 게이트로 정산을 계속합니다(media-host
+README 「계약9 발행」 의 재기동 강등). 후속 수정이 배포될 때까지 발행 목록
+계정이 송출하는 동안 아래를 돕니다(kty 2026-11-03 (다)).
+
+*   **M-B**(그 사이드카 게이트가 지금 켜져 있음 — `lifecycle-check.sh`):
+    통과는 **마지막 기동 시각 뒤** `lifecycle_started` 1줄 ∧ 그 뒤
+    `lifecycle_disabled` 0 입니다. 마지막 기동 시각은 사이드카 컨테이너의
+    `State.StartedAt` 이고, 강등을 고쳐 다시 띄웠으면 감시의 기준 시각이 그
+    시각으로 넘어갑니다.
+    *   이력(걸음 8 이후 `lifecycle_started` · `lifecycle_disabled` 건수 ·
+        `RestartCount` · 수동 재기동 수 · 컨테이너 id)은 기록만 하고 판정에
+        쓰지 않습니다. 강등이 한 번 있었다고 복구 뒤에도 불통과로 남지 않게
+        하기 위해서입니다.
+    *   줄을 남기기 전에 죽은 기동(DB 연결 · 기동 단계 실패)은 정산을 돌기
+        전에 끝난 것이라 판정에서 뺍니다. 다만 지금 떠 있는 사이드카가 없거나
+        갓 떠서 줄이 아직 없으면 `LIFECYCLE CHECK FAIL no-sidecar` · `M-B NOT
+        OK` 입니다 — 1분 뒤 다시 보고, 그래도 같으면 강등으로 다룹니다.
+*   **M-A**(옛 상자 정지 유지 — `blocked-check.sh <disabled|masked>`): 유닛
+    `inactive` · 프로젝트 컨테이너 0 · 유닛이 그 차단 상태입니다.
+*   **주기:**
+    *   **송출 감시** — 시험 ID 송출이 살아 있는 동안 **5분마다** M-B · M-A ·
+        B `PATHS` 를 봅니다. 5분은 창 안 갈래의 회차 닫힘(마지막 조각
+        끝부터 재접속 창 300초 + 여유 60초 — 아래 상한 근거)보다 짧은
+        간격입니다. 창을 기다리지 않고 곧바로 닫히는 4D 종료 신호 · 정지
+        표식 갈래는 이 주기로 막지 못하고, 걸음 23(송출 끄기 직전)의 M-B
+        판정으로만 막습니다. `PATHS` 가 0 이 되면(송출 끊김) 곧바로 종료
+        감시로 바꿉니다.
+    *   **송출 끄기 직전**(걸음 23) — 통과해야 끕니다.
+    *   **종료 감시** — 송출이 끝난 뒤(끈 경우 · 끊긴 경우 · 루프백 13 · 26
+        뒤 모두) **2분마다** M-B · M-A 를 봅니다. **끝나는 조건은 회차 닫힘이
+        아니라 그 회차들의 완결**입니다 — Q1 = Q2 = Q3 = 0 ∧ `rounds` ≥ 1
+        ∧ ended `lifecycle_published` ∧ clip ended 처리. 그 전에 다음 송출이
+        붙으면 송출 감시로 돌아갑니다.
+    *   발행 목록 계정이 송출하는 동안은 언제든 같은 주기입니다(걸음 30 의
+        하루 관찰 · O8 뒤 O8a 5 전 포함). 후속 수정 배포 전까지입니다.
+*   **강등 · 부활을 발견하면:**
+    *   (가) 송출이 살아 있음 — 송출을 유지한 채 B 사이드카만 다시 띄우고
+        (`sidecar-restart.sh` · 실행 직전 승인 · 수동 재기동으로 기록) M-B 를
+        다시 봅니다. 다시 강등되면 `reason` 을 kty 에게 보고하고 **송출을
+        끄지 않습니다** — 끄면 강등된 사이드카가 회차를 닫습니다.
+    *   (나) 송출이 이미 끝남 — 곧바로 다시 띄워 M-B 를 본 뒤 Q1 · Q3 를
+        봅니다. Q3 > 0(회차 열림)이면 통과한 사이드카가 닫으므로 종료 감시를
+        이어 갑니다. **Q1 > 0 ∧ Q3 = 0 이면 자동 복구 경로가 없습니다**(닫히고
+        전원 ended 인 회차는 다시 평가되지 않음) — kty 회부(멈춤 자리)이고, 그
+        방송의 손 복구는 kty 결정입니다.
+    *   M-A 불통과(옛 상자가 되살아남) — 곧바로 정지 · 차단을 다시 하고 Q1 ·
+        Q3 를 봅니다(같은 두 갈래).
+*   **사이드카만 다시 띄우는 근거(kty D7 = (ㄱ)):** media-host README 운영
+    규칙 ① 은 재기동 · 정지를 유닛으로만 하라고 정합니다. 그 근거는 정지
+    쪽입니다 — 사이드카만 멈추면 mediamtx · nginx 가 끝날 때 유닛이 compose
+    전체를 다시 띄워 사이드카가 되살아납니다. 재기동은 엔진의 자동 재기동
+    (`restart: on-failure`)과 같은 동작이라 형식상 예외일 뿐입니다. 이 예외는
+    O8a 당김 시험에만 씁니다. 유닛 재기동은 MediaMTX 를 내려 송출을 끊으므로
+    쓰지 않습니다.
+*   **남는 위험:** 마지막 감시 뒤 · 회차 닫힘 전에 강등 재기동이 끼면 그
+    방송 하나의 clip 기록이 live 로 남습니다(감시 사이 창). 근본 수정
+    (ended 적재를 발행 게이트에서 떼어 강등 중에도 적재 · 발행 준비 재시도 —
+    설계 진행 중)은 POK-301 아래 후속이고 O8a 5 개통 조건입니다.
+
+**종료 대기 상한 30분의 근거**(사이드카 코드 수치):
+
+*   회차 닫힘은 회차 **마지막 조각 끝**부터 재접속 창 300초 + 여유 60초가
+    지난 뒤입니다(`closeSlack` · `closableRoundsSQL`). 스캔은 30초마다 돌지만
+    그 안에서 도는 것이라 최소 대기를 늘리지 않습니다. **플러그인의 의도적
+    종료 신호(4D) · 정지 표식 갈래는 창을 기다리지 않고 곧바로 닫힙니다** —
+    그래서 송출을 끄기 직전(걸음 23)의 M-B 가 마지막 방어선입니다.
+*   마지막 세션의 ended 는 ③ 착지 또는 정산 창 15분(그 세션 `ending_at`
+    기준 · `SettleWindow`) 뒤라, ended 행 적재는 최악 약 21분 30초입니다.
+*   발행은 2초 주기이고, 일시 실패면 1 · 2 · 4 · 8 · 16 · 32초(누적 63초) 뒤
+    60초 간격입니다(`retryCap`). 실패가 한 번 끼면 약 22분 30초에
+    `published` 입니다.
+*   상한 30분은 그 위에 60초 간격 재시도 7회분을 여유로 둡니다. 넘기면 kty
+    보고 — A 재기동 · B 정지 · 발행 끄기는 하지 않습니다.
+
+### O8a 당김 — 상자 스크립트
+
+출력은 판정 줄 · 건수 · 짧은 컨테이너 id 뿐입니다. `lifecycle_started` 줄은
+주제 ARN 을 찍으므로 건수만 셉니다. 「준비」 의 `media_ssm` 으로 보냅니다.
+
+**M-B**(`lifecycle-check.sh` — 인자: 걸음 8 시각의 epoch 초):
+
+```shell
+cat > "${work}/lifecycle-check.sh" <<'SH'
+fail() { echo "LIFECYCLE CHECK FAIL $1"; exit 2; }
+# count_msg <로그> <메시지> — 그 메시지 이름의 JSON 줄 수.
+count_msg() {
+  printf '%s\n' "$1" | awk -v m="\"msg\":\"$2\"" 'index($0, m) { n++ } END { print n + 0 }'
+}
+[ "$#" -eq 1 ] || fail usage
+cid="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+[ -n "${cid}" ] || fail no-sidecar
+meta="$(docker inspect --format '{{.RestartCount}} {{.State.StartedAt}}' "${cid}")" \
+  || fail inspect
+last="$(date -d "${meta#* }" +%s)" || fail started-at
+history="$(journalctl -q -t pokeclip-media-sidecar --since "@$1" -o cat --no-pager)" \
+  || fail journal
+current="$(journalctl -q -t pokeclip-media-sidecar --since "@${last}" -o cat \
+  --no-pager)" || fail journal
+started="$(count_msg "${current}" lifecycle_started)"
+disabled="$(count_msg "${current}" lifecycle_disabled)"
+echo "SIDECAR_ID ${cid}"
+echo "RESTART_COUNT ${meta%% *}"
+echo "LAST_START ${last}"
+for m in lifecycle_started lifecycle_disabled lifecycle_enqueued \
+  lifecycle_published lifecycle_publish_retry lifecycle_backlog \
+  lifecycle_abandoned lifecycle_resolve_failed; do
+  echo "HISTORY_${m} $(count_msg "${history}" "${m}")"
+done
+echo "STARTED_SINCE_LAST ${started}"
+echo "DISABLED_SINCE_LAST ${disabled}"
+if [ "${started}" = 1 ] && [ "${disabled}" = 0 ]; then echo "M-B OK"; exit 0; fi
+echo "M-B NOT OK"
+exit 1
+SH
+```
+
+**A 차단 · M-A**(`blocked-check.sh` — 인자: `disabled` 또는 `masked`):
+
+```shell
+printf 'systemctl disable pokeclip-media\n' > "${work}/disable.sh"
+cat > "${work}/blocked-check.sh" <<'SH'
+[ "$#" -eq 1 ] || { echo "M-A CHECK FAIL usage"; exit 2; }
+state="$(systemctl show -P ActiveState pokeclip-media)" || state=unknown
+enabled="$(systemctl is-enabled pokeclip-media 2>/dev/null)"
+ids="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media)" \
+  || { echo "M-A CHECK FAIL docker"; exit 2; }
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+echo "UNIT ${state}"
+echo "RUNNING ${running}"
+echo "ENABLED ${enabled:-unknown}"
+if [ "${state}" = inactive ] && [ "${running}" = 0 ] && [ "${enabled}" = "$1" ]; then
+  echo "M-A OK"; exit 0
+fi
+echo "M-A NOT OK"
+exit 1
+SH
+```
+
+*   정지는 「한 창 절차 7′」 의 `stop.sh` · `stopped-check.sh` 를 그대로
+    쓰고, 그 뒤 `disable.sh` 를 보냅니다.
+*   **A 차단 — disable 로 되는지:** 부트스트랩(유닛 `enable` 을 부르는 곳)은
+    cloud-init 이 첫 부팅에 한 번만 돌립니다(`modules/media_host/user_data.tf`
+    머리 주석). 그래서 disable 이 재부팅을 넘는다고 봅니다 — 걸음 0 에서
+    상자의 cloud-init 실행 기록으로 확인합니다. 부팅마다 enable 이 다시 돈다고
+    판정되면 mask 가 필요합니다. 다만 유닛 파일이 `/etc/systemd/system` 에
+    직접 있어 `systemctl mask` 는 그 자리에 링크를 만들지 못해 실패할 것으로
+    보입니다(상자 실측 전). 그때는 대안을 고르지 않고 kty 에 회부합니다.
+*   롤백 ④ 에서 되돌릴 때는 `systemctl enable pokeclip-media`(mask 했으면
+    `unmask` 먼저) 뒤 `systemctl start pokeclip-media` 입니다.
+
+**사이드카만 다시 띄우기**(`sidecar-restart.sh` — 운영 감시 (가) · (나)만 ·
+실행 직전 승인):
+
+```shell
+cat > "${work}/sidecar-restart.sh" <<'SH'
+cid="$(docker ps -aq --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" \
+  || { echo "SIDECAR RESTART FAIL docker"; exit 2; }
+[ -n "${cid}" ] || { echo "SIDECAR RESTART FAIL no-sidecar"; exit 2; }
+docker restart "${cid}" >/dev/null || { echo "SIDECAR RESTART FAIL restart"; exit 1; }
+echo "SIDECAR RESTARTED $(date +%s)"
+SH
+```
+
+*   찍힌 시각을 수동 재기동 기록에 적고, 1분 뒤 `lifecycle-check.sh` 를
+    돌립니다.
+
+### O8a 당김 — 롤백
+
+A 로 되돌리기입니다. O8a 5 전이라 옛 모드 A 복귀가 허용됩니다(옛 모드
+단서 — 위 「언제 쓰나」).
+
+| 시점 · 조건 | 순서 |
+|---|---|
+| 걸음 6–11(A 기동 중 · 송출 없음) · Q4 = 0 | 전환 역적용 → B 정지 · 회수 |
+| 걸음 12 뒤 · Q1 = Q2 = Q3 = 0 · `rounds` ≥ 1(걸음 13 전이거나, 걸음 13 루프백이 회차를 만들지 못하고 실패했으면 — `LOOPBACK FAIL test-key` · `pull`, 인증 거부 · 연결 실패 — `rounds` 0 · Q4 0 행. 회차가 하나라도 생겼으면 `rounds` ≥ 1 이라 이 예외에 들지 않음) · B `PATHS 0` · 마지막 M-B 통과 | ① 송출 중지 확인 · **(ㄷ) 시작** ② Q1–Q3 ③ B 유닛 정지(인스턴스 유지 — 새 started 원천 제거) ④ A `enable`(mask 했으면 `unmask` 먼저) · `start` → A 기동 판정 ⑤ 전환을 A 로 → **(ㄷ) 끝** ⑥ B 회수는 하루 뒤. A 가 하한 아래면(걸음 0) 「한 창 절차 — A 를 다시 띄울 때」 조건을 더함 |
+| Q1 > 0 ∧ Q3 > 0(회차가 아직 열림) | **A 를 띄우지 않습니다.** M-B 를 통과한 게이트 켜진 사이드카(B 재기동 뒤 통과, 또는 같은 설정의 C 가 기동 판정 통과)가 회차를 닫고 ended 를 발행한 뒤 위 순서. B 를 살리지 못하면 kty 보고 |
+| Q1 > 0 ∧ Q3 = 0(회차 닫힘 · ended 없음) | **자동 복구 경로 없음 — kty 회부(멈춤 자리).** 롤백 · 교체 · 발행 끄기를 하지 않습니다 |
+| Q2 > 0(SNS 재시도 중) | B 를 떠 있게 두고 원인(신원 정책 · 주제 정책 · SCP)을 kty 승인으로 고친 뒤(다음 재시도 — 최대 60초 뒤 — 에 `published`) 위 순서. outbox 행은 손대지 않습니다 |
+| 발행만 끄기 | 걸음 12 뒤 행과 같은 조건. (ㄷ) = Q1 확인부터 B 정지까지 — ① 송출 중지 · 시작 ② Q1–Q3 ③ 빈 목록 상자 D 기동(목록은 user_data 라 상자 교체) ④ 전환 ⑤ B 정지 · 차단 → 끝. D 의 회차에는 started 가 없어 ended 도 필요 없습니다 |
 
 ## force
 
@@ -601,6 +2454,10 @@ M15 · O8a · I1-6 반영(`control_upstream`)이나 이미지 다이제스트 ·
 B 는 「정상 교체」 2 · 3 으로 미리 띄워 둡니다. force 파일은 저장소 밖 kty
 로컬 디렉터리(`${HOME}/.pokeclip-media-force/`, 0700)에 두고 복구가 끝날
 때까지 지우지 않습니다.
+
+**치우개:** 위 「언제 쓰나」 의 치우개 단서를 따릅니다. 방송 중 교체라
+공백이 길어지면 살아 있는 방송이 바로 닫히므로, 걸음 도중에도 남은 여유를
+봅니다.
 
 **옛 모드 B 갈래:** B 가 옛 모드면 위 「언제 쓰나」 의 옛 모드 단서를
 따르고, 순서는 아래 1(목록 저장) → README 「되돌리기 순서」 1(인바운드
@@ -694,6 +2551,9 @@ bash infra/media-host/ops/force-diff.sh \
 
 ## 부분 실패 복구
 
+복구가 길어져 공백이 30분에 가까워질 것 같으면 위 「언제 쓰나」 의 치우개
+단서대로 그 자리에서 치우개를 끕니다.
+
 ingest · http 전환(정상 교체 5 · 6, force 2 · 4)의 apply 가 중간에 실패하면:
 
 1.  `terraform plan` 과 `tg_health` 로 대상 그룹별 등록 상태를 읽습니다.
@@ -753,7 +2613,10 @@ git merge-base --is-ancestor <M6-0 머지 커밋 SHA> <이미지의 빌드 커�
     결함이면 새 하한 이상 이미지로 설정 반영 교체를 하고, 운영 SQL 결함이면
     고친 문장을 더하는 전진 SQL PR 을 머지한 뒤 런타임 1단-가 런북 「M6
     스키마 재실행」 을 그 머지 SHA 로 다시 돕니다. 그 런북의 「되돌리기 ·
-    해체」 SQL 은 이 용도로 쓰지 않습니다(해체 전용).
+    해체」 SQL 은 이 용도로 쓰지 않습니다(해체 전용). 같은 런북의
+    「POK-525 트리거 롤백 짝」 은 회차 불변 트리거
+    (`stream_sessions_round_frozen`) 하나만 지우는 별개 절차라 이 셋에 들지
+    않고, 이 셋을 여는 근거도 되지 않습니다.
 *   기능만 끄고 싶으면 이미지가 아니라 스위치로 끕니다. prod 의 되감기 제어면
     스위치는 `prod/media` tfvars 의 `control_upstream` 이고(비우면 nginx 가
     제어면 경로를 404 로 답함) 설정 반영 교체로 들어갑니다. 사이드카 env
@@ -767,6 +2630,886 @@ git merge-base --is-ancestor <M6-0 머지 커밋 SHA> <이미지의 빌드 커�
 1.  하한 이상 이미지로 「설정 반영 교체」 를 합니다. 새 사이드카의
     `LoadCursor` 가 하한부터 이어 갑니다.
 1.  SQL · 트리거 · 하한 행은 그대로 둡니다(위의 하지 않는 것 셋).
+
+## PDT 판 2 롤백 하한 · 판 게이트
+
+POK-196 PDT PR(판 2 생산자 — 장부 행의 PDT · 위치 · 길이를 새 규약으로 쓰는
+사이드카)의 배포 · 되돌리기 규칙입니다. 그 PR 의 머리가 곧 **c0 이미지**이고,
+판 2 를 읽고 · 쓰고 · 렌더하고 · 감사하는 유일한 이미지입니다.
+
+용어:
+
+*   **판**(`timing_version`): 장부 행의 PDT 규약 번호입니다. NULL 은 지금까지의
+    식(판 NULL), 2 는 새 섞기 규칙(판 2)입니다. 한 이어 계산 회차는 끝까지
+    한 판입니다(판 고정).
+*   **판 게이트**(`stream_timing_gate` 한 행): **스위치**
+    `new_round_version` 은 새 회차를 열 때의 판이고(기본 NULL), **래치**
+    `highest_version` 은 스위치가 2 가 된 적이 있으면 2 입니다. 래치는 판 2
+    행이 있는 동안 내릴 수 없습니다. 바꾸는 법은 [런타임 1단-가 런북](runtime-1a.md)
+    「PDT 판 게이트 손 SQL」 입니다.
+*   **출시 이미지**: c0 앞 사이드카(판 2 를 모름 · 라벨 없음)입니다.
+*   **기동 전 검사**: 상자 시작 스크립트(`start-media.sh` 순서 9)가 compose up
+    앞에서 사이드카 라벨 `com.pokeclip.timing.readable` 을 보고, 판 2 가 없으면
+    검사 서비스 `timing-preflight`(검사 핀 이미지의 `segment-indexer
+    timing-gate-check`)로 게이트를 읽어 통과 · 막힘을 정합니다.
+*   **기동 검사**: c0 이후 사이드카가 기동 스키마 확인 다음에 게이트를 읽어,
+    자기가 읽지 못하는 판을 게이트가 요구하면 멈추는 것입니다.
+
+### PDT 하한 판정
+
+**c0 하한 = 판 2 롤백 하한.** PDT PR 머지 커밋을 조상으로 둔 커밋으로 빌드한
+이미지입니다. 판정은 M6-0 하한과 같은 명령입니다.
+
+```shell
+git fetch origin
+git merge-base --is-ancestor <PDT PR 머지 커밋 SHA> <이미지의 빌드 커밋 SHA> \
+  && echo 'c0 하한 이상' || echo 'c0 하한 아래'
+```
+
+이 판정은 조상 관계만 봅니다. PDT PR 을 되돌린(revert) 커밋 뒤의 빌드도 머지
+커밋을 조상으로 두므로 「하한 이상」 으로 나옵니다. 그래서 되돌림이 있었으면
+조상 관계와 함께 다음도 봅니다.
+
+*   **사이드카 · 검사 핀(`sidecar` · `timing_guard` — 둘 다 `media-sidecar`
+    저장소):** **올릴 후보 이미지**를 다이제스트로 받아 라벨
+    `com.pokeclip.timing.readable` 이 `null,2` 인지 봅니다. 아래 「스위치 2
+    선행 조건」 의 명령은 지금 떠 있는 사이드카를 보므로 이 자리에 쓰지
+    않습니다. ECR 로그인은 [prod 산출물 런북](prod-artifacts.md) 「ECR
+    로그인」 그대로입니다.
+
+    ```shell
+    docker pull --platform linux/arm64 <repo_urls["media-sidecar"]>@<후보 다이제스트>
+    docker image inspect --format \
+      '{{ index .Config.Labels "com.pokeclip.timing.readable" }}' \
+      <repo_urls["media-sidecar"]>@<후보 다이제스트>
+    # 기대: null,2 (빈 값 · <no value> 면 되돌린 판 — 올리지 않음)
+    ```
+
+*   **설치 묶음(`bundle`):** 라벨이 없어 이미지로는 되돌린 판인지 가릴 수
+    없습니다. 빌드 출처로 봅니다 — PDT PR 머지 커밋 뒤 빌드 커밋까지 그
+    PR 을 되돌린 커밋이 없어야 하고, 빌드 커밋의 시작 스크립트에 기동 전
+    검사가 있어야 합니다.
+
+    ```shell
+    git log --oneline --grep='^Revert' <PDT PR 머지 커밋 SHA>..<묶음 빌드 커밋 SHA>
+    # 기대: 이 PR 을 되돌린 줄 없음
+    git show <묶음 빌드 커밋 SHA>:infra/media-host/bin/start-media.sh \
+      | grep -c 'timing-preflight'
+    # 기대: 1 이상
+    ```
+
+    되돌린 설치 묶음은 기동 전 검사가 없어 쓰기자 거부 한 겹만 남습니다.
+
+하한이 걸리는 tfvars 칸은 셋입니다.
+
+| 칸 | 규칙 | 어기면 |
+|---|---|---|
+| `image_digests.timing_guard`(검사 핀) | **늘 c0 하한 이상.** 사이드카를 출시 이미지로 내릴 때도 내리지 않습니다 | 검사 명령이 없는 이미지라 검사가 0 아닌 코드로 끝나 상자가 막힙니다(fail-closed) |
+| `image_digests.bundle`(설치 묶음) | **c0 하한 이상**(기동 전 검사가 든 `start-media.sh`) | 기동 전 검사가 없어 출시 이미지가 래치 2 장부에 뜹니다 — 막는 것은 쓰기자 거부(아래)뿐 |
+| `image_digests.sidecar` | 아래 상태 표 | 상태 표의 「무엇이 지키나」 |
+
+*   기존 상자의 user_data 는 갱신되지 않습니다(`ignore_changes`). 묶음 · 검사
+    핀은 그 값으로 **새로 띄운 상자**에 들어갑니다 — c0 교체는 「설정 반영
+    교체」 로 합니다(새 상자가 재고 부족으로 안 뜨면 「제자리 전환」 — kty
+    2026-11-13 K-1). 「제자리 전환」 으로 떠 있는 상자의 묶음 · compose
+    렌더본을 바꿀 때도 같은 규칙입니다 — 새 묶음은 c0 하한 이상, 새
+    렌더본에는 `timing-preflight` 서비스와 c0 하한 이상 검사 핀이 있어야
+    합니다. 하한 아래 묶음 · 렌더본으로 제자리 전환하면 그 상자는 기동 전
+    검사 없이 뜹니다.
+
+**상태별 되돌리기.**
+
+| 상태 | 되돌릴 사이드카 | 판 | 무엇이 지키나 |
+|---|---|---|---|
+| 운영 SQL 적용 뒤 · c0 교체 전 | 출시 | 판 NULL 만 | — |
+| c0 ~ 스위치 2 사이(스위치 NULL · 래치 NULL) | c0 하한 이상 또는 출시 | 판 NULL 만(출시는 새 칸을 무시) | 기동 전 검사가 래치 NULL 을 읽고 통과 |
+| 스위치 2 또는 래치 2 | **c0 하한 이상만** | 열린 판 2 회차는 c0 이후 이미지가 판 2 로 끝까지 | 출시: 기동 전 검사(1차) · 쓰기자 거부(뒷받침) · 이 표 / 앞날 이미지: 기동 전 검사 · 기동 검사 |
+| 판 2 쓰기만 멈추고 싶음 | 이미지 그대로 | 스위치 NULL — 새 회차는 판 NULL, 열린 판 2 회차는 끝까지 판 2 | 래치는 그대로 |
+
+*   **허용된 복귀도 DB 를 못 읽으면 막힙니다.** c0 ~ 스위치 2 사이에 출시 이미지로
+    되돌리는 것은 허용이지만, 출시 이미지는 라벨이 없어 기동 전 검사가 DB 를
+    읽어야 합니다. 그때 DB 를 못 읽으면(검사 4) 상자가 막힙니다. c0 하한 이상
+    사이드카는 이미지를 받거나(받기가 실패하면 다이제스트로 고정한 로컬
+    이미지) 라벨을 읽으면 DB 에 기대지 않고 지나갑니다. 받기가 실패하고
+    로컬에도 없으면 라벨을 몰라 검사 서비스로 가고, 그때는 DB 를 읽습니다 —
+    래치 2 에서 DB 도 못 읽으면 c0 사이드카라도 막힙니다(fail-closed).
+*   **판 무관 결함은 앞으로 고칩니다.** c0 에도 있는 결함이면 새 c0 하한 이상
+    이미지로 설정 반영 교체를 합니다. 열린 판 2 회차의 생산자 결함은 그 회차가
+    닫힐 때까지 남습니다(판 고정).
+
+**판정 줄.**
+
+| 줄 | 어디 | 뜻 · 할 일 |
+|---|---|---|
+| `MEDIA START BLOCKED: sidecar cannot read ledger timing v2 label=<라벨> check=<코드>` | 유닛 저널(시작 스크립트) | 사이드카 라벨에 판 2 가 없고 검사가 0 이 아님. `check=3` 거부(게이트가 판 2 를 요구) · `4` 검사 못 함(DB 설정 · 연결 · 권한 · 판 목록 꼴 · **게이트 표 없음** — PDT 운영 SQL 전에 c0 하한 이상 묶음으로 띄웠다. 같은 저널의 검사 서비스 JSON 줄이 `timing_gate_check_failed` `reason=read` 이고 오류 문구에 `stream_timing_gate` 와 `does not exist` 가 든다 — JSON 줄에서는 따옴표가 `\"` 로 찍히므로 따옴표 없이 두 낱말로 grep) · 그 밖(`1` · `137` 등)은 검사 컨테이너가 판정까지 못 간 것 — 검사 핀이 c0 하한 아래(검사 명령 없음) · 검사 핀 이미지 받기 실패 · docker 오류 · 로그 드라이버를 못 띄움(journald 없는 엔진 — prod 상자는 journald 가 있어 생기지 않음) · OOM(137) · 시작 스크립트가 받은 TERM. 원인은 같은 저널에서 이 줄 바로 앞의 compose 출력으로 가린다. `label=none` 은 라벨 없는 출시 이미지 · `invalid` 는 꼴 밖. 처치는 사이드카 다이제스트를 c0 하한 이상으로 고쳐 설정 반영 교체 — 단 게이트 표 없음(위)이면 사이드카를 바꾸지 않습니다(c0 하한 이상 사이드카는 운영 SQL 없는 DB 에서 기동 스키마 확인으로 멈춥니다). 배포 순서 1(운영 SQL)부터 합니다 |
+| `timing_downgrade_refused` · `timing_gate_check_failed` | 검사 서비스 JSON(같은 저널) · 사이드카 저널 | 게이트 값(`highest_version` · `new_round_version`)과 이미지 판 목록(`readable`). 사이드카가 이것으로 끝나면 판 2 읽기를 지운 앞날 이미지 — 하한 이상으로 되돌림 |
+| `legacy_writer_refused`(SQLSTATE 23514) | 사이드카 저널의 INSERT 실패 · PG 로그 | 래치 2 장부에 출시 이미지가 씀. 그 상자의 모든 스트림 색인이 서고 엔진이 거듭 다시 띄움 — 사이드카를 c0 하한 이상으로 |
+
+**남는 한계.**
+
+*   기동 전 검사는 시작 스크립트를 지나는 기동만 봅니다. 엔진 재기동
+    (`restart: on-failure`) · 스위치를 올리는 순간 이미 돌던 출시 컨테이너 ·
+    상자 밖에서 손으로 띄운 컨테이너는 보지 않습니다. 이미 돌던 출시
+    컨테이너는 아래 스위치 2 선행 조건이 막고, 어겨도 쓰기자 거부가 첫
+    INSERT 에서 끝냅니다. 다만 그 사이 그 프로세스의 감사 · 정산이 판 2 행을
+    옛 식으로 읽을 수 있습니다.
+*   막히면 그 상자는 송출도 받지 않습니다(compose 를 올리지 않음). 하한을 어긴
+    롤백에서만 납니다.
+*   막힌 상자의 tmpfs 에는 이번 기동의 렌더 파일이 남습니다(렌더 뒤에 검사가
+    돎). 다음 기동이 새로 렌더하고, 정지 스크립트가 지웁니다.
+
+### PDT 배포 순서
+
+PDT 머지 뒤 **첫 `prod/media` plan 전에** tfvars 의 `image_digests.timing_guard`
+(c0 하한 이상 검사 핀 — [prod 산출물 런북](prod-artifacts.md) 「검사 핀」)를
+채웁니다. 필수 키라 아래 3 보다 앞선 다른 작업의 plan 도 이 키 없이는 멈춥니다.
+떠 있는 상자는 `user_data` 가 `ignore_changes` 라 바뀌지 않습니다.
+
+| # | 하는 일 | 자리 · 판정 |
+|---|---|---|
+| 1 | 운영 SQL(PDT c1 정의) | 런타임 1단-가 런북 「PDT 재실행 조건」 · 방송 없는 시간대 |
+| 2 | **소비자 선배포 확인** | 아래 확인 줄 — 하나라도 「아니오」 면 3 으로 가지 않음 |
+| 3 | c0 교체 | 「설정 반영 교체」(새 상자가 안 뜨면 「제자리 전환」) — `image_digests.sidecar` · `timing_guard` · `bundle` 을 c0 하한 이상으로. 게이트는 NULL 그대로라 c0 는 새 회차도 판 NULL 로 엽니다 |
+| 4 | c0 기동 확인 | 아래 「c0 기동 확인」 — 관찰 기간 없이 서면 바로 5 |
+| 5 | 스위치 2 | 아래 선행 조건 → 런타임 1단-가 런북 「PDT 판 게이트 손 SQL」 — 방송 중이어도 됨(열린 회차는 판 고정) |
+| 6 | 재측정 | 넘김 ±250ms(갈래 넷 · 보정 ON/OFF) · M5a 이음 손실 0 — 판정 전에는 완료로 보고하지 않음 |
+
+만료 스위치 켬(POK-551)은 이 순서 밖입니다. 스위치 2 뒤, 판 2 행이 섞인 장부로
+돌린 PG 만료 시험이 통과하고 판 2 실방송 한두 번이 정상인 것을 본 다음에
+켭니다(목표 12월 중순 · kty 2026-11-14). 켜기 전 진단과 켜는 SQL 은
+[런타임 1단-가 런북](runtime-1a.md) 「만료 스위치 손 SQL」 의 「켜기 전 조건」
+입니다.
+
+**소비자 선배포 확인 줄(2).** 렌더 · 업로드 일꾼 · clip · 채팅 · 웹 다섯이
+**판 2 를 읽는 판**으로 prod 에 올라 있는지, 서비스마다 prod 배포 기록의 빌드
+커밋이 그 서비스의 판 2 읽기 머지 커밋을 조상으로 두는지(`git merge-base
+--is-ancestor`)로 봅니다. 다섯 줄 모두 「예」 를 기록한 뒤에 3 으로 갑니다.
+PDT 머지 뒤의 모든 사이드카 · 설치 묶음 이미지(다른 수정 · POK-525 뒤 PR
+포함)도 같은 선행 조건(1 · 2)을 가집니다 — 묶음의 기동 전 검사는 게이트 표를
+읽으므로 운영 SQL(1) 전에 띄우면 `check=4` 로 막힙니다.
+
+**c0 기동 확인(4).** c0 교체 절차(「설정 반영 교체」 또는 「제자리 전환」)의
+기동 판정이 서면 관찰 기간 없이 바로 5 로 갑니다(kty 2026-11-14 — 11-11 K2 의
+길들이기 기간 「방송 3회 · 48시간」 을 없앰). 다만 5 전에 출시 이미지로
+돌아갈 길을 닫습니다 — 「설정 반영 교체」 였으면 「정상 교체 8 — A 회수」 를
+하루 관찰을 기다리지 않고 이 자리에서 합니다(A 는 출시 사이드카라 남아
+있으면 선행 조건(5)의 「모든 상자 라벨 2」 가 서지 않고, 스위치 2 뒤에는
+되돌릴 곳도 못 됩니다 — 「POK-525 교체」 4.11 과 같은 앞당김). 앞당겨도 회수
+직전 확인은 그대로입니다 — A `PATHS 0` 과 A 업로드 적체 0(「정상 교체 8 의
+회수 조건」 의 업로드 적체 질의 — 세 축 모두 `pending` 0 · `failed` 0). 0 이
+아니면 회수하지 않고 기다리며, 그동안 스위치 2 도 올리지 않습니다 — A
+디스크에만 있는 미업로드 조각은 회수하면 어디서도 서빙할 수 없습니다.
+「제자리 전환」 이었으면 그 상자의 c0 하한 아래 판 백업(`rollback-v*` 가운데
+c0 전 판 모두)을 SSM 쓰기 명령으로 지웁니다(실행 직전 승인) — 스위치 2 뒤 그
+백업으로 원복하면 출시 판이 뜹니다. 아래 신호는 스위치 2 를 막는
+통과 조건이 아닙니다(하한 거부 수만 선행 조건(5)이 씀). c0 ~ 스위치 2 사이에
+방송이 있으면 그 행에서, 스위치 2 뒤에는 판 2 행에서 같은 줄로 봅니다 — c0 결함 0 ·
+`timing_facts_partial` 비율 · 귀속 행 `timing_round_id` = 세션 `round_id`
+일치(조회) · `segment_indexed` 의 `comparable` 거짓 비율 · 소리 머리 최장
+연속(스트림 안에서 `head_track` 이 `audio` 인 행이 같은 녹화기로 잇달아 나온
+수 — `audio` 행에서 1 로 시작하고, 다음 행이 `audio` 이며 `same_instance` 가
+참이면 1 을 더하고, `video` 행이면 0, `same_instance` 가 거짓인 `audio` 행이면
+다시 1. `head_track` 이 `unknown`(판독 없음)인 행도 0 으로 끊고 그 수는 따로
+적는다. 견주지 않고 이어지는 구간이라 PDT 가 밀릴 수 있는 길이가 이것이다.
+`same_instance` 는 녹화기 표식이 바뀌거나 번호가 건너뛸 때, 그리고 mtxi 가
+없어 표식 · 번호를 모를 때 거짓이다. 실측 1 의
+(e)(`pdt_mix_replay_stats_test.go`)는 접속이 바뀔 때만 끊으므로 이 값은
+그보다 작거나 같다 — 로그에는 접속 경계가 없어 그 셈은 할 수 없다) · 하한 거부 수(`session_floor_rejected` 의 `stream_id` ·
+`seq` 고유 수) · `unattributed_run` 의 세션 사이 길이(`same_round` 참 줄의
+`duration_ms`). 모두 판 NULL 행에서도 나옵니다. 판 2 섞기 신호
+(`timing_reset` · `pdt_new_chapter` 등)는 판 2 행에서만 나오므로 판 NULL 행만
+있는 동안에는 0 이 정상이고 관측값이 아닙니다. 하한 거부 수는 커밋 전 세션 판정에서
+나오는 줄이라 재시도 · 버려진 시도도 섞입니다 — 고유 수는 거부된 행 수의
+상한이고, 판 2 뒤 `timing_reset` 까닭 `floor_rejected` 가 커밋된 행만 셉니다.
+
+**판 NULL 에서 하한 거부가 나면(한계 — kty 2026-11-12 (나)).** c0 판 NULL
+귀속 식은 `max(A + U, f)` 입니다(A = 기저 세션 마지막 귀속 행 PDT + 길이 ·
+U = 그 뒤 비귀속 행 길이 합 · f = 파일 이름 벽시각). 방송 중 귀속 하한 거부
+행도 U 에 들어, 다음 귀속 행 PDT 가 그 행 길이만큼 벽시각보다 앞서고 보통
+방송 끝까지 남습니다(f 가 U 보다 긴 틈으로 다시 앞설 때까지) — 장부 PDT 를 벽시각으로 읽는 클립 · 채팅 시각이 그만큼
+어긋납니다. 그 행이 계승 개시 행이면 새 세션의 `first_pdt` 에도 같은 차가
+듭니다. 대신 그 사슬의 VOD 동결은 S7 을 지납니다 — U 를 빼면 VOD 가 S7 로
+실패해 이 앞섬을 받아들였습니다. 그래서 이 차는 **c0 결함으로 세지 않습니다**.
+같은 스트림의 `legacy_unattributed_sum`(`u_ms` — U 가 생긴 귀속 행에만) ·
+`session_floor_rejected` 줄과 맞춰 봅니다. prod 9일 · 색인 조각 4,616 에서
+하한 거부는 0 건이었습니다(2026-11-12 측정). 탈퇴 정리가 없는 한 운영
+경로에서는 도달하지 않습니다 — 아래 「스위치 2 선행 조건(5)」 의 H3 근거가 판
+NULL 에도 같습니다. 정본은 media README 「PDT 알려진 한계」 입니다. 여기서
+받아들이는 것은 판 NULL 의 PDT 앞섬이고, 아래 선행 조건(5)이 스위치 2 를
+보류하는 것은 신호 자체입니다 — 대상이 다릅니다.
+
+**c0 ~ 스위치 2 사이의 되돌림.** 이 사이에만 출시 이미지로 되돌려도
+됩니다(위 상태 표). 스위치 2 뒤에는 c0 하한 이상으로만 되돌립니다.
+
+**스위치 2 선행 조건(5).** c0 교체 뒤 스위치 2 직전까지의 하한 거부 수가 0
+건인지 확인해 기록합니다. 세는 법은 위 (4)의 정의 그대로입니다 —
+`session_floor_rejected` 의 (`stream_id` · `seq`) 고유 수이고, 커밋 전 신호라
+롤백된 시도도 섞입니다. 판 2 회차에 하한 거부 행이 끼면 VOD 동결이 S7(B8
+조건 1)로 실패하지만(재현 2026-11-12 — 시험이 장부 쓰기를 직접 부른 경로),
+탈퇴 정리가 없는 한 운영 경로에서는 인덱서의 늦은 조각 검사(H3)가 그 조각을
+장부 쓰기 앞에서 버려 도달하지 않습니다(kty 2026-11-13 — Jira POK-567 은
+고치지 않음 · 근거와 탈퇴 정리 예외는 media README 「PDT 알려진 한계」).
+그래서 수정 배포를 기다리지 않고 이 신호를 감시합니다. 1 건이라도 있으면 그
+(`stream_id` · `seq`) 의 장부 행이 실제로 있는지 보고, 스위치 2 를 올리지 않은
+채 kty 에게 알립니다(쓰기자 경합이면 신호만 찍히고 행은 롤백될 수 있습니다).
+보는 수단은 런타임 1단-가 런북 「M6 읽기 질의」 의 흐름(실행기 흐름 · 읽기 전용
+첫 줄 · 새 페이로드 · SQL 원문을 kty 에게 보이고 승인)으로 그 행을 조회하는
+것입니다. 스위치 2 뒤에는 이 신호에 따로 붙은 경보가 없습니다 — 판 2 회차
+VOD 가 `failed`(`validate`)로 나오면 운영자가 같은 스트림의
+`session_floor_rejected` 를 사이드카 저널에서 봅니다. 그리고 모든 Media 상자의 사이드카 라벨에 2 가 있습니다.
+상자마다 SSM 읽기 명령으로 확인하고 결과를 기록합니다. c0 를 「제자리 전환」
+으로 넣은 상자는 c0 하한 아래 판 백업이 0 개인지도 같은 읽기로 확인합니다(위
+「c0 기동 확인(4)」 에서 지운 것 — 남아 있으면 스위치 2 를 올리지 않습니다).
+
+```shell
+docker image inspect --format \
+  '{{ index .Config.Labels "com.pokeclip.timing.readable" }}' \
+  "$(docker inspect --format '{{.Config.Image}}' \
+    "$(docker ps -q --filter label=com.docker.compose.service=sidecar)")"
+# 기대: null,2
+ls -d /etc/pokeclip-media/rollback-v* 2>/dev/null || echo 'ROLLBACK NONE'
+# 기대(c0 를 제자리 전환으로 넣은 상자): ROLLBACK NONE, 또는 c0 판 번호 이상의 이름만
+```
+
+**왜 꼭 지켜야 하나(라벨 2).** 쓰기자 거부(`legacy_writer_refused`)는 INSERT
+에서만 걸립니다. 스위치 순간 송출이 없던 상자의 출시 컨테이너는 INSERT 를 하지
+않아 거부되지 않고 살아남습니다. 그동안 다른 상자(c0)가 연 판 2 회차의 사슬은
+먼저 닿은 프로세스가 닫으므로, 그 출시 컨테이너가 닫으면 VOD 를 판
+태그(`#EXT-X-POKECLIP-TIMING:2`) 없이 동결할 수 있습니다(P13 연습 6 · 로컬
+실험대 2026-11-12 — 같은 회차 DVR 은 태그 1 · VOD 는 0). 장부 `vod_sha256` 이 그
+출시판 렌더와 같아 동결 감사도 통과시키고(VOD 는 sha · ETag 대조뿐 — 다시 쓰는
+갈래는 DVR 만, `media/internal/rewind/publish/audit.go`), VOD 확정은
+`freezing` 행에만 한 번 씁니다(`publish/vod.go` `vodConfirmSQL`). **복구 길
+없음 — 막는 것뿐입니다.** 막는 것은 이 선행 조건 하나라, 확인 결과에 라벨 2 가
+없는 상자가 하나라도 있으면 스위치 2 를 올리지 않습니다. 정본은 media README
+「PDT 알려진 한계」 입니다.
+
+**POK-525 와의 교체 · 적용 창(K5).** **따로 합니다(kty 2026-11-11 — 합동
+아님).** PDT 운영 SQL · c0 교체는 POK-525 교체와 다른 창이고, 이 순서 그대로
+돕니다.
+
+## 만료 롤백 하한 · 만료 스위치
+
+POK-551(60일 만료 — 회차 문서 범위로 고르기 · 확정 전 회차 미룸 · DB 끄기
+스위치 · 전용 토큰 공급)의 배포 · 되돌리기 규칙입니다. 만료는 S3 문서 ·
+조각을 지우므로 되돌릴 수 없습니다. 그래서 만료를 켤 수 있는 구성은 스위치를
+아는 사이드카와 토큰을 두는 설치 묶음으로만 띄웁니다.
+
+용어:
+
+*   **만료 하한**: POK-551 머지 커밋을 조상으로 둔 커밋으로 빌드한
+    이미지입니다. 그 앞 커밋의 빌드가 하한 아래입니다.
+*   **만료 스위치**: 장부 표 `stream_expiry_switch` 한 행의 `enabled`
+    입니다(기본 끔 — 배포만으로는 아무것도 지우지 않음). 하한 이상
+    사이드카만 읽습니다. 바꾸는 법은 [런타임 1단-가 런북](runtime-1a.md)
+    「만료 스위치 손 SQL」 입니다.
+*   **만료 주소**: `prod/media` tfvars 의 `clip_internal_url` 입니다. 빈
+    값이면 사이드카에 만료 설정을 렌더하지 않고(`expiry_disabled
+    reason=no_url`) 상자가 토큰도 받지 않습니다. user_data 로만 들어가므로
+    바꾸는 것은 「설정 반영 교체」 · 「제자리 전환」 입니다.
+
+### 만료 하한 판정
+
+판정 명령은 「M6 운영 SQL 경계 · 롤백 하한」 과 같습니다.
+
+```shell
+git fetch origin
+git merge-base --is-ancestor <POK-551 머지 커밋 SHA> <이미지의 빌드 커밋 SHA> \
+  && echo '만료 하한 이상' || echo '만료 하한 아래'
+```
+
+POK-551 을 되돌린(revert) 커밋 뒤의 빌드도 머지 커밋을 조상으로 두어
+「하한 이상」 으로 나옵니다(「PDT 하한 판정」 과 같은 함정). 그래서 둘을 더
+봅니다. 사이드카 · 설치 묶음 모두 라벨이 없어 빌드 출처로 봅니다.
+
+```shell
+git log --oneline --grep='^Revert' <POK-551 머지 커밋 SHA>..<빌드 커밋 SHA>
+# 기대: POK-551 을 되돌린 줄 없음
+git cat-file -e <사이드카 빌드 커밋 SHA>:media/internal/index/expiry_switch.go \
+  && echo 'switch present'
+git cat-file -e <묶음 빌드 커밋 SHA>:infra/media-host/bin/lib/clip_expiry.sh \
+  && echo 'token installer present'
+# 기대: 각각 present
+```
+
+### 만료 하한 칸별 규칙
+
+| 칸 | 하한 아래이면 생기는 일 | 규칙 |
+|---|---|---|
+| `image_digests.sidecar` | 스위치를 모르는 옛 만료가 돕니다. 회차 문서 범위 처분 · 미룸 없이 지웁니다(방송 가운데만 지워 회차 문서가 지운 조각을 가리킴) | 하한 이상. 아래로 되돌리면 같은 교체에서 `clip_internal_url = ""` |
+| `image_digests.bundle`(설치 묶음) | **새 상자:** 이 판의 모듈(POK-551 이후 `prod/media`)로 띄우면 주소와 상관없이 부트스트랩이 필수 파일 `bin/lib/clip_expiry.sh` 가 없어 멈춥니다 — cloud-init 출력에 `MEDIA BOOTSTRAP missing bin/lib/clip_expiry.sh` · `MEDIA BOOTSTRAP FAIL bundle`. **제자리 전환:** 토큰 디렉터리 · 파일을 두지 않지만 그 bind 만 `create_host_path: true` 라 엔진이 빈 디렉터리를 만들어 상자는 뜨고 만료만 꺼집니다(`expiry_disabled reason=token_file`) | 하한 이상. 새 상자는 주소와 상관없이 하한 이상이어야 뜹니다. 제자리 전환으로 아래로 되돌리면 같은 전환에서 `clip_internal_url = ""`(규칙은 하나 — 사이드카 · 묶음 가운데 하나라도 아래면 주소를 비운다) |
+| user_data(모듈 — `prod/media` 를 apply 하는 커밋) | 하한 아래 모듈은 주소 · 토큰 env · bind 를 렌더하지 않습니다 — 사이드카가 `no_url` 로 만료를 꺼서 안전합니다. tfvars 의 `clip_internal_url` 는 선언 안 된 변수 경고로만 남습니다. 짝을 만든 뒤라면 그 판의 plan 에 Media ↔ clip SG 짝 둘의 삭제가 보입니다 | 제한 없음. 경고를 피하려면 그 판의 tfvars 에서 줄을 뺍니다 |
+
+*   `create_host_path: true` 받침은 **제자리 전환에서만** 효과가 있습니다.
+    새 상자는 부트스트랩의 필수 파일 확인이 먼저 막습니다(정본은
+    `modules/media_host/templates/bootstrap.sh.tftpl` 의 `REQUIRED_FILES`).
+*   **제자리 전환에도 같은 규칙입니다.** 떠 있는 상자의 묶음 · compose
+    렌더본을 바꿀 때, 사이드카나 묶음 가운데 하나라도 하한 아래면 주소 줄
+    없는 렌더본으로 바꿉니다 — 「제자리 전환 선행」 2 에서 tfvars 의
+    `clip_internal_url` 을 비운 뒤 렌더본을 뽑고, 3 의 diff 에
+    `CLIP_INTERNAL_URL` · `CLIP_EXPIRY_TOKEN_FILE` 줄이 없어야 합니다.
+*   하한 이상끼리의 되돌림은 주소를 그대로 둬도 됩니다. 만료를 멈추는 것은
+    스위치(끔)입니다.
+
+### 하한 아래로 되돌리기(K-g)
+
+하한 아래 사이드카는 스위치를 모릅니다. 그래서 그 사이드카의 만료를 끄는
+길은 주소를 비우는 것 하나입니다.
+
+1.  DB 스위치를 끕니다(런타임 1단-가 런북 「만료 스위치 손 SQL」 의 끔).
+    하한 이상 사이드카가 떠 있는 동안 지우기를 멈춥니다.
+1.  같은 「설정 반영 교체」(또는 「제자리 전환」)에서 tfvars 를
+    `clip_internal_url = ""` 로 두고 하한 아래 다이제스트를 넣습니다. 주소와
+    다이제스트를 다른 교체로 나누지 않습니다. **묶음(`image_digests.bundle`)을
+    하한 아래로 내리는 새 상자 교체는 `prod/media` 를 apply 하는 커밋(모듈)도
+    POK-551 전 판일 때만 됩니다** — 그 뒤 판의 모듈로 띄우면 부트스트랩이
+    `bin/lib/clip_expiry.sh` 가 없어 멈춥니다(위 「만료 하한 칸별 규칙」 의
+    설치 묶음 행). 모듈을 그대로 둘 때는 「제자리 전환」 으로 내립니다.
+    사이드카만 내릴 때는 두 길 모두 됩니다.
+1.  새 상자(또는 전환한 A)에서 아래 「만료 확인 스크립트」 를 `no_url` 로
+    돌려 `EXPIRY NO_URL OK` 를 봅니다. 아니면 그 상자를 서비스에 넣지
+    않고(제자리 전환이면 원복) kty 에게 보고합니다.
+
+다시 앞으로 갈 때는 하한 이상 다이제스트로 교체한 뒤 런타임 1단-가 런북
+「1단-나 ③」 5(주소 켜기)부터 다시 합니다.
+
+### 만료 확인 스크립트
+
+`expiry-check.sh <started|no_url>` 는 실행 중 사이드카 하나의 **지금
+프로세스**가 낸 만료 기동 줄과 스위치 값을 읽습니다. 기동 줄은 프로세스마다
+`expiry_started` 와 `expiry_disabled`(사유 하나) 가운데 하나입니다. 스위치는
+전환 때만 한 줄(WARN `expiry_switch value=0|1`)이라 마지막 줄의 값이 지금
+값입니다.
+
+```shell
+cat > "${work}/expiry-check.sh" <<'SH'
+fail() { echo "EXPIRY CHECK FAIL $1"; exit 2; }
+[ "$#" -eq 1 ] || fail usage
+case "$1" in
+  started) want=started; tag=STARTED ;;
+  no_url) want=disabled_no_url; tag=NO_URL ;;
+  *) fail usage ;;
+esac
+ids="$(docker ps -q --no-trunc --filter status=running \
+  --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+[ "${running}" = 1 ] || fail "running ${running}"
+# 같은 컨테이너가 다시 시작하면 앞 프로세스의 줄이 남는다 — 지금 프로세스의
+# 시작 시각(State.StartedAt) 뒤 줄만 본다(edge-check.sh 와 같은 꼴).
+started_at="$(docker inspect --format '{{.State.StartedAt}}' "${ids}")" \
+  || fail inspect
+since="$(date -d "${started_at}" +%s)" || fail started-at
+log="$(journalctl -t pokeclip-media-sidecar "CONTAINER_ID_FULL=${ids}" \
+  --since "@${since}" -q --no-pager -o cat)" || fail journal
+# 사유는 따옴표까지 대조한다 — privilege 가 privilege_check 에 걸리지 않는다.
+state=none
+if printf '%s\n' "${log}" | grep -qF '"msg":"expiry_started"'; then
+  state=started
+fi
+for r in no_url no_bucket publish_degraded privilege privilege_check \
+  token_file s3_client assembly; do
+  if printf '%s\n' "${log}" | grep -F '"msg":"expiry_disabled"' \
+    | grep -qF "\"reason\":\"${r}\""; then
+    state="disabled_${r}"
+  fi
+done
+switch="$(printf '%s\n' "${log}" | grep -F '"msg":"expiry_switch"' \
+  | sed -n 's/.*"value":\([01]\).*/\1/p' | tail -n 1)"
+if printf '%s\n' "${log}" | grep -F '"msg":"expiry_switch_read_failed"' \
+  | tail -n 1 | grep -qF '"value":1'; then
+  switch=read_failed
+fi
+# 폴링은 실패할 때만 줄을 낸다 — 마지막 실패의 status 와 고착 게이지의 마지막 값.
+poll="$(printf '%s\n' "${log}" | grep -F '"msg":"expiry_poll"' \
+  | sed -n 's/.*"status":"\([^"]*\)".*/\1/p' | tail -n 1)"
+stalled="$(printf '%s\n' "${log}" | grep -F '"msg":"expiry_stalled"' \
+  | sed -n 's/.*"value":\([01]\).*/\1/p' | tail -n 1)"
+echo "SINCE ${since}"
+echo "EXPIRY ${state}"
+echo "SWITCH ${switch:-none}"
+echo "POLL fail=${poll:-none} stalled=${stalled:-none}"
+if [ "${state}" = "${want}" ]; then echo "EXPIRY ${tag} OK"; exit 0; fi
+echo "EXPIRY ${tag} NOT OK"
+exit 1
+SH
+media_ssm <상자 키> "${work}/expiry-check.sh" started
+```
+
+*   `started` 통과 = `EXPIRY STARTED OK`. 이어서 `SWITCH` 를 봅니다 — 켜기
+    전 `0`, 켠 뒤 10분 안에 `1` 입니다. `read_failed` 는 스위치 표를 읽지
+    못하는 것(운영 SQL 전 · 권한)이고 만료는 꺼진 채입니다. `none` 은
+    만료기가 아직 첫 회차를 돌지 않은 것입니다 — 잠시 뒤 다시 봅니다.
+*   `POLL` 은 폴링 실패의 흔적입니다 — 성공한 폴링은 줄이 없어서, `fail` 은
+    지금 프로세스의 **마지막 실패** status(`401` · `403` · `transport` ·
+    `timeout` 등)이고 그 뒤에 성공했을 수 있습니다. 지금도 막혔는지는
+    `stalled` 로 봅니다(`1` 이면 세 번 이어 실패한 채, `0` 이면 그 뒤 회복).
+    켠 뒤 첫 회차가 지나 `fail=none` · `stalled=none` 이 기대이고, 스위치가
+    꺼진 동안은 폴링이 없어 새 값이 생기지 않습니다. 판정(종료 코드)에는
+    넣지 않습니다.
+*   `no_url` 통과 = `EXPIRY NO_URL OK`(K-g 3).
+*   `EXPIRY disabled_token_file` 은 토큰 파일을 읽지 못한 것입니다(받기
+    실패 · 하한 아래 묶음). 시작 스크립트는 이때 판정 줄을 내지 않으므로
+    이 줄이 유일한 신호입니다. 그 밖의 사유는 media README 「60일 만료」
+    입니다. `EXPIRY none` 은 그 줄까지 오지 못한 것이라 잠시 뒤 다시 봅니다.
+*   `EXPIRY CHECK FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
+*   이 스크립트는 아직 시험이 뽑아 돌리지 않습니다(`edge-check.sh` 와 같음).
+
+### 만료 창구 탐침
+
+스위치가 꺼진 동안 만료기는 clip 을 부르지 않습니다. 그래서 켜기 전에
+`expiry-probe.sh` 로 그 길을 한 번 봅니다 — 실행 중 사이드카 컨테이너 안에서
+(곧 같은 망 칸 · 같은 이름 풀이로) 만료 창구에 **진짜 토큰 없이** GET 을
+보냅니다. 전용 머리글 `X-Expired-Broadcasts-Token` 에는 토큰이 아닌 고정
+글자를 싣습니다. 머리글이 없으면 clip 의 공용 내부 체인이 받아 출발지를 보지 않고
+401 을 내기 때문입니다. 전용 체인은 출발지(403)를 먼저, 토큰(401)을 다음에
+보므로 401 이 이름 풀이 · SG · 출발지 대역이 모두 맞다는 뜻입니다. 비밀이
+지나가지 않고, clip 은 그 요청을 필터에서 돌려보내 아무것도 읽지 않습니다.
+
+**전제 — clip 창구가 열린 뒤에 돌립니다.** 런타임 1단-가 런북 「1단-나 ③」
+2(전용 토큰 값 넣기)와 3(platform apply 뒤 clip 옛 태스크 교체 완료)이 끝난
+다음입니다. 창구가 닫혀 있으면(clip 의 토큰이 빔) clip 은 출발지를 보지 않고
+늘 401 을 내므로(`ExpiredBroadcastSecurityConfig` 의 닫힘 갈래), 배선이
+틀려도 정상과 구별되지 않습니다.
+
+```shell
+cat > "${work}/expiry-probe.sh" <<'SH'
+fail() { echo "EXPIRY PROBE FAIL $1"; exit 2; }
+[ "$#" -eq 1 ] || fail usage
+case "$1" in
+  http://*|https://*) ;;
+  *) fail usage ;;
+esac
+ids="$(docker ps -q --no-trunc --filter status=running \
+  --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=sidecar)" || fail docker
+running="$(printf '%s\n' "${ids}" | awk 'NF { n++ } END { print n + 0 }')"
+[ "${running}" = 1 ] || fail "running ${running}"
+# BusyBox wget — -S 가 응답 머리를 표준 오류로 내고, 2xx 밖이면 종료가 0 이
+# 아니다. 상태 코드는 머리의 HTTP 줄에서 읽는다.
+out="$(docker exec "${ids}" wget -q -S -T 5 -O /dev/null \
+  --header 'X-Expired-Broadcasts-Token: probe-not-a-token' \
+  "$1/internal/broadcasts/expired" 2>&1)"
+code="$(printf '%s\n' "${out}" \
+  | sed -n 's/^ *HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' | tail -n 1)"
+echo "PROBE ${code:-none}"
+if [ -z "${code}" ]; then
+  printf '%s\n' "${out}" | tail -n 1 | sed 's/^/PROBE ERR /'
+fi
+if [ "${code}" = 401 ]; then echo "EXPIRY PROBE OK"; exit 0; fi
+echo "EXPIRY PROBE NOT OK"
+exit 1
+SH
+media_ssm <상자 키> "${work}/expiry-probe.sh" http://clip.pokeclip.internal:8081
+```
+
+*   인자는 그 상자 tfvars 의 `clip_internal_url` 값 그대로입니다.
+*   통과 = `PROBE 401` · `EXPIRY PROBE OK`.
+*   `PROBE 403` 은 출발지 대역(`EXPIRED_BROADCASTS_ALLOWED_CIDRS`)이 이 상자
+    서브넷과 다른 것입니다. `PROBE none` 이면 `PROBE ERR` 줄이 까닭입니다 —
+    `bad address` 는 이름 풀이, 연결 실패 · 시간 초과는 SG 짝(런타임
+    1단-가 런북 「1단-나 ③ 4」)입니다. 그 밖의 코드는 clip 창구 · 판을
+    봅니다. 어느 쪽이든 스위치를 켜지 않고 kty 에게 보고합니다.
+*   `EXPIRY PROBE FAIL <단계>` 는 판정이 아닙니다 — 다시 봅니다.
+*   이 스크립트도 시험이 뽑아 돌리지 않습니다.
+
+### 만료 영구 미룸
+
+만료는 구간을 앞으로 품을 수 있는 회차 · 사슬이 아직 VOD 를 확정할 수
+있으면 그 방송을 지우지 않고 다음 회차로 미룹니다(WARN `expiry_deferred
+value=1` — 방송마다 미뤄질 때 · 풀릴 때 한 줄씩). 그 단위가 끝내 확정되지
+않으면 미룸이 영구가 되고, 그 스트림의 옛 방송이 보존 기간을 넘겨 남습니다.
+지우는 쪽보다 안전해 받아들인 한계입니다(media README 「60일 만료」).
+
+*   **언제 봅니다:** 같은 방송의 `expiry_deferred value=1` 뒤 `value=0` 이
+    하루 넘게 나오지 않을 때입니다. 회차 고착은 WARN
+    `session_vod_round_wait_long` 과 짝이고, `wait` 값이 까닭을 가릅니다.
+    *   `wait=round_open`: 회차가 아직 닫히지 않았습니다.
+    *   `wait=front_pending`: 회차는 닫혔지만 앞 사슬의 VOD 가 아직 종국이
+        아닙니다.
+
+    그 줄에는 `stream_id` 가 없습니다(`session_id` · `round` · `wait` 뿐).
+    같은 스트림의 줄인지는 아래 미룸 질의가 내는 `session_id` · `round_id`
+    와 대조합니다. 짝이 없으면 사슬이 `ending` ∧ VOD `none` 에 머문 고착일
+    수 있습니다.
+*   **읽기:** 런타임 1단-가 런북 「만료 미룸 질의」 로 그 스트림의 미정
+    단위를 봅니다.
+*   **처분:** kty 회부(멈춤 자리)입니다. 고착을 푸는 손 SQL 은 두지
+    않습니다. 회차 VOD 대기의 뜻은 media README 「회차 VOD 동결 시점과
+    대기」 · 「회차 VOD 알려진 한계」 입니다.
+*   **스위치와 무관합니다.** 끄면 미룸 판정도 돌지 않을 뿐, 고착은 그대로
+    남습니다.
+
+## 대리 창구 하한 · 켬 상자
+
+POK-574(IMDS 대리 창구)의 배포 · 확인 · 되돌리기 규칙입니다. 상자 키마다
+`instances` 원소의 `cred_relay`(기본 끔)로 켭니다. 켬 상자는 IMDS 홉 상한이
+1 이라 컨테이너가 IMDS 토큰을 받지 못하고, 호스트 망의 중계(`cred-relay`)가
+창구 토큰을 가진 사이드카 · janitor 에게만 역할 자격을 줍니다. 결정은
+[ADR-0008](/docs/decisions/2026-11-15-media-imds-credential-relay.md), 상자 위
+동작 · 신호는 media-host README 「IMDS 대리 창구」 가 정본입니다.
+
+```hcl
+instances = {
+  a = { config_version = "1" }                      # 끔(값 없음)
+  b = { config_version = "2", cred_relay = true }   # 켬
+}
+```
+
+용어:
+
+*   **대리 창구 하한**: POK-574 머지 커밋을 조상으로 둔 커밋으로 빌드한
+    이미지입니다. 그 앞 커밋의 빌드가 하한 아래입니다.
+*   **켬 키 · 끔 키**: `cred_relay = true` 인 상자 키와 그 밖(값 없음 포함)의
+    키입니다. 한 키의 값은 그 상자가 떠 있는 동안 바꾸지 않습니다.
+
+### 대리 창구 하한 판정
+
+판정 명령은 「만료 하한 판정」 과 같은 꼴입니다. 사이드카 · 설치 묶음 모두
+라벨이 없어 빌드 출처로 봅니다.
+
+```shell
+git fetch origin
+git merge-base --is-ancestor <POK-574 머지 커밋 SHA> <이미지의 빌드 커밋 SHA> \
+  && echo '창구 하한 이상' || echo '창구 하한 아래'
+git log --oneline --grep='^Revert' <POK-574 머지 커밋 SHA>..<빌드 커밋 SHA>
+# 기대: POK-574 를 되돌린 줄 없음
+git cat-file -e <사이드카 빌드 커밋 SHA>:media/cmd/cred-relay/main.go \
+  && echo 'relay present'
+git cat-file -e <묶음 빌드 커밋 SHA>:infra/media-host/bin/lib/cred_relay.sh \
+  && echo 'token installer present'
+# 기대: 각각 present
+```
+
+POK-574 를 되돌린(revert) 커밋 뒤의 빌드도 머지 커밋을 조상으로 두어 「하한
+이상」 으로 나옵니다. 그래서 되돌림 줄과 파일 존재를 함께 봅니다.
+
+### 대리 창구 하한 칸별 규칙
+
+| 칸 | 하한 아래이면 생기는 일 | 규칙 |
+|---|---|---|
+| `image_digests.sidecar` | **켬 키만:** 판 2 라벨이 없는 사이드카(c0 아래 · 받기 실패에 로컬에도 없음)는 유닛 저널 `MEDIA START BLOCKED: cred-relay needs sidecar timing v2 label=<라벨\|none\|invalid>` 로 막힙니다. **판 2 는 있지만 창구 하한 아래인 사이드카는 이 줄 없이 지나가고**, 이미지에 중계 명령(`/usr/local/bin/cred-relay`)이 없어 중계 컨테이너가 진입점 실행 실패(종료 127)로 서지 않습니다. 실측(POK-574 M2(2026-11-16) — 유닛을 먼저 멈추고 축약 시작 스크립트(실제와 같은 창구 준비 · 같은 compose up — 선행 점검 · CDN 비밀 · MediaMTX 렌더 · 응답기 · 만료 토큰 · 라벨 검사(`check_timing_preflight`)는 뺌 — 라벨 통과는 코드에서 온 서술)를 유닛 밖에서 단독 실행): 그 스크립트(그 안의 compose up) 종료 1 · MediaMTX 만 서고 nginx · 사이드카 · janitor · 중계는 서지 않음. 유닛 정의(`Restart=always` · `RestartSec=20` · `ExecStopPost` 정리)로는 시작 실패 → 정리 → 20초 뒤 재시도를 되풀이하며 방송을 받지 못합니다 — 유닛 안 재시도 순환 자체는 실측하지 않았습니다. 유닛이 계속 재시작 중인지(`systemctl show -P ActiveState` · `NRestarts`)와 서비스 상태로 드러나고, 기동 판정에서 먼저 드러납니다. 끔 키는 중계를 렌더하지 않아 이 하한이 없습니다 | 켬 키는 하한 이상. 아래로 되돌리는 교체는 끔 키로 합니다(아래 「대리 창구 롤백」) |
+| `image_digests.bundle`(설치 묶음) | **새 상자(켬 · 끔 모두):** 이 판의 모듈(POK-574 이후 `prod/media`)로 띄우면 부트스트랩이 필수 파일 `bin/lib/cred_relay.sh` 가 없어 멈춥니다 — cloud-init 출력에 `MEDIA BOOTSTRAP missing bin/lib/cred_relay.sh` · `MEDIA BOOTSTRAP FAIL bundle`. **켬 상자의 제자리 전환:** 제자리 전환은 부트스트랩 필수 파일 확인을 지나지 않습니다. 옛 시작 스크립트는 창구 토큰 디렉터리를 만들지 않고 주소도 붙이지 않아, 중계 bind(`create_host_path: false`)가 실패합니다. 실측(POK-574 M2(2026-11-16) — 유닛을 먼저 멈추고 중계 bind 원본이 없는 채 compose up 을 유닛 밖에서 단독 실행): compose up 종료 1 · MediaMTX · nginx · 사이드카 · janitor · 중계 모두 서지 않음. 유닛 정의(`Restart=always` · `RestartSec=20` · `ExecStopPost` 정리)로는 시작 실패 → 정리 → 20초 뒤 재시도를 되풀이하며 송출 · 재생까지 멈춥니다(유닛 전체 중단) — 유닛 안 재시도 순환 자체는 실측하지 않았습니다. 유닛이 계속 재시작 중인지(`systemctl show -P ActiveState` · `NRestarts`)와 서비스 상태로 드러나고, 기동 판정에서 먼저 드러납니다 | 하한 이상. 새 상자는 키와 상관없이 하한 이상이어야 뜹니다. **켬 상자의 제자리 전환은 사이드카 · 묶음이 둘 다 하한 이상일 때만** 합니다 |
+| user_data(모듈 — `prod/media` 를 apply 하는 커밋) | 하한 아래 모듈에는 `cred_relay` 가 없습니다. 그 판으로 켬 키를 apply 했을 때 값이 어떻게 다뤄지는지는 확인하지 않았습니다 | 켬 키는 하한 이상 모듈로만 apply 합니다. 모듈을 하한 아래로 되돌리기 전에 켬 키를 모두 회수합니다 |
+
+### 대리 창구 켬 상자 확인
+
+켬 키 B 를 「정상 교체」 2 로 띄운 뒤 서비스에 넣기 전에 봅니다. 순서는 ①
+→ ③ → 「정상 교체」 3(루프백) → `cred-check.sh swap`(②④⑤⑥) → ⑦ 입니다.
+하나라도 통과하지 못하면 B 를 서비스에 넣지 않고 회수한 뒤 kty 에게
+보고합니다. 상자 명령은 걸음마다 실행 직전에 kty 가 승인하고, 기록에는 판정
+줄만 남깁니다(계정 ID · 인스턴스 ID 는 가립니다 — 이 런북 머리).
+
+| # | 무엇 | 통과 |
+|---|---|---|
+| ① | IMDS 설정 — 떠 있는 모든 키(아래 읽기 — 승인 불요) | 키마다 `<키> <홉> required disabled enabled` 이고, 홉은 그 키의 tfvars `cred_relay` 값대로입니다 — 켬 1 · 끔(값 없음 포함) 2. A 가 끔이면 `<A> 2`, A 도 켬이면(켬 상자끼리 교체 · 켬 상자의 사이드카 · 묶음 교체) `<A> 1` 입니다. `IMDS READ FAIL` 줄 0 |
+| ② | 주소 · 중계 헬스(`CRED_ADDR` · `CRED_HEALTH`) | `1` · `healthy` |
+| ③ | MediaMTX 망 칸에서 격리 확인(`cred-isolation.sh`) | `CRED ISOLATION imds_token=blocked relay=401` · `CRED_ISOLATION_EXIT 0` · `CRED_LEFTOVER 0` |
+| ④ | 소비자의 자격 원천이 창구(`CRED_ENDPOINT`) · DB 연결 | `CRED_ENDPOINT` 1 이상 · 기동 판정의 `SIDECAR_DB` · `JANITOR_DB` 1 이상(auth=iam · tls=true) |
+| ⑤ | 루프백 뒤 업로드(`CRED_UPLOADED` · `CRED_UPLOAD_FAILED`) | 1 이상 · 0 |
+| ⑥ | 운영 판정 다섯(media-host README 「대리 창구 운영 판정」) · 소비자별 첫 자격 | `CRED_EXPIRED_TOKEN` · `CRED_DEGRADED` · `CRED_RELAY_FAILED` · `CRED_SIDECAR_UNAVAILABLE` · `CRED_EXPIRES_BAD` · `CRED_REFRESH_BAD` 0 · `CRED_SERVED_INDEXER` · `CRED_SERVED_JANITOR`(janitor 를 켰을 때) 1 이상 · `CRED_DENIED`(거부 `count` 합) ③ 을 돈 횟수 이하 |
+| ⑦ | `secret-count.sh box`(중계 토큰 둘 + 지금 역할 자격 포함) | `SECRET COUNT box 0` |
+
+① IMDS 설정 — kty 로컬에서 떠 있는 키를 모두 읽습니다. 인스턴스 ID 는 출력하지
+않습니다. 줄마다 tfvars 의 그 키 `cred_relay` 와 대조합니다.
+
+```shell
+keys="$(media_ids | jq -er 'keys[]')" || echo 'IMDS READ FAIL keys'
+for k in $(printf '%s\n' "${keys}"); do
+  id="$(media_ids | jq -er --arg k "$k" '.[$k]')" \
+    || { echo "${k} IMDS READ FAIL id"; continue; }
+  opts="$(aws ec2 describe-instances --instance-ids "$id" --query \
+    'Reservations[0].Instances[0].MetadataOptions.[HttpPutResponseHopLimit,HttpTokens,HttpProtocolIpv6,HttpEndpoint]' \
+    --output text 2>/dev/null)" \
+    || { echo "${k} IMDS READ FAIL describe"; continue; }
+  echo "${k} ${opts}"
+done
+```
+
+*   읽기에 실패한 키는 건너뛰지 않고 `<키> IMDS READ FAIL <단계>` 줄을
+    냅니다(키 목록 자체를 못 읽으면 `IMDS READ FAIL keys`). 이 줄이 있으면
+    ① 은 통과가 아닙니다. aws 의 오류 출력은 인스턴스 ID 를 담을 수 있어
+    버립니다 — 까닭은 같은 명령을 키 하나로 손으로 다시 돌려 봅니다.
+
+③ 격리 확인 — MediaMTX 망 칸에 중계 이미지(지금 중계 컨테이너의 이미지)의
+`isolation-check` 를 비root · cap 없음 · 읽기 전용 루트로 한 번 띄웁니다.
+라벨 `com.pokeclip.check=cred-isolation` 으로 남은 컨테이너 0 을 셉니다.
+`docker inspect` 는 이미지 참조를 읽는 데만 쓰고 출력하지 않습니다.
+
+```shell
+cat > "${work}/cred-isolation.sh" <<'SH'
+fail() { echo "CRED ISOLATION CHECK FAIL $1"; exit 2; }
+pick() {  # pick <서비스> — 그 compose 서비스의 실행 중 컨테이너.
+  docker ps -q --filter label=com.docker.compose.project=pokeclip-media \
+    --filter "label=com.docker.compose.service=$1" --filter status=running
+}
+mtx="$(pick mediamtx)" || fail docker
+relay="$(pick cred-relay)" || fail docker
+[ "$(printf '%s\n' "${mtx}" | grep -c .)" -eq 1 ] || fail mediamtx
+[ "$(printf '%s\n' "${relay}" | grep -c .)" -eq 1 ] || fail cred-relay
+image="$(docker inspect --format '{{.Config.Image}}' "${relay}" 2>/dev/null)" \
+  || fail image
+[ -n "${image}" ] || fail image
+docker run --rm --pull never --label com.pokeclip.check=cred-isolation \
+  --network "container:${mtx}" --user 65534:65534 --cap-drop ALL \
+  --read-only --security-opt no-new-privileges \
+  --entrypoint /usr/local/bin/cred-relay "${image}" isolation-check 2>/dev/null
+code=$?
+left="$(docker ps -aq --filter label=com.pokeclip.check=cred-isolation)" \
+  || fail leftover
+echo "CRED_ISOLATION_EXIT ${code}"
+echo "CRED_LEFTOVER $(printf '%s' "${left}" | grep -c .)"
+if [ "${code}" -eq 0 ] && [ -z "${left}" ]; then
+  echo "CRED ISOLATION CHECK OK"; exit 0
+fi
+echo "CRED ISOLATION CHECK NOT OK"
+exit 1
+SH
+media_ssm b "${work}/cred-isolation.sh"
+```
+
+*   `isolation-check` 의 종료는 격리됨 0 · 격리 안 됨 1(IMDS 토큰을 받음 ·
+    창구가 401 이 아닌 답) · 판정 못 함 2 입니다. 이 확인이 중계에 토큰 없는
+    요청을 하나 보내므로 중계 저널에 `cred_denied reason=missing` 이 남습니다.
+
+`cred-check.sh swap <서비스 집합> <③ 횟수>` · `cred-check.sh watch <서비스
+집합> <시작 유닉스 초> <③ 횟수>`(②④⑤⑥). 서비스 집합은 기동 판정과 같고,
+③ 횟수는 그 창 안에서 ③ 을 돈 횟수입니다(감시 중 ③ 을 돌지 않았으면 0).
+거부 수의 판정 기준입니다. 중계 저널은 시각(유닉스 초)이 붙은 꼴(`-o
+short-unix`)로 읽어 ⑥ 의 「30분 안」 을 잽니다.
+
+*   **`swap`(교체 확인):** 이번 기동(유닛이 active 가 된 시각) 이후의 줄만
+    셉니다. 업로드(`CRED_UPLOADED` 1 이상) · 소비자별 첫 자격
+    (`CRED_SERVED_*`) · 자격 원천(`CRED_ENDPOINT`)을 판정에 넣습니다.
+*   **`watch`(활성 뒤 운영 감시):** 인자로 준 시각(감시 시작 —
+    `date +%s`) 이후의 줄을 셉니다. 그사이 유닛이 다시 떠도 앞 기동의
+    `ExpiredToken` · 저하 · 실패 줄이 창에 남습니다. 업로드 · 첫 자격 ·
+    자격 원천은 방송 · 요청 유무와 기동 시각에 달려 기록만 합니다(판정은
+    ② 와 운영 판정 다섯). 시작값은 10자리 이상인 유닉스 초만 받습니다 —
+    ③ 횟수와 자리를 바꿔 넣으면 `CRED CHECK FAIL usage` 입니다.
+
+```shell
+cat > "${work}/cred-check.sh" <<'SH'
+fail() { echo "CRED CHECK FAIL $1"; exit 2; }
+bad=""
+judge() { echo "$1 $2"; [ "$2" = "$3" ] || bad="${bad} $1"; }
+at_least() { echo "$1 $2"; [ "$2" -ge "$3" ] 2>/dev/null || bad="${bad} $1"; }
+# count <로그> <조각> … — 조각(최대 셋)을 모두 품은 줄 수.
+count() {
+  printf '%s\n' "$1" | awk -v a="$2" -v b="${3:-}" -v c="${4:-}" '
+    index($0, a) && (b == "" || index($0, b)) && (c == "" || index($0, c)) {
+      n++ }
+    END { print n + 0 }'
+}
+# need <이름> <값> <기준> — swap 이면 판정(1 이상), watch 면 기록만.
+need() {
+  if [ "${mode}" = swap ]; then at_least "$1" "$2" "$3"; else echo "$1 $2"; fi
+}
+# 숫자만 받는다(빈 값 · 부호 · 글자 거부).
+number() { case "$1" in '' | *[!0-9]*) return 1 ;; esac; }
+mode="${1:-}"
+case "${mode}:$#" in
+  swap:3)
+    checks="$3"
+    since="$(systemctl show -P ActiveEnterTimestamp pokeclip-media)" \
+      || fail since
+    ;;
+  watch:4)
+    # 시작값은 유닉스 초 10자리 이상이다 — ③ 횟수와 자리를 바꿔 넣으면
+    # 저널 전체를 읽고 거부 상한이 사실상 꺼지므로 막는다.
+    number "$3" && [ "$3" -ge 1000000000 ] 2>/dev/null || fail usage
+    checks="$4"
+    since="@$3"
+    ;;
+  *) fail usage ;;
+esac
+number "${checks}" || fail usage
+[ -n "${since}" ] || fail since
+echo "CRED_MODE ${mode}"
+relay_log="$(journalctl -q -t pokeclip-media-cred-relay --since "${since}" \
+  -o short-unix --no-pager)" || fail journal
+sidecar_log="$(journalctl -q -t pokeclip-media-sidecar --since "${since}" \
+  -o cat --no-pager)" || fail journal
+janitor_log="$(journalctl -q -t pokeclip-media-janitor --since "${since}" \
+  -o cat --no-pager)" || fail journal
+relay="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=cred-relay)" || fail docker
+judge CRED_ADDR "$(ip -4 -o addr show dev pokeclip-cred0 2>/dev/null \
+  | grep -c ' 169\.254\.170\.2/32 ')" 1
+judge CRED_HEALTH "$(docker inspect --format '{{.State.Health.Status}}' \
+  "${relay}" 2>/dev/null)" healthy
+need CRED_ENDPOINT "$(count "${sidecar_log}" '"msg":"credentials_ok"' \
+  '"provider":"CredentialsEndpointProvider"')" 1
+need CRED_UPLOADED "$(count "${sidecar_log}" '"msg":"segment_uploaded"')" 1
+judge CRED_UPLOAD_FAILED "$(count "${sidecar_log}" '"msg":"upload_failed"')" 0
+judge CRED_EXPIRED_TOKEN "$(count "$(printf '%s\n%s' "${sidecar_log}" \
+  "${janitor_log}")" 'ExpiredToken')" 0
+judge CRED_DEGRADED "$(count "${relay_log}" '"msg":"cred_source_degraded"' \
+  '"value":1')" 0
+judge CRED_RELAY_FAILED "$(count "${relay_log}" '"msg":"cred_relay_failed"')" 0
+judge CRED_SIDECAR_UNAVAILABLE "$(count "${sidecar_log}" \
+  '"msg":"credentials_unavailable"')" 0
+# 보낸 Expiration 이 3600 초를 넘거나 실제 남은 수명보다 긴 cred_served 줄 수.
+# 두 필드 가운데 하나라도 없는 줄도 나쁜 줄로 센다.
+judge CRED_EXPIRES_BAD "$(printf '%s\n' "${relay_log}" | awk '
+  index($0, "\"msg\":\"cred_served\"") {
+    e = $0; sub(/.*"expires_in_s":/, "", e)
+    s = $0; sub(/.*"source_expires_in_s":/, "", s)
+    if (!index($0, "\"expires_in_s\":") ||
+      !index($0, "\"source_expires_in_s\":") || e + 0 > 3600 ||
+      e + 0 > s + 0) n++ }
+  END { print n + 0 }')" 0
+# 이웃한 from=imds 두 줄이 30분 안이면 뒤 줄은 refresh=window|initial 이어야
+# 한다. 줄 시각은 원천 호출이 끝난 뒤라 주기 재조회 쌍도 원천 상한(2초)만큼
+# 30분보다 짧게 찍힐 수 있다 — 그래서 1798초로 견준다.
+judge CRED_REFRESH_BAD "$(printf '%s\n' "${relay_log}" | awk '
+  index($0, "\"msg\":\"cred_served\"") && index($0, "\"from\":\"imds\"") {
+    t = $1 + 0
+    if (seen && t - prev < 1798 && !index($0, "\"refresh\":\"window\"") &&
+      !index($0, "\"refresh\":\"initial\"")) n++
+    seen = 1; prev = t }
+  END { print n + 0 }')" 0
+need CRED_SERVED_INDEXER "$(count "${relay_log}" '"msg":"cred_served"' \
+  '"caller":"indexer"')" 1
+case ",$2," in
+  *,janitor,*)
+    need CRED_SERVED_JANITOR "$(count "${relay_log}" '"msg":"cred_served"' \
+      '"caller":"janitor"')" 1
+    ;;
+esac
+# 거부 수 — 거부 줄은 10초에 한 줄이고 그사이 억제된 거부는 다음 줄의 count
+# 에 실린다. 그래서 줄 수가 아니라 줄마다 count 를 더한다(count 가 없는 줄은
+# 1 로 센다). ③ 하나가 거부 하나를 낸다. 줄 수는 기록만 하고 판정은 합이다.
+at_most() { echo "$1 $2"; [ "$2" -le "$3" ] 2>/dev/null || bad="${bad} $1"; }
+echo "CRED_DENIED_LINES $(count "${relay_log}" '"msg":"cred_denied"')"
+at_most CRED_DENIED "$(printf '%s\n' "${relay_log}" | awk '
+  index($0, "\"msg\":\"cred_denied\"") {
+    c = $0
+    if (sub(/.*"count":/, "", c)) n += c + 0; else n++ }
+  END { print n + 0 }')" "${checks}"
+# 기록만 한다(판정 아님).
+echo "CRED_UNAVAILABLE $(count "${relay_log}" '"msg":"cred_unavailable"')"
+echo "CRED_SERVER_ERROR $(count "${relay_log}" \
+  '"msg":"cred_relay_server_error"')"
+if [ -z "${bad}" ]; then echo "CRED CHECK OK"; exit 0; fi
+echo "CRED CHECK NOT OK${bad}"
+exit 1
+SH
+media_ssm b "${work}/cred-check.sh" swap \
+  cred-relay,janitor,mediamtx,nginx,sidecar <③ 횟수>
+# 운영 감시 — 감시 시작 때 한 번 date +%s 로 적어 둔 값을 그대로 넘깁니다.
+media_ssm b "${work}/cred-check.sh" watch \
+  cred-relay,janitor,mediamtx,nginx,sidecar <감시 시작 유닉스 초> <③ 횟수>
+```
+
+*   `CRED_DENIED` 는 거부 줄마다 실린 `count` 의 합이고, 그 합이 ③ 을 돈
+    횟수 이하여야 합니다(`CRED_DENIED_LINES` 는 줄 수 — 기록만). 넘으면 망
+    칸 이웃이 창구를 두드린 것이니 kty 에게 보고합니다.
+*   **한계 — 꼬리:** 마지막 거부 줄 뒤 10초 안의 거부는 다음 거부가 와서
+    줄이 나기 전까지 저널 어디에도 없습니다. 그래서 돌리는 시점의 마지막
+    10초 몫은 셈에 들지 않을 수 있습니다.
+*   **한계 — 출발지:** 줄의 `remote` · `reason` 은 그 줄을 낸 요청 하나의
+    것입니다. 억제된 거부의 출발지 · 까닭은 남지 않아, ③ 의 줄에 실린
+    이웃 거부는 수만 알고 누가 두드렸는지는 저널로 가릴 수 없습니다.
+*   `CRED_UNAVAILABLE` 은 기동 직후 첫 원천 호출과 겹친 요청이면 생길 수
+    있습니다(SDK 가 재시도해 `CRED_SIDECAR_UNAVAILABLE` 이 0 이면 무해).
+    `CRED_SERVER_ERROR` 가 0 이 아니면 kty 에게 보고합니다.
+*   `CRED_SERVED_*` 는 소비자가 처음 자격을 받을 때 생깁니다. 사이드카는
+    기동 때 S3 · DB 를 위해 바로 묻고, janitor 는 DB 연결 때 묻습니다.
+*   활성 뒤 운영 감시(24시간)는 `watch` 로 돌립니다(위 두 모드). 감시 시작
+    시각은 감시 내내 같은 값을 씁니다 — 돌릴 때마다 새로 재면 앞 기동의
+    오류가 창에서 빠집니다.
+
+⑦ `secret-count.sh box`:
+
+```shell
+cat > "${work}/secret-box.sh" <<'SH'
+set -a; . /etc/pokeclip-media/media.env; set +a
+/opt/pokeclip-media/bin/secret-count.sh box
+SH
+media_ssm b "${work}/secret-box.sh"
+```
+
+*   대조는 지금 자격 한 벌뿐입니다(media-host README 「운영 확인 스크립트」 의
+    한계). `SECRET COUNT FAIL role-cred` 면 상자 aws CLI 판이
+    `configure export-credentials` 를 아는지부터 봅니다.
+
+### 대리 창구 중계 훈련
+
+활성 전에 고를 수 있는 선택 걸음입니다(kty 승인). 중계가 비정상 종료되면
+엔진이 다시 띄우는지 봅니다. **`docker kill` · `docker stop` 은 쓰지
+않습니다** — 둘 다 엔진의 재시작을 취소해 다시 띄우지 않습니다. 컨테이너 안
+`kill -TERM 1` 도 정상 종료(0)라 다시 띄우지 않습니다. 자극은 호스트에서
+중계 프로세스에 보내는 SIGKILL 입니다(종료 137 → `on-failure`).
+
+```shell
+cat > "${work}/cred-kill.sh" <<'SH'
+fail() { echo "CRED KILL FAIL $1"; exit 2; }
+relay="$(docker ps -q --filter label=com.docker.compose.project=pokeclip-media \
+  --filter label=com.docker.compose.service=cred-relay \
+  --filter status=running)" || fail docker
+[ "$(printf '%s\n' "${relay}" | grep -c .)" -eq 1 ] || fail cred-relay
+before="$(docker inspect --format '{{.RestartCount}}' "${relay}")" \
+  || fail inspect
+pid="$(docker inspect --format '{{.State.Pid}}' "${relay}")" || fail inspect
+[ "${pid}" -gt 1 ] 2>/dev/null || fail pid
+from="$(date +%s)"
+kill -KILL "${pid}" || fail kill
+# up 은 30번 폴링 안에 다시 뜬 것을 봤는지다 — 마지막(30번째) 폴링에서
+# 봐도 waited 가 30 이라, 대기 초가 아니라 이 값으로 가른다.
+waited=0 after="${before}" up=no
+while [ "${waited}" -lt 30 ]; do
+  sleep 1; waited=$((waited + 1))
+  state="$(docker inspect --format '{{.RestartCount}} {{.State.Running}}' \
+    "${relay}")" || continue
+  after="${state%% *}"
+  if [ "${state}" = "$((before + 1)) true" ]; then up=yes; break; fi
+done
+log="$(journalctl -q -t pokeclip-media-cred-relay --since "@${from}" -o cat \
+  --no-pager)" || fail journal
+started="$(printf '%s\n' "${log}" | awk \
+  'index($0, "\"msg\":\"cred_relay_started\"") { n++ } END { print n + 0 }')"
+echo "CRED_RESTARTS ${before} ${after}"
+echo "CRED_WAITED ${waited}"
+echo "CRED_STARTED ${started}"
+if [ "${up}" = yes ] && [ "${started}" -ge 1 ]; then
+  echo "CRED KILL OK"; exit 0
+fi
+echo "CRED KILL NOT OK"
+exit 1
+SH
+media_ssm b "${work}/cred-kill.sh"
+```
+
+*   통과는 `RestartCount` 가 하나 늘고 30초 안에 다시 뜬 것 · 새
+    `cred_relay_started` 1 이상입니다. 다음 `cred_served` 는 소비자가 다시 물을
+    때(최대 약 55분 뒤) 생깁니다 — 그 뒤 `cred-check.sh swap` 을 다시
+    돌립니다. ③ 횟수는 유닛 기동 뒤(중계 재기동 아님) ③ 을 돈 모든
+    횟수입니다 — `swap` 의 창은 유닛이 active 가 된 시각부터라, 중계
+    재기동으로 다시 시작되지 않습니다.
+*   `CRED KILL NOT OK` 이거나 중계가 `docker kill` · `docker stop` 으로 멈춰
+    있으면 `docker start <중계 컨테이너>` 로 복구하고(승인),
+    `cred_relay_started` 와 다음 `cred_served` 를 봅니다. 그래도 안 되면 유닛
+    재시작입니다(송출이 끊깁니다 — kty 승인).
+
+### 대리 창구 롤백
+
+*   A 회수 전이면 대상 그룹을 A 로 되돌립니다(「부분 실패 복구」).
+*   A 회수 뒤면 `cred_relay = false`(또는 값 없음)인 새 키로 「설정 반영
+    교체」 를 합니다(홉 2). **떠 있는 켬 키 B 의 값을 제자리에서 바꾸지
+    않습니다** — `metadata_options` 차분은 위 「plan 범위」 에서 멈춥니다.
+*   창구 하한 아래 사이드카로 되돌리는 교체도 끔 키로 합니다(위 「대리 창구
+    하한 칸별 규칙」).
+*   **설치 묶음(`image_digests.bundle`)을 창구 하한 아래로 내리는 새 상자
+    교체는 `prod/media` 를 apply 하는 커밋(모듈)도 POK-574 전 판일 때만
+    됩니다** — 그 뒤 판의 모듈로 띄우면 키와 상관없이 부트스트랩이
+    `bin/lib/cred_relay.sh` 가 없어 멈춥니다(위 칸별 규칙의 설치 묶음 행).
+    모듈을 전 판으로 되돌리기 전에 켬 키를 모두 회수합니다(같은 표의
+    user_data 행). 모듈을 그대로 둘 때는 끔 상자의 「제자리 전환」 으로
+    내립니다 — 켬 상자는 묶음을 하한 아래로 제자리 전환하지 않습니다. 같은
+    꼴의 만료 절차가 「하한 아래로 되돌리기(K-g)」 입니다.
+*   침해가 의심되면 교체가 아니라 media-host README 「보안 경계」 의 침해 대응
+    (증거 먼저 → 격리 → 정지)을 따릅니다.
 
 ## 한 창 절차
 
@@ -854,7 +3597,7 @@ media_ssm <A> "${work}/stopped-check.sh"
     유닛으로만 — 「시작 · 정지」)입니다. 사이드카 컨테이너만 멈추면 A 의
     mediamtx · nginx 가 끝날 때 유닛(`Restart=always`)이 compose 전체를
     `--force-recreate` 로 다시 띄워 사이드카가 되살아납니다(`start-media.sh`
-    머리 8). 유닛 정지는 ExecStop 이 compose 를 내리고, `Restart=always`
+    머리 9). 유닛 정지는 ExecStop 이 compose 를 내리고, `Restart=always`
     여도 정지를 유지합니다(유닛 머리 주석). 정상 교체 7 뒤라 A 는 어느 대상
     그룹에도 등록돼 있지 않습니다.
 *   유닛은 enable 돼 있어 **A 가 재부팅되면 다시 뜹니다.** 8(A 회수) 전에 A 가
@@ -940,7 +3683,7 @@ mkdir -p "${measure_dir}" && chmod 700 "${measure_dir}"
 | AL2023 arm64 판 docker 25.0.16 | `rpm -q docker amazon-ecr-credential-helper` · `dnf list --showduplicates docker` | 고정 판이 arm64 저장소에 있는지 — 없으면 `BOOTSTRAP_FAIL`(`FAIL packages`)로 드러남, 있는 판으로 tfvars 를 바꿔 설정 반영 교체 |
 | 자격 도우미 존재 | `command -v docker-credential-ecr-login` · 유닛 저널의 `MEDIA PREREQ OK ecr-credential-helper` 건수 | — |
 | drop-in 재시도 | 등록하지 않은 상자에서 설치 표지를 잠시 옮기고(`mv` → `systemctl restart`) 1분 뒤 `MEDIA PREREQ FAIL bundle` 건수가 2 이상인지 → 표지를 되돌리고 재시작 → 기동 판정 | 묶음 표지 확인이 유닛 기동마다 20초 간격으로 다시 도는지(`failed` 로 굳지 않음 · 설치는 다시 하지 않음 — 표지를 되돌리기 전까지 매 시도가 같은 줄로 실패) |
-| 동시 방송 부하(c8gn.large 30방송 가정) | 공개 전(NLB 가 팀 IP 만 받을 때) 팀 IP 에서 목표 비트레이트의 시험 송출 30개를 10분 · CloudWatch `CPUUtilization` · `NetworkIn` · `NetworkPacketsIn` · EBS 쓰기 바이트 · 상자의 `ethtool -S <ENA 장치>` 의 `bw_in_allowance_exceeded` · `pps_allowance_exceeded` 증가분 · `df -h /var/lib/docker` 증가율 | CPU 여유 · 대역폭 허용치 초과 0 · 1시간 DVR × 30 이 150 GiB 안인지 — 아니면 유형 · 디스크 재결정(kty) |
+| 동시 방송 부하(c8gn.large 30방송 가정) | 공개 전(NLB 가 팀 IP 만 받을 때) 팀 IP 에서 목표 비트레이트의 시험 송출 30개를 10분 · CloudWatch `CPUUtilization` · `NetworkIn` · `NetworkPacketsIn` · EBS 쓰기 바이트 · 상자의 `ethtool -S <ENA 장치>` 의 `bw_in_allowance_exceeded` · `pps_allowance_exceeded` 증가분 · `df -h /var/lib/docker` 증가율 | CPU 여유 · 대역폭 허용치 초과 0 · 디스크는 녹화 증가율로 본다 — 라이브 목록은 창 28초(조각 7개 · ADR-102)라 몫이 무시할 만하고, 녹화는 보관 유예(`JANITOR_GRACE` — 그 상자에 설치된 compose 값 · plan 체크아웃의 `user_data` 렌더본) 동안 루트에 남는다(media-host README 「janitor_enabled」). 그 증가율로 어림해 유예와 업로드 지연 동안 쌓이는 몫이 루트 150 GiB 의 70% 에 닿으면 유형 · 디스크 재결정(kty). 문서 가정(방송당 4.2 GB/h)이면 30방송은 약 54분에 닿는다 — 유예가 기본(8분)이면 8분에 약 17 GB 라 업로드 지연을 더해 54분보다 짧으면 닿지 않고, 렌더본이 23시간(V1 임시)인 옛 상자면 이 행은 늘 재결정 쪽이다(modules/media_host README 「상자 크기」). 보존 기간은 이 판정의 대상이 아니다 |
 
 ## 정리
 
@@ -959,7 +3702,7 @@ rm -r -- "${work}" && unset work
 *   [media-host README](/infra/media-host/README.md) — 판정 줄 · 운영 확인
     스크립트 · 운영 규칙
 *   [런타임 1단-가 런북](/infra/terraform/runbooks/runtime-1a.md) 「M6 스키마
-    재실행」 · 「M6 읽기 질의」
+    재실행」 · 「M6 읽기 질의」 · 「만료 스위치 손 SQL」 · 「1단-나 ③」
 *   [엣지 비밀 런북](/infra/terraform/runbooks/edge-secrets.md) ·
     [단계 직전 점검 런북](/infra/terraform/runbooks/stage-precheck.md)
 

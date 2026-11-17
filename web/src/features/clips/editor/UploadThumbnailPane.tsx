@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { RadioGroup, Skeleton, Text } from '@/ui';
+import { PRIVATE_TEXT_CLASS, RadioGroup, Skeleton, Text } from '@/ui';
 import type { ThumbnailSource } from '@/api/clipEditor';
 import {
   SCENE_STEP_MS,
@@ -106,7 +106,8 @@ export function UploadThumbnailPane({
                 <span className={styles.thumbHeadText}>
                   <span className={styles.thumbTitle}>
                     <b>{option.title}</b>
-                    <span>{summary[option.value]}</span>
+                    {/* 내 이미지를 고르면 내 컴퓨터의 파일 이름이다 */}
+                    <span className={PRIVATE_TEXT_CLASS}>{summary[option.value]}</span>
                   </span>
                   {image !== null ? (
                     // 뽑은 장면(data:)·고른 파일(blob:)이라 next/image가 다룰 대상이 아니다

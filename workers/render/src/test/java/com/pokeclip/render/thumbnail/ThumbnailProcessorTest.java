@@ -3,10 +3,12 @@ package com.pokeclip.render.thumbnail;
 import com.pokeclip.render.RenderProperties;
 import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.RenderFailure;
+import com.pokeclip.render.media.MediaProbe;
 import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.storage.S3Store;
 import com.pokeclip.render.support.Ffmpeg;
 import com.pokeclip.render.support.Fixtures;
+import com.pokeclip.render.support.RecordingRunner;
 import com.pokeclip.render.work.Disposition;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -50,6 +52,8 @@ class ThumbnailProcessorTest {
     private HttpServer clip;
     private final List<JsonNode> reports = new CopyOnWriteArrayList<>();
     private final AtomicInteger status = new AtomicInteger(200);
+    /** 가짜 실행기({@link #판독이})가 받은 ffmpeg 뽑기 수. */
+    private final AtomicInteger 뽑기_횟수 = new AtomicInteger();
     private S3Store store;
     private Path uploaded;
     private Path video;
@@ -82,11 +86,14 @@ class ThumbnailProcessorTest {
         RenderProperties props = new RenderProperties(null, null, null, false, "ap-northeast-2",
                 "http://127.0.0.1:" + clip.getAddress().getPort(), "secret-token", work, "ffmpeg", "ffprobe",
                 Duration.ofMinutes(1), Duration.ofSeconds(600), Duration.ofSeconds(1), List.of(), null);
-        return new ThumbnailProcessor(Fixtures.MAPPER, store, runner, new ThumbnailReporter(props),
-                "ffmpeg", work.resolve("thumbnails"), Duration.ofSeconds(30), clock);
+        return new ThumbnailProcessor(Fixtures.MAPPER, store, runner, new MediaProbe(runner, Fixtures.MAPPER, "ffprobe"),
+                new ThumbnailReporter(props), "ffmpeg", work.resolve("thumbnails"), Duration.ofSeconds(30), clock);
     }
 
-    /** 2초짜리 1280x720 시험 영상을 만들고, 창고 받기가 그 파일을 주고 올리기가 결과를 옮겨 두게 한다. */
+    /**
+     * 2초짜리 1280x720 시험 영상(libx264 기본 — B 프레임 있음 · 60프레임)을 만들고, 창고 받기가 그 파일을 주고 올리기가 결과를 옮겨
+     * 두게 한다.
+     */
     private void 원본이_있다() throws IOException, InterruptedException {
         assumeTrue(Ffmpeg.available(), "ffmpeg가 없다");
         video = work.resolve("src.mp4");
@@ -94,8 +101,22 @@ class ThumbnailProcessorTest {
                 "testsrc=size=1280x720:rate=30:duration=2", "-pix_fmt", "yuv420p", video.toString())
                 .redirectErrorStream(true).redirectOutput(work.resolve("ffmpeg.log").toFile()).start();
         assertThat(p.waitFor()).isZero();
+        원본으로(video);
+    }
+
+    /** 실제 녹화 조각(로컬 MediaMTX — 소리 6트랙이 파일 머리 0 · 영상 첫 DTS 53.333ms)을 원본으로 둔다. */
+    private void 녹화_조각이_원본이다() throws IOException {
+        assumeTrue(Ffmpeg.available(), "ffmpeg가 없다");
+        video = work.resolve("seg_1.m4s");
+        try (var in = ThumbnailProcessorTest.class.getResourceAsStream("/segments/seg_1.m4s")) {
+            Files.write(video, java.util.Objects.requireNonNull(in).readAllBytes());
+        }
+        원본으로(video);
+    }
+
+    private void 원본으로(Path file) {
         doAnswer(inv -> {
-            Files.copy(video, inv.<Path>getArgument(2));
+            Files.copy(file, inv.<Path>getArgument(2));
             return null;
         }).when(store).download(eq("segments-test"), eq("seg/1.ts"), any(), any());
         doAnswer(inv -> {
@@ -119,6 +140,39 @@ class ThumbnailProcessorTest {
         return Fixtures.MAPPER.writeValueAsString(root);
     }
 
+    /** 원점 표지를 단 새 꼴 주문서(PDT 설계 r7 8.1 — {@code source.offsetOrigin}). */
+    private static String 주문서(String kind, long offsetMs, String origin) {
+        ObjectNode root = (ObjectNode) Fixtures.MAPPER.readTree(주문서(kind, offsetMs));
+        ((ObjectNode) root.get("source")).put("offsetOrigin", origin);
+        return Fixtures.MAPPER.writeValueAsString(root);
+    }
+
+    /** 사진 뽑기 명령의 {@code -ss} 값. */
+    private static String 찍은_자리(RecordingRunner runner) {
+        List<String> capture = runner.commands().stream().filter(c -> "ffmpeg".equals(c.getFirst())).findFirst()
+                .orElseThrow();
+        return capture.get(capture.indexOf("-ss") + 1);
+    }
+
+    /** {@code n} 번째(디코드 순 아닌 표시 순) 프레임을 같은 축소 · 화질로 뽑은 jpg — 일꾼이 찍은 그림과 바이트로 대조한다. */
+    private Path 기준_사진(Path source, int n) {
+        Path ref = work.resolve("ref-" + n + ".jpg");
+        new ProcessRunner().run(List.of("ffmpeg", "-hide_banner", "-nostdin", "-y", "-i", source.toString(),
+                "-vf", "select='eq(n\\," + n + ")',scale='min(" + ThumbnailProcessor.MAX_WIDTH + ",iw)':-2",
+                "-frames:v", "1", "-q:v", "4", ref.toString()), work, java.time.Instant.now().plusSeconds(30));
+        return ref;
+    }
+
+    /** ffprobe 판독 꼴 JSON — 영상 두 프레임(90000틱 · PTS 0 과 2초 · 소리 없음). 가짜 실행기가 ffprobe 에 돌려준다. */
+    private static String 두_초_판독() {
+        return """
+                {"format":{"start_time":"0.000000"},
+                 "streams":[{"index":0,"codec_type":"video","time_base":"1/90000","start_time":"0.000000",
+                             "duration":"2.033333","width":640,"height":360}],
+                 "packets":[{"stream_index":0,"pts":0,"dts":0,"duration":3000},
+                            {"stream_index":0,"pts":180000,"dts":180000,"duration":3000}]}""";
+    }
+
     @Test
     void 장면을_jpg로_뽑아_받은_키에_올리고_알린다() throws Exception {
         원본이_있다();
@@ -139,16 +193,69 @@ class ThumbnailProcessorTest {
         assertThat(reports.get(0).has("s3Key")).as("키는 clip이 정한다. 보고에 안 싣는다").isFalse();
     }
 
-    /** 자리가 원본 끝을 넘으면(조각 길이가 장부와 다르다) 첫 장면으로 다시 뽑는다. 빈손으로 끝내지 않는다. */
+    /**
+     * 자리가 원본 끝을 넘으면(조각 길이가 장부와 다르다) 마지막 표시 프레임 시작 P_last 에서 자른다(PDT 설계 r7 8.1). 원본은 B 프레임
+     * 파일이라 디코드 순 마지막 프레임이 아니라 표시 순 마지막(60번째)이 나와야 한다. 앞 판은 ffmpeg 실패 뒤 첫 장면이었다.
+     */
     @Test
-    void 자리가_끝을_넘으면_첫_장면을_뽑는다() throws Exception {
+    void 자리가_끝을_넘으면_마지막_장면을_뽑는다() throws Exception {
         원본이_있다();
+        RecordingRunner runner = new RecordingRunner();
 
-        Disposition d = processor().process(주문서(9_000));
+        Disposition d = processor(runner, Clock.systemUTC()).process(주문서(9_000));
 
         assertThat(d).isEqualTo(Disposition.DELETE);
-        assertThat(Files.size(uploaded)).isPositive();
+        assertThat(Files.readAllBytes(uploaded)).as("표시 순 마지막 프레임").isEqualTo(Files.readAllBytes(기준_사진(video, 59)));
+        assertThat(Files.readAllBytes(uploaded)).as("그 앞 프레임과는 다르다")
+                .isNotEqualTo(Files.readAllBytes(기준_사진(video, 58)));
+        assertThat(runner.commands().stream().filter(c -> "ffmpeg".equals(c.getFirst()))).as("한 번에 뽑는다").hasSize(1);
         assertThat(reports).hasSize(1);
+    }
+
+    /** 완성 영상도 끝을 넘으면 마지막 표시 프레임이다 — 결과 파일 끝 규칙의 집행자가 이 일꾼이다(설계 8.3 「AfterLast」). */
+    @Test
+    void 완성_영상이_끝을_넘으면_마지막_장면을_뽑는다() throws Exception {
+        원본이_있다();
+
+        assertThat(processor().process(주문서("clip", 2_000))).isEqualTo(Disposition.DELETE);
+
+        assertThat(Files.readAllBytes(uploaded)).isEqualTo(Files.readAllBytes(기준_사진(video, 59)));
+    }
+
+    /** 원점 칸 없는 지금 주문은 녹화 조각(소리가 파일 머리)에서 지금과 같은 자리다 — {@code -ss 1.000}. */
+    @Test
+    void 원점_칸_없는_녹화_조각_주문은_지금_자리를_찍는다() throws Exception {
+        녹화_조각이_원본이다();
+        RecordingRunner runner = new RecordingRunner();
+
+        assertThat(processor(runner, Clock.systemUTC()).process(주문서(1_000))).isEqualTo(Disposition.DELETE);
+
+        assertThat(찍은_자리(runner)).isEqualTo("1.000");
+        assertThat(Files.size(uploaded)).isPositive();
+    }
+
+    /** 영상 첫 DTS 원점(판 2 조각)은 그 조각의 머리 앞섬 53.333ms 만큼 뒤를 찍는다. 파일 머리 원점은 칸 없음과 같다. */
+    @Test
+    void 원점_표지대로_찍을_자리를_옮긴다() throws Exception {
+        녹화_조각이_원본이다();
+        RecordingRunner videoStart = new RecordingRunner();
+        RecordingRunner fileHead = new RecordingRunner();
+
+        assertThat(processor(videoStart, Clock.systemUTC()).process(주문서("card", 1_000, "VIDEO_START")))
+                .isEqualTo(Disposition.DELETE);
+        Files.delete(uploaded);
+        assertThat(processor(fileHead, Clock.systemUTC()).process(주문서("card", 1_000, "FILE_HEAD")))
+                .isEqualTo(Disposition.DELETE);
+
+        assertThat(찍은_자리(videoStart)).isEqualTo("1.053");
+        assertThat(찍은_자리(fileHead)).isEqualTo("1.000");
+    }
+
+    /** 원점 칸이 모르는 값이면 받지도 않고 지운다. */
+    @Test
+    void 원점_칸이_모르는_값이면_지운다() {
+        assertThat(processor().process(주문서("card", 1_000, "PTS"))).isEqualTo(Disposition.DELETE);
+        verify(store, never()).download(any(), any(), any(), any());
     }
 
     @Test
@@ -251,6 +358,9 @@ class ThumbnailProcessorTest {
         ProcessRunner fake = new ProcessRunner() {
             @Override
             public Result run(List<String> command, Path workDir, java.time.Instant deadline) {
+                if ("ffprobe".equals(command.getFirst())) {
+                    return new Result(두_초_판독(), "");
+                }
                 Path out = Path.of(command.get(command.size() - 1));
                 try {
                     if (calls.getAndIncrement() == 0) {
@@ -268,6 +378,80 @@ class ThumbnailProcessorTest {
         assertThat(processor(fake, Clock.systemUTC()).process(주문서(1_000))).isEqualTo(Disposition.DELETE);
         assertThat(calls.get()).isEqualTo(2);
         assertThat(uploaded).hasContent("좋은 사진");
+    }
+
+    /**
+     * 판독(ffprobe)이 잠깐 안 되면(실패 · 시한 초과) 창고가 잠깐 안 된 것과 같다: 라이브는 지우고 카드 · 완성 영상은 둔다. 판독 없이
+     * 찍지 않는다 — 자리를 못 정했으니 뽑지도 올리지도 알리지도 않는다.
+     */
+    @Test
+    void 판독이_잠깐_안_되면_라이브는_지우고_카드와_완성_영상은_둔다() {
+        받기가_파일을_준다();
+        ProcessRunner failed = 판독이(() -> {
+            throw new ProcessRunner.Failed("ffprobe", 1, "읽기 오류");
+        });
+        ProcessRunner timedOut = 판독이(() -> {
+            throw new ProcessRunner.Timeout("ffprobe");
+        });
+
+        for (ProcessRunner runner : List.of(failed, timedOut)) {
+            assertThat(processor(runner, Clock.systemUTC()).process(주문서("live", 1_000))).isEqualTo(Disposition.DELETE);
+            assertThat(processor(runner, Clock.systemUTC()).process(주문서("card", 1_000))).isEqualTo(Disposition.LEAVE);
+            assertThat(processor(runner, Clock.systemUTC()).process(주문서("clip", 1_000))).isEqualTo(Disposition.LEAVE);
+        }
+        assertThat(뽑기_횟수.get()).as("자리를 못 정하면 뽑지 않는다").isZero();
+        verify(store, never()).upload(any(), any(), any(), any(), any());
+        assertThat(reports).isEmpty();
+    }
+
+    /** 판독 꼴이 어긋나면({@code SOURCE_MISMATCH}) 다시 받아도 같은 파일이다. 세 갈래 모두 지우고, 뽑지도 알리지도 않는다. */
+    @Test
+    void 판독_꼴이_어긋나면_세_갈래_모두_지운다() {
+        받기가_파일을_준다();
+        ProcessRunner noVideo = 판독이(() -> new ProcessRunner.Result("""
+                {"format":{"start_time":"0.000000"},"streams":[],"packets":[]}""", ""));
+
+        for (String kind : List.of("live", "card", "clip")) {
+            assertThat(processor(noVideo, Clock.systemUTC()).process(주문서(kind, 1_000))).as(kind)
+                    .isEqualTo(Disposition.DELETE);
+        }
+        assertThat(뽑기_횟수.get()).isZero();
+        verify(store, never()).upload(any(), any(), any(), any(), any());
+        assertThat(reports).isEmpty();
+    }
+
+    /** 판독은 됐는데 0초로 다시 뽑아도 그림이 없으면 원본이 틀린 것({@code SOURCE_MISMATCH})이다. 카드도 지운다. */
+    @Test
+    void 영초로도_장면을_못_뽑으면_카드도_지운다() {
+        받기가_파일을_준다();
+        ProcessRunner noPicture = 판독이(() -> new ProcessRunner.Result(두_초_판독(), ""));
+
+        assertThat(processor(noPicture, Clock.systemUTC()).process(주문서("card", 1_000))).isEqualTo(Disposition.DELETE);
+        assertThat(뽑기_횟수.get()).as("제자리 한 번 + 0초 한 번").isEqualTo(2);
+        verify(store, never()).upload(any(), any(), any(), any(), any());
+        assertThat(reports).isEmpty();
+    }
+
+    /** 창고 받기가 아무 바이트나 원본 자리에 쓴다(판독 · 뽑기는 가짜 실행기가 답한다). */
+    private void 받기가_파일을_준다() {
+        doAnswer(inv -> {
+            Files.writeString(inv.<Path>getArgument(2), "src");
+            return null;
+        }).when(store).download(any(), any(), any(), any());
+    }
+
+    /** ffprobe 는 {@code probe} 대로 답하고, ffmpeg(뽑기)는 세기만 하고 그림을 쓰지 않는 실행기. */
+    private ProcessRunner 판독이(java.util.function.Supplier<ProcessRunner.Result> probe) {
+        return new ProcessRunner() {
+            @Override
+            public Result run(List<String> command, Path workDir, java.time.Instant deadline) {
+                if ("ffprobe".equals(command.getFirst())) {
+                    return probe.get();
+                }
+                뽑기_횟수.incrementAndGet();
+                return new Result("", "");
+            }
+        };
     }
 
     /** 받기·뽑기·올리기에 상한을 다 쓰면 보고를 시작하지 않고 둔다(보고 시한이 상한 밖에 붙지 않게). */

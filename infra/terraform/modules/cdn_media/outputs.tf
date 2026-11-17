@@ -29,9 +29,27 @@ output "vpc_origin_id" {
 }
 
 output "function_names" {
-  description = "CloudFront Function 이름(live_auth · deny_default) — 호출 루트가 함수 로그 그룹 /aws/cloudfront/function/<이름> 을 짓는다."
+  description = "CloudFront Function 이름(live_auth · deny_default · dvr_floor) — 호출 루트가 함수 로그 그룹 /aws/cloudfront/function/<이름> 을 짓는다."
   value = {
     live_auth    = aws_cloudfront_function.live_auth.name
     deny_default = aws_cloudfront_function.deny_default.name
+    dvr_floor    = aws_cloudfront_function.dvr_floor.name
   }
+}
+
+# 배포의 /dvr/* 비헤이비어에서 읽는다 — 호출 루트 시험이 스위치가 전달됐는지
+# 본다(루트 시험은 모듈 안 자원을 주소로 볼 수 없다).
+output "dvr_floor_attached" {
+  description = "/dvr/* 비헤이비어에 dvr-floor 가 viewer-request 로 붙었는가(스위치 dvr_floor_enabled 의 결과)."
+  value = anytrue([
+    for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : anytrue([
+      for association in behavior.function_association :
+      association.event_type == "viewer-request" && association.function_arn == aws_cloudfront_function.dvr_floor.arn
+    ]) if behavior.path_pattern == "/dvr/*"
+  ])
+}
+
+output "dvr_floor_log_markers" {
+  description = "dvr-floor 함수 로그 줄의 고정 머리(deny · malformed · value_invalid · kvs_error) — functions/dvr-floor.js 상수에서 읽는다. 호출 루트의 지표 필터 패턴이 이 값을 쓴다."
+  value       = local.dvr_floor_log_markers
 }

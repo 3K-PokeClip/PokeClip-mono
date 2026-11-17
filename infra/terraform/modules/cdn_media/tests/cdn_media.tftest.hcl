@@ -1,7 +1,9 @@
 # media 배포 모듈(설계 3-3 의 cdn_media · 계획 M10 c5)을 mock provider 로
 # 단언한다 — 비헤이비어 표(기본 + 일곱, 우선순위 순) · 정책(캐시 · 원본 요청 ·
-# 응답 헤더) · 오리진 둘(VPC origin 내부 ALB · rewind 버킷 OAC) · 함수 둘과
-# KVS · 키 그룹 · 오류 캐싱 · 표준 로그 v2 전달 · 출력.
+# 응답 헤더) · 오리진 둘(VPC origin 내부 ALB · rewind 버킷 OAC) · 함수 셋과
+# KVS · 키 그룹 · 오류 캐싱 · 표준 로그 v2 전달 · 출력. /dvr 하한 함수
+# dvr-floor(POK-525)는 늘 게시하고, 스위치 dvr_floor_enabled 가 참일 때만
+# /dvr/* 에 붙는다.
 # 정책 · 함수 · 키 그룹 · 오리진 id 는 override_resource 로 고정해 비헤이비어가
 # 가리키는 값과 비교한다. 이름 · ARN · 계정 ID(111122223333)는 가짜 값이다.
 
@@ -80,6 +82,12 @@ override_resource {
 }
 
 override_resource {
+  target          = aws_cloudfront_function.dvr_floor
+  override_during = plan
+  values          = { arn = "arn:aws:cloudfront::111122223333:function/example-dvr-floor" }
+}
+
+override_resource {
   target          = aws_cloudfront_key_value_store.this
   override_during = plan
   values          = { arn = "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-000000000000" }
@@ -123,6 +131,7 @@ variables {
   internal_alb_dns_name              = "internal-example-internal-1234567890.ap-northeast-2.elb.amazonaws.com"
   rewind_bucket_regional_domain_name = "example-rewind.s3.ap-northeast-2.amazonaws.com"
   log_destination                    = "arn:aws:logs:us-east-1:111122223333:log-group:example-cdn-media"
+  edge_bounds_kvs_arn                = "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1"
 }
 
 # 비헤이비어 표(계획 c5) — 우선순위 순서 · 원본 · 키 그룹 · 함수 · 정책.
@@ -182,8 +191,14 @@ run "requires_signed_cookies_except_ingest_and_rewind_api" {
   }
 }
 
+# 스위치 dvr_floor_enabled 기본(false) — /dvr 에도 함수가 없다.
 run "attaches_live_auth_to_live_and_deny_default_to_default" {
   command = plan
+
+  assert {
+    condition     = var.dvr_floor_enabled == false && output.dvr_floor_attached == false
+    error_message = "dvr_floor_enabled 기본이 false 가 아니거나 dvr_floor_attached 출력이 false 가 아니다."
+  }
 
   assert {
     condition = [
@@ -208,6 +223,53 @@ run "attaches_live_auth_to_live_and_deny_default_to_default" {
       "${association.event_type} ${association.function_arn}"
     ] == ["viewer-request arn:aws:cloudfront::111122223333:function/example-deny-default"]
     error_message = "기본 비헤이비어에 deny-default 가 viewer-request 로 붙지 않았다."
+  }
+}
+
+# 스위치를 켜면 /dvr/* 에만 dvr-floor 가 붙고 나머지는 끔과 같다.
+run "attaches_dvr_floor_to_dvr_only_when_enabled" {
+  command = plan
+
+  variables {
+    dvr_floor_enabled = true
+  }
+
+  assert {
+    condition = [
+      for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : [
+        for association in behavior.function_association : "${association.event_type} ${association.function_arn}"
+      ]
+      ] == [
+      [],
+      ["viewer-request arn:aws:cloudfront::111122223333:function/example-live-auth"],
+      ["viewer-request arn:aws:cloudfront::111122223333:function/example-live-auth"],
+      ["viewer-request arn:aws:cloudfront::111122223333:function/example-dvr-floor"],
+      [],
+      [],
+      [],
+    ]
+    error_message = "켬인데 dvr-floor 가 /dvr/* 에만 viewer-request 하나로 붙지 않았거나 다른 비헤이비어가 바뀌었다."
+  }
+
+  assert {
+    condition = [
+      for association in aws_cloudfront_distribution.this.default_cache_behavior[0].function_association :
+      "${association.event_type} ${association.function_arn}"
+    ] == ["viewer-request arn:aws:cloudfront::111122223333:function/example-deny-default"]
+    error_message = "켬인데 기본 비헤이비어의 함수가 deny-default 하나가 아니다."
+  }
+
+  assert {
+    condition     = output.dvr_floor_attached == true
+    error_message = "켬인데 dvr_floor_attached 출력이 true 가 아니다."
+  }
+
+  assert {
+    condition = (
+      length(aws_cloudfront_function.dvr_floor.key_value_store_associations) == 1 &&
+      one(aws_cloudfront_function.dvr_floor.key_value_store_associations) == var.edge_bounds_kvs_arn
+    )
+    error_message = "켬인데 dvr-floor 의 KVS 연결이 edge_bounds_kvs_arn 정확히 하나가 아니다."
   }
 }
 
@@ -628,7 +690,8 @@ run "caches_errors_for_one_second_without_custom_pages" {
   }
 }
 
-# 함수 둘 · KVS — 이름 접두 · 런타임 · 게시 · KVS 연결은 live-auth 에만.
+# 함수 셋(deny-default · live-auth · dvr-floor) · KVS — 이 run 은 앞 둘: 이름
+# 접두 · 런타임 · 게시 · KVS 연결은 live-auth 에만(dvr-floor 는 아래 run).
 run "publishes_functions_with_kvs_only_on_live_auth" {
   command = plan
 
@@ -660,6 +723,137 @@ run "publishes_functions_with_kvs_only_on_live_auth" {
   }
 }
 
+# dvr-floor — 스위치와 무관하게 게시(두 단 apply 의 1단)하고, KVS 는 입력
+# edge_bounds_kvs_arn 하나만 연결한다(CDN 비밀 KVS 아님). 함수는 모듈을 읽을
+# 때 cf.kvs() 를 불러 연결이 없으면 /dvr 전체가 503 이다 — 끈 상태(1단)에서도
+# 연결을 가진 채 게시돼야 한다.
+run "publishes_dvr_floor_with_edge_bounds_kvs_only" {
+  command = plan
+
+  assert {
+    condition = (
+      var.dvr_floor_enabled == false &&
+      length(aws_cloudfront_function.dvr_floor.key_value_store_associations) == 1 &&
+      one(aws_cloudfront_function.dvr_floor.key_value_store_associations) == var.edge_bounds_kvs_arn
+    )
+    error_message = "스위치를 끈 1단에서 dvr-floor 가 KVS 연결 정확히 하나(edge_bounds_kvs_arn)를 가진 채 게시되지 않는다 — 연결 없이 게시되면 붙는 순간 /dvr 전체가 503 이다."
+  }
+
+  assert {
+    condition = (
+      aws_cloudfront_function.dvr_floor.runtime == "cloudfront-js-2.0" &&
+      aws_cloudfront_function.dvr_floor.publish == true
+    )
+    error_message = "dvr-floor 가 cloudfront-js-2.0 · 게시가 아니다."
+  }
+
+  assert {
+    condition = (
+      aws_cloudfront_function.dvr_floor.key_value_store_associations == toset([var.edge_bounds_kvs_arn]) &&
+      var.edge_bounds_kvs_arn == "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1" &&
+      !contains(aws_cloudfront_function.dvr_floor.key_value_store_associations, aws_cloudfront_key_value_store.this.arn)
+    )
+    error_message = "dvr-floor 의 KVS 연결이 edge_bounds_kvs_arn 하나가 아니다(CDN 비밀 KVS 가 끼었거나 다른 값)."
+  }
+
+  # live-auth 의 연결은 CDN 비밀 KVS 그대로다(뒤바뀌지 않았다).
+  assert {
+    condition     = aws_cloudfront_function.live_auth.key_value_store_associations == toset([aws_cloudfront_key_value_store.this.arn])
+    error_message = "live-auth 의 KVS 연결이 CDN 비밀 KVS 하나가 아니다."
+  }
+}
+
+# 코드는 dvr-floor.js 를 templatefile 로 렌더한 것이다 — 자리표시자는
+# app_origin 하나라 렌더 뒤에 템플릿 표지가 남지 않는다. 기대값은 원문
+# 파일을 읽어 짓는다(원문이 바뀌어도 이 시험을 고치지 않는다).
+run "renders_dvr_floor_code_with_app_origin" {
+  command = plan
+
+  variables {
+    app_origin = "https://app.example.com"
+  }
+
+  assert {
+    condition = aws_cloudfront_function.dvr_floor.code == replace(
+      file("functions/dvr-floor.js"), "$${app_origin}", "https://app.example.com",
+    )
+    error_message = "dvr-floor 코드가 functions/dvr-floor.js 에 app_origin 만 넣은 렌더본이 아니다."
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_cloudfront_function.dvr_floor.code, "'access-control-allow-origin': {value: 'https://app.example.com'}") &&
+      !strcontains(aws_cloudfront_function.dvr_floor.code, "$${") &&
+      !strcontains(aws_cloudfront_function.dvr_floor.code, "%%{")
+    )
+    error_message = "dvr-floor 렌더본에 app_origin 이 CORS 머리로 없거나 템플릿 표지($${ · %%{)가 남았다."
+  }
+}
+
+# 경보(K5)의 지표 필터가 쓰는 함수 로그 표지 — 원문 상수와 같은 글자다.
+run "exposes_dvr_floor_log_markers_from_source" {
+  command = plan
+
+  assert {
+    condition = output.dvr_floor_log_markers == {
+      for key, name in {
+        deny          = "DENY_LOG"
+        malformed     = "MALFORMED_LOG"
+        value_invalid = "VALUE_INVALID_LOG"
+        kvs_error     = "KVS_ERROR_LOG"
+      } : key => one(regex("(?m)^const ${name} = '([^']+)';$", file("functions/dvr-floor.js")))
+    }
+    error_message = "dvr_floor_log_markers 가 dvr-floor.js 의 로그 상수 넷과 다르다."
+  }
+
+  # K5 경보 둘의 표지 · 모두 렌더본에 그대로 있고 서로 다르다.
+  assert {
+    condition = (
+      strcontains(output.dvr_floor_log_markers.value_invalid, "VALUE INVALID") &&
+      strcontains(output.dvr_floor_log_markers.kvs_error, "KVS ERROR") &&
+      length(distinct(values(output.dvr_floor_log_markers))) == 4 &&
+      alltrue([
+        for marker in values(output.dvr_floor_log_markers) :
+        startswith(marker, "DVR FLOOR ") && strcontains(aws_cloudfront_function.dvr_floor.code, "'${marker}'")
+      ])
+    )
+    error_message = "로그 표지가 K5 문구(VALUE INVALID · KVS ERROR)를 담지 않거나 겹치거나 렌더본에 없다."
+  }
+}
+
+run "rejects_wildcard_edge_bounds_kvs_arn" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::111122223333:key-value-store/*"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+# 연결이 빠진 함수는 붙는 순간 /dvr 전체가 503 이라 빈 값을 받지 않는다.
+# null 은 nullable = false 가 막는다 — 그 오류(Required variable not set)는
+# 검증 실패가 아니라 expect_failures 로 받을 수 없어 시험하지 않는다.
+run "rejects_empty_edge_bounds_kvs_arn" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = ""
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
+run "rejects_non_kvs_edge_bounds_arn" {
+  command = plan
+
+  variables {
+    edge_bounds_kvs_arn = "arn:aws:cloudfront::111122223333:function/example-dvr-floor"
+  }
+
+  expect_failures = [var.edge_bounds_kvs_arn]
+}
+
 run "names_resources_with_prod_prefix" {
   command = plan
 
@@ -669,6 +863,7 @@ run "names_resources_with_prod_prefix" {
         aws_cloudfront_key_value_store.this.name,
         aws_cloudfront_function.live_auth.name,
         aws_cloudfront_function.deny_default.name,
+        aws_cloudfront_function.dvr_floor.name,
         aws_cloudfront_key_group.this.name,
         aws_cloudfront_vpc_origin.this.vpc_origin_endpoint_config[0].name,
         aws_cloudfront_origin_access_control.rewind.name,
@@ -775,7 +970,8 @@ run "exposes_distribution_kvs_and_vpc_origin" {
     condition = output.function_names == {
       live_auth    = "pokeclip-prod-live-auth"
       deny_default = "pokeclip-prod-deny-default"
+      dvr_floor    = "pokeclip-prod-dvr-floor"
     }
-    error_message = "function_names 출력이 live-auth · deny-default 함수 이름과 다르다."
+    error_message = "function_names 출력이 live-auth · deny-default · dvr-floor 함수 이름과 다르다."
   }
 }

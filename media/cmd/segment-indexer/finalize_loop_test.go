@@ -1,7 +1,7 @@
 package main
 
-// 정산 루프 배선 — holdTick 순서 · 꺼짐/강등 · 동시 상한 · 상태 전달 순서 · 계승 해제 · 빠른 길 · 종료 대기(POK-196 M6-3b
-// 커밋 ③ — 설계 M6 3.2 · 3.4 계승 해제 · 9절 D2 · D24 · D25 · D33 · D55 · D56 · D65 · D66).
+// 정산 루프 배선 — holdTick 순서 · 꺼짐/강등 · 동시 상한 · 상태 전달 순서 · 빠른 길 · 종료 대기(POK-196 M6-3b 커밋 ③ —
+// 설계 M6 3.2 · 9절 D2 · D24 · D25 · D33 · D56 · D65 · D66).
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/finalize"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
-	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
 // D56 (가) — 발행 꺼짐(S3_BUCKET 빈 값 · 발행자 없음)에서도 정산 스캔 · 걸음이 돈다. 차선 · 스캔 주기는 조립 밖에서
@@ -337,49 +336,6 @@ func TestPlaybackReadCapKeepsSameStreamMergeD65(t *testing.T) {
 	if reads != 2 {
 		t.Fatalf("읽기 %d 번, want 2(병합된 표지의 재읽기)", reads)
 	}
-}
-
-// D55 첫 세 갈래의 루프 몫 — 계승 해제 요청은 그 스트림 차선(발행 틱과 같은 차선)에 낸다. 풀렸으면 캐시에 반영하고, 차선이
-// 돌고 있으면 미뤘다가 빈 뒤에 낸다. 발행 몫이 없으면(꺼짐 · 강등) Head 를 볼 수 없어 내지 않는다.
-func TestRevokeIntentRunsOnStreamLane(t *testing.T) {
-	t.Run("발행 몫 없음", func(t *testing.T) {
-		f := newFinalLoop(t, finalize.ModeOff)
-		f.intents.Post("demo", "S-B")
-		f.hold(loopBase)
-		f.settle(loopBase)
-		if len(f.work.revokes) != 0 {
-			t.Fatalf("발행 몫 없이 해제 작업을 냈다: %v", f.work.revokes)
-		}
-		if rec := f.logs.last("intentional_revoke"); rec == nil || rec.attrs["reason"] != "no_publisher" {
-			t.Fatalf("intentional_revoke = %+v, want reason=no_publisher", rec)
-		}
-	})
-	t.Run("발행 중 · 차선 바쁨이면 미룸", func(t *testing.T) {
-		p := newPublishLoop(t)
-		w := &fakeFinalWork{rows: map[string]index.EndingSession{}, revokeOut: publish.RevokeOutcome{Revoked: true}}
-		intents := session.NewIntentInbox()
-		p.rewind.holdEvery = time.Second
-		p.rewind.fin = newFinalizer(finalizerOptions{Mode: finalize.ModePublishing, Every: time.Hour, CloseAfter: 360 * time.Second,
-			Work: w.work(), Inbox: session.NewPlaybackInbox(), Intents: intents})
-		busy := make(chan struct{})
-		p.lanes.Start(t.Context(), "demo", func(ctx context.Context) publish.Result {
-			<-busy
-			return publish.Result{Kind: publish.KindPublish}
-		})
-		p.rewind.stream("demo").running = &laneJob{kind: jobRenew}
-		intents.Post("demo", "S-B")
-		p.rewind.holdTick(t.Context(), loopBase)
-		if len(w.revokes) != 0 {
-			t.Fatal("차선이 바쁜데 해제 작업을 냈다")
-		}
-		close(busy)
-		p.settle(loopBase)
-		p.rewind.holdTick(t.Context(), loopBase.Add(time.Second))
-		p.settle(loopBase.Add(time.Second))
-		if !slices.Equal(w.revokes, []string{"demo/S-B"}) {
-			t.Fatalf("해제 작업 = %v, want [demo/S-B](차선이 빈 뒤)", w.revokes)
-		}
-	})
 }
 
 // 빠른 길 — 오프라인 전이가 끝낸 회차는 다음 holdTick 에 그 행을 읽어 동결을 낸다(30초 스캔을 기다리지 않음). 결과가 섰으면

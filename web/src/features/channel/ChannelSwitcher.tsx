@@ -15,16 +15,23 @@ import clsx from 'clsx';
 import { Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
-import { StaleSessionError, useSessionMutation } from '@/lib/useSessionMutation';
-import { Avatar, Button, LoadingRegion, Popover, Skeleton, Slot, useToast } from '@/ui';
+import { useSessionMutation } from '@/lib/useSessionMutation';
+import {
+  Avatar,
+  Button,
+  LoadingRegion,
+  PRIVATE_TEXT_CLASS,
+  Popover,
+  Skeleton,
+  Slot,
+  useToast,
+} from '@/ui';
 import { ApiError } from '@/api/client';
 import {
   acceptInvitation,
   declineInvitation,
   delegationsAsEditorQueryOptions,
-  isInvitationGone,
   receivedInvitationsQueryOptions,
-  respondFailureMessage,
   revokeDelegation,
   type ReceivedInvitation,
   type StreamerDelegation,
@@ -33,6 +40,7 @@ import { useLogout, useMe } from '@/features/auth/useSession';
 import { expiresLabel } from '@/features/settings/editors/editorDates';
 import { useChannelStore } from '@/stores/channel';
 import { useActiveChannel, useSwitchChannel, type SwitchTarget } from './useActiveChannel';
+import { useInvitationResponse, type InvitationOutcome } from './useInvitationResponse';
 import styles from './ChannelSwitcher.module.css';
 
 // 채널 스위처(POK-390, 시안 1u). 로그인 계정이 아니라 「지금 일하는 채널」을 바꾼다: 내 채널 · 편집 참여 중인 채널 ·
@@ -317,7 +325,7 @@ function SwitcherPanel({
           />
         )}
         <div className={styles.foot}>
-          <span className={styles.email}>{me.email}</span>
+          <span className={clsx(styles.email, PRIVATE_TEXT_CLASS)}>{me.email}</span>
           <Link href="/settings/account" className={styles.footLink} onClick={onClose}>
             계정 설정
           </Link>
@@ -390,7 +398,7 @@ function ChannelRow({
       {/* 채널 주인의 프로필 사진. 사진이 없으면 이름 글자 아바타 */}
       <Avatar size="sm" src={photo ?? undefined} name={name} className={styles.rowAvatar} />
       <span className={styles.rowText}>
-        <span className={styles.rowName}>{name} 채널</span>
+        <span className={clsx(styles.rowName, PRIVATE_TEXT_CLASS)}>{name} 채널</span>
         <span className={styles.rowMeta}>{role}</span>
       </span>
       {current && !leaving && <Check aria-hidden className={styles.rowCheck} />}
@@ -497,32 +505,22 @@ function InvitesSkeleton({ label }: { label?: string }) {
 }
 
 /**
- * 수락·거절 공통: 끝나면 받은 초대와 참여 채널 목록을 다시 읽는다(수락하면 참여 채널이 는다). 실패해도 읽는다: 실패는 대개
- * 그 사이 스트리머가 취소했거나 다른 곳에서 먼저 답했다는 뜻이라 목록이 낡았다(POK-481). onDone(거절 덮개 닫기)은 그 초대가
- * 끝났을 때만 부른다: 성공 · 이미 처리된 초대 · 세션이 바뀜. 모르는 실패(일시 장애)엔 덮개를 남겨 「거절하기」만 다시 누르면
- * 되게 한다 — 나가기 덮개와 같은 규칙(PR #412 리뷰)
+ * 수락·거절 공통(토스트 · 분석 이벤트 · 다시 읽기는 알림 창과 같이 쓰는 useInvitationResponse). onDone(거절 덮개 닫기)은 그
+ * 초대가 끝났을 때만 부른다: 성공 · 이미 처리된 초대 · 세션이 바뀜. 모르는 실패(일시 장애)엔 덮개를 남겨 「거절하기」만 다시
+ * 누르면 되게 한다 — 나가기 덮개와 같은 규칙(PR #412 리뷰)
  */
 function useInvitationAction(
   send: (id: number) => Promise<void>,
-  doneTitle: string,
-  outcome: 'accepted' | 'declined',
+  outcome: InvitationOutcome,
   onDone?: () => void,
 ) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const respond = useInvitationResponse();
   return useSessionMutation({
     mutationFn: send,
-    onSuccess: () => {
-      track('editor_invitation_responded', { outcome }); // 상대 이름·초대 번호는 싣지 않는다 (POK-357)
-      toast({ tone: 'success', title: doneTitle });
-    },
-    // 서버 사유 코드는 보이지 않는다: 사람 말로 바꾸고 모르는 실패는 폴백 문구로
-    onError: (e: unknown) => toast({ tone: 'error', ...respondFailureMessage(e) }),
+    onSuccess: () => respond.onSuccess(outcome),
+    onError: respond.onError,
     onSettled: (_data, error) => {
-      if (error === null || isInvitationGone(error) || error instanceof StaleSessionError)
-        onDone?.();
-      void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
-      void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] });
+      if (respond.onSettled(error)) onDone?.();
     },
   });
 }
@@ -540,7 +538,7 @@ function Invitations({
   invitations: ReceivedInvitation[];
   onDecline: (invitation: ReceivedInvitation, opener: HTMLElement) => void;
 }) {
-  const accept = useInvitationAction(acceptInvitation, '초대를 수락했어요', 'accepted');
+  const accept = useInvitationAction(acceptInvitation, 'accepted');
   const title = `받은 초대 ${invitations.length}`;
 
   return (
@@ -551,7 +549,9 @@ function Invitations({
         const accepting = accept.isPending && accept.variables === inv.id;
         return (
           <div key={inv.id} className={styles.invite}>
-            <div className={styles.inviteName}>{inv.streamerName} 채널의 편집자 초대</div>
+            <div className={clsx(styles.inviteName, PRIVATE_TEXT_CLASS)}>
+              {inv.streamerName} 채널의 편집자 초대
+            </div>
             <div className={styles.inviteMeta}>{expiresLabel(inv.expiresAt)}</div>
             <div className={styles.inviteActions}>
               {/* 폭은 라벨 그대로 둔다: 스피너가 라벨 옆에 붙어 버튼이 넓어지면 「거절」이 밀린다(.busyButton) */}
@@ -604,7 +604,7 @@ function DeclineConfirm({
     () => (finished.current || !opener.isConnected ? fallbackFocus.current : null),
     [opener, fallbackFocus],
   );
-  const decline = useInvitationAction(declineInvitation, '초대를 거절했어요', 'declined', () => {
+  const decline = useInvitationAction(declineInvitation, 'declined', () => {
     finished.current = true;
     onClose();
   });
@@ -649,7 +649,11 @@ function LeaveConfirm({
     mutationFn: () => revokeDelegation(channel.id),
     onSuccess: () => {
       track('editor_delegation_ended', { initiator: 'editor' });
-      toast({ tone: 'success', title: `${channel.streamerName} 채널에서 나왔어요` });
+      toast({
+        tone: 'success',
+        title: `${channel.streamerName} 채널에서 나왔어요`,
+        maskTitle: true,
+      });
       onLeft(() => void queryClient.invalidateQueries({ queryKey: ['editor-delegations'] }));
     },
     onError: (e: unknown) => {
@@ -758,7 +762,8 @@ function PanelConfirm({
         aria-describedby={textId}
         className={styles.confirmCard}
       >
-        <div id={titleId} className={styles.confirmTitle}>
+        {/* 제목에 채널(스트리머) 이름이 들어간다 — 거절·나가기 확인 둘 다 */}
+        <div id={titleId} className={clsx(styles.confirmTitle, PRIVATE_TEXT_CLASS)}>
           {title}
         </div>
         <div id={textId} className={styles.confirmText}>

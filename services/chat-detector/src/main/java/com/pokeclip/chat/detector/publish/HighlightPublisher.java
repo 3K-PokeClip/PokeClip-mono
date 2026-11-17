@@ -100,6 +100,7 @@ public class HighlightPublisher {
         // (계획 검증 F13). 수집 서버의 VideoPositionCalculator가 조각 경계에서
         // min(delta, duration)으로 클램프하고 그 실효 상한이 SEGMENT_DRIFT_TOLERANCE_MS=1500이다.
         // 창이 5,000ms인데 오차가 1,500ms면 자릿수가 다르다.
+        // 이 1,500ms 상한(클램프)은 장부의 옛 행(판 NULL) 한정이다 — 판 2 행(PDT 개정)은 접지 않는다(POK-196).
         //
         // 「카드당 변환 1회」 결정 자체는 유효하다 — 채팅마다 부르면 수집 서버가 감당 못 한다.
         // 다만 감수하는 대가의 크기를 알고 두는 것이다. 실제로 어긋나는 것은 조각 경계에

@@ -1,12 +1,20 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { QueryClient } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestQueryClient, makeQueryWrapper } from '@/test/testProviders';
 
 // 라이브 상태 훅의 데이터 층(POK-251 정비): 끝난 방송의 굳은 차트 · 방송 정보를 React Query 캐시에서 다시 쓰고, 같은 카드 · 같은
 // 카드 시각은 다시 싣지 않는다. 서버 응답은 apiFetch를 가로채 흉내 낸다
 const api = vi.hoisted(() => ({
   calls: [] as string[],
+  /** 이벤트 통로가 보낼 글. null이면 통로가 없다(붙지 못한다) */
+  sse: null as string | null,
+  /** 시점별 기록 창구의 답(POK-462) */
+  timeline: { segments: [] as unknown[], truncated: false },
+  /** 카드 목록 문의 답 */
+  cards: [] as unknown[],
+  /** 이것이 풀릴 때까지 이벤트 통로 답을 붙든다 — 목록이 먼저 선 뒤에 통로 카드가 오는 차례를 잰다 */
+  sseGate: null as Promise<void> | null,
 }));
 vi.mock('@/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/client')>();
@@ -14,18 +22,36 @@ vi.mock('@/api/client', async (importOriginal) => {
     new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
   return {
     ...actual,
-    apiFetch: async (path: string) => {
+    apiFetch: async (path: string, init?: RequestInit) => {
       api.calls.push(path);
       const { pathname } = new URL(path, 'http://localhost');
-      if (pathname.endsWith('/jump-cards')) return json({ cards: [] });
+      if (pathname.endsWith('/jump-cards')) return json({ cards: api.cards });
       if (pathname.endsWith('/chat-chart'))
         return json({
           bucketSeconds: 30,
           appliedOffsetMs: 0,
           buckets: [{ start: '2026-10-31T00:00:00.000Z', chats: 3, donations: 0 }],
         });
-      if (pathname.endsWith('/broadcast-info')) return json({ latest: null, series: [] });
-      // 그 밖(이벤트 통로 · 연동 · 시점 기록)은 없다: 훅은 다음 주기에 다시 묻는다
+      if (pathname.endsWith('/broadcast-info/timeline')) return json(api.timeline);
+      // 통로를 시험할 때는 정기 조회가 답하지 않는다: 통로로 온 방송 정보만 남는다
+      if (pathname.endsWith('/broadcast-info'))
+        return api.sse !== null
+          ? new Promise<Response>(() => {})
+          : json({ latest: null, series: [] });
+      if (pathname.endsWith('/events') && api.sse !== null) {
+        const text = api.sse;
+        if (api.sseGate !== null) await api.sseGate;
+        // 보낸 뒤 끊지 않는다(끊으면 5초 뒤 다시 붙는다). 화면이 내려가면 닫는다
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(text));
+              init?.signal?.addEventListener('abort', () => controller.close());
+            },
+          }),
+        );
+      }
+      // 그 밖(이벤트 통로 · 연동)은 없다: 훅은 다음 주기에 다시 묻는다
       throw new Error(`unexpected ${pathname}`);
     },
   };
@@ -169,5 +195,220 @@ describe('useLiveMockState: 카드 시각', () => {
       sameSnapshot(shown, card({ thumbnailUrl: signed('a', '20261031T000100Z') }), later),
     ).toBe(false);
     expect(sameSnapshot(card(), card(), now)).toBe(true);
+  });
+});
+
+describe('useLiveMockState: 카드 시각 표기는 이번 방송 시작부터(POK-562)', () => {
+  // 서버 기준점은 같은 송출 키로 한 앞 방송들의 길이만큼 시작보다 앞설 수 있다(prod 181시간). 카드 ms는 그 축이다
+  const STARTED_AT = Date.parse('2026-11-10T12:00:00Z');
+  const AHEAD_MS = 181 * 3_600_000;
+  const card = (streamTimestampMs: number): LiveCardSnapshot => ({
+    id: 1,
+    streamId: 's1',
+    source: 'auto',
+    streamTimestampMs,
+    window: { startMs: streamTimestampMs - 5_000, endMs: streamTimestampMs + 5_000 },
+    score: 1,
+    evidence: null,
+    eventSeq: 1,
+    createdAt: '2026-11-10T12:01:00.000Z',
+  });
+
+  beforeEach(() => {
+    api.calls.length = 0;
+    resetLiveData();
+  });
+
+  async function highlightOf(snapshot: LiveCardSnapshot) {
+    const { result } = renderHook(() => useLiveMockState(false), {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+    await waitFor(() => expect(result.current.cardsStatus).toBe('loaded'));
+    act(() => result.current.mergeCard(snapshot));
+    await waitFor(() => expect(result.current.highlights).toHaveLength(1));
+    return result.current.highlights[0]!;
+  }
+
+  it('기준점이 시작보다 181시간 앞이면 그만큼 뺀 시계다 — 이동 값은 카드 축 그대로다', async () => {
+    publishLiveData({
+      streamId: 's1',
+      status: 'live',
+      startedAt: STARTED_AT,
+      originMs: STARTED_AT - AHEAD_MS,
+    });
+    const highlight = await highlightOf(card(AHEAD_MS + 42_500));
+    // 고치기 전에는 축 값을 그대로 써서 「181:00:42」였다
+    expect(highlight.timestamp).toBe('0:00:42');
+    expect(highlight.seekSeconds).toBe(Math.floor((AHEAD_MS + 42_500) / 1000));
+  });
+
+  it('서버 기준점을 모르면 시계를 숨긴다 — 방송 시작으로 대신 재지 않는다. 이동 값은 그대로다', async () => {
+    publishLiveData({ streamId: 's1', status: 'live', startedAt: STARTED_AT });
+    const highlight = await highlightOf(card(AHEAD_MS + 42_500));
+    expect(highlight.timestamp).toBe('--:--:--');
+    expect(highlight.seekSeconds).toBe(Math.floor((AHEAD_MS + 42_500) / 1000));
+  });
+});
+
+describe('useLiveMockState: 통로로 온 방송 정보', () => {
+  beforeEach(() => {
+    api.calls.length = 0;
+    resetLiveData();
+    publishLiveData({ streamId: 's1', status: 'live', startedAt: Date.now() - 600_000 });
+  });
+  afterEach(() => {
+    api.sse = null;
+  });
+
+  // 라이브 화면처럼 저장소를 구독하는 바깥 화면(LiveScreenBody) 안에 훅을 쓰는 화면(LiveDashboard)이 있다
+  function Dashboard() {
+    useLiveMockState(false);
+    return null;
+  }
+  function Body() {
+    const info = useLiveField('info');
+    return (
+      <>
+        <output>{info?.series.map((p) => p.viewers).join(',') ?? ''}</output>
+        <Dashboard />
+      </>
+    );
+  }
+
+  it('그리기 밖에서 저장소에 싣는다: 상태 갱신 함수 안에서 실으면 구독하는 다른 화면을 그리기 중에 깨운다', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const ev = {
+      time: new Date(Date.now() - 5_000).toISOString(),
+      title: '제목',
+      tags: [],
+      category: 'talk',
+      viewers: 0,
+      platform: 'CHZZK',
+    };
+    api.sse = `event: broadcast-info\ndata: ${JSON.stringify(ev)}\n\n`;
+    const { unmount } = render(<Body />, {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+    // 0명도 값이다
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('0'));
+    unmount();
+    expect(
+      errors.mock.calls.some((args) => String(args[0]).includes('Cannot update a component')),
+    ).toBe(false);
+    errors.mockRestore();
+  });
+
+  it('첫 관측이 카테고리 사진을 싣고 오면 시점별 기록을 바로 다시 읽는다: 기록의 다음 주기를 기다리지 않는다(POK-552)', async () => {
+    api.timeline = { segments: [], truncated: false };
+    const ev = {
+      time: new Date(Date.now() - 5_000).toISOString(),
+      title: '제목',
+      tags: [],
+      category: 'talk',
+      viewers: 3,
+      platform: 'CHZZK',
+      categoryImageUrl: 'https://img/talk.png',
+    };
+    api.sse = `event: broadcast-info\ndata: ${JSON.stringify(ev)}\n\n`;
+    const { unmount } = render(<Body />, {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('3'));
+    // 화면을 열 때 한 번 + 통로가 사진을 알려 한 번. 짧은 주기(5초)는 waitFor 시간(1초) 안에 오지 않는다
+    await waitFor(() => expect(count('/broadcast-info/timeline')).toBe(2));
+    unmount();
+  });
+});
+
+describe('useLiveMockState: 카드의 플레이어용 PDT(POK-196)', () => {
+  /** 카드 시점의 플레이어용 PDT — clip 이 장면 함수로 정해 실어 준 값 */
+  const PLAYER_AT_MS = 1_794_426_524_000;
+  const card = (over: Partial<LiveCardSnapshot> = {}): LiveCardSnapshot => ({
+    id: 2,
+    streamId: 's1',
+    source: 'auto',
+    streamTimestampMs: 5_000,
+    window: { startMs: 4_500, endMs: 9_000 },
+    score: 1,
+    evidence: null,
+    eventSeq: 1,
+    createdAt: '2026-11-11T19:58:53.221Z',
+    ...over,
+  });
+
+  beforeEach(() => {
+    api.calls.length = 0;
+    resetLiveData();
+    publishLiveData({ streamId: 's1', status: 'live', startedAt: Date.now() - 600_000 });
+  });
+  afterEach(() => {
+    api.cards = [];
+    api.sse = null;
+    api.sseGate = null;
+  });
+
+  function mount() {
+    return renderHook(() => useLiveMockState(false), {
+      wrapper: makeQueryWrapper(createTestQueryClient()),
+    });
+  }
+
+  it('목록 카드의 플레이어용 PDT 가 화면 카드까지 온다 · null 은 null 로, 칸이 없으면 비어 온다', async () => {
+    api.cards = [
+      card({ playerAtMs: PLAYER_AT_MS }),
+      card({ id: 3, playerAtMs: null }),
+      card({ id: 4 }),
+    ];
+    const { result } = mount();
+    await waitFor(() => expect(result.current.highlights).toHaveLength(3));
+
+    const byId = (id: string) => result.current.highlights.find((h) => h.id === id);
+    expect(byId('card-2')?.playerAtMs).toBe(PLAYER_AT_MS);
+    expect(byId('card-3')?.playerAtMs).toBeNull();
+    expect(byId('card-4')?.playerAtMs).toBeUndefined();
+  });
+
+  it('플레이어용 PDT 만 바뀐 카드는 다른 카드다', () => {
+    const now = Date.parse('2026-11-11T20:00:00Z');
+
+    expect(sameSnapshot(card({ playerAtMs: PLAYER_AT_MS }), card({ playerAtMs: null }), now)).toBe(
+      false,
+    );
+    expect(sameSnapshot(card({ playerAtMs: PLAYER_AT_MS }), card(), now)).toBe(false);
+    expect(
+      sameSnapshot(card({ playerAtMs: PLAYER_AT_MS }), card({ playerAtMs: PLAYER_AT_MS }), now),
+    ).toBe(true);
+  });
+
+  it('마크 · 가리기 답이 칸 없이 와도 받아 둔 플레이어용 PDT 를 지킨다', async () => {
+    const { result } = mount();
+    await waitFor(() => expect(result.current.cardsStatus).toBe('loaded'));
+    act(() => result.current.mergeCard(card({ playerAtMs: PLAYER_AT_MS })));
+    await waitFor(() => expect(result.current.highlights[0]?.playerAtMs).toBe(PLAYER_AT_MS));
+
+    act(() => result.current.mergeCard(card({ eventSeq: 2, hidden: true })));
+
+    await waitFor(() => expect(result.current.hiddenHighlights).toHaveLength(1));
+    expect(result.current.hiddenHighlights[0]?.playerAtMs).toBe(PLAYER_AT_MS);
+  });
+
+  it('통로(SSE)로 온 카드가 칸 없이 와도 목록이 준 플레이어용 PDT 를 지킨다', async () => {
+    let releaseSse: () => void = () => undefined;
+    api.sseGate = new Promise((resolve) => {
+      releaseSse = resolve;
+    });
+    api.cards = [card({ playerAtMs: PLAYER_AT_MS })];
+    // 같은 카드의 다음 판 — 점수가 바뀌었고 플레이어용 PDT 칸은 싣지 않았다
+    api.sse = `event: card\ndata: ${JSON.stringify(card({ score: 9, eventSeq: 2 }))}\n\n`;
+    const { result } = mount();
+    await waitFor(() => expect(result.current.highlights[0]?.playerAtMs).toBe(PLAYER_AT_MS));
+
+    await act(async () => {
+      releaseSse();
+    });
+
+    // 통로 카드가 실제로 들어왔다(양성 대조)
+    await waitFor(() => expect(result.current.highlights[0]?.score).toBe(9));
+    expect(result.current.highlights[0]?.playerAtMs).toBe(PLAYER_AT_MS);
   });
 });

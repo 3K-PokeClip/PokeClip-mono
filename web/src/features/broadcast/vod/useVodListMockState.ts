@@ -1,12 +1,6 @@
 'use client';
 
-import {
-  broadcastTitle,
-  fetchAllBroadcasts,
-  fetchAllJumpCards,
-  mediaStreamId,
-} from '@/api/clipEditor';
-import { ensurePlaybackAccessForList } from '@/api/playbackAccess';
+import { broadcastTitle, fetchAllBroadcasts, fetchAllJumpCards } from '@/api/clipEditor';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
@@ -24,22 +18,22 @@ const CARD_COUNT_TTL_MS = 10 * 60_000;
  * 카드 목록을 한꺼번에 불렀다(리뷰 1라운드). 남은 것은 다음 주기로 넘어가 흩어진다
  */
 const CARD_RECOUNT_PER_POLL = 20;
-/** 방송마다 묻는 읽기의 동시 수. 방송이 많은 계정이 처음 들어올 때 전체 이력을 한꺼번에 묻지 않게 한다 */
-const ROW_READ_PARALLEL = 6;
 import { useCallback, useMemo, useState } from 'react';
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { track } from '@/lib/analytics';
 import { runLimited } from '@/lib/runLimited';
 import { useToast } from '@/ui';
-import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
-import { recordingTimeline } from '@/features/player/recordingTimeline';
-import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
+import { mediaControlBaseUrl } from '@/features/player/mediaSource';
 import { excludeLive, filterByPeriod, isJustEnded } from './vodListView';
+import { askRound, isoMs, pickRoundUrls, ROW_READ_PARALLEL } from './vodRoundAsk';
+import { FRESH_ROW_VOD, foldRowVod, type RowVodMemory } from './vodRoundBadge';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
-// VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 녹화 재생 서버가 설정된 곳에서만 끝난 방송을 「다시 보기 가능」으로 본다.
-// 방송 제목도 명부에 칸이 없어 아직 방송 번호로 보인다.
+// VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 끝난 방송은 줄마다 되감기 제어면의 회차 경로(계약3 7-2절)를 물어 「다시 보기
+// 가능」 · 「다시보기가 없어요」를 정한다(POK-568 — 끝난 뒤 들어온 화면과 같은 판정, vodRoundBadge).
+// 방송 제목은 목록 응답의 title 을 broadcastTitle 로 골라 VodRowVisual 에 싣는다(VodBroadcast 에는 제목 칸이 없다).
+// 없거나 공백뿐이면 null 이라 행이 「제목 없는 방송」으로 적는다(세션 ID 는 보이지 않는다).
 //
 // ⚠ VodBroadcast는 계약 미러다 — services/clip `BroadcastListResponse.Item`과 칸 이름·값이
 // 같다. 실연동 때 화면을 안 고치려면 이 모양을 지켜야 한다. 계약에 없는 표기값은 아래
@@ -73,12 +67,13 @@ export interface VodBroadcast {
  * B5(VOD 확정)가 생기면 이 타입은 통째로 사라지고 계약 필드로 대체된다.
  */
 export interface VodRowVisual {
-  title: string;
+  /** 방송 제목. 없으면 null — 행이 「제목 없는 방송」으로 적는다(세션 ID 는 보이지 않는다) */
+  title: string | null;
   /** 준비 중이라 아직 모르면 null */
   durationSec: number | null;
   cardCount: number;
-  /** 녹화 재생 서버에 물어 녹화가 없다고 확인됐다(POK-254). 물을 수 없으면 비운다 */
-  recordingMissing?: boolean;
+  /** 회차 경로가 이 방송의 다시보기가 없다고 답했다(POK-568). 물을 수 없거나 아직 모르면 비운다 */
+  vodMissing?: boolean;
   /** 만료 임박 행의 「저장하지 않은 카드 N개가 함께 삭제됩니다」 */
   unsavedCardCount?: number;
 }
@@ -183,21 +178,14 @@ interface WireBroadcast {
   title?: string | null;
 }
 
-function isoMs(iso: string | null): number | null {
-  if (!iso) return null;
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? null : t;
-}
-
 /** 방송마다 재 둔 값. 쿼리 데이터에 함께 두어 화면을 떠났다 돌아와도 남는다: 안 그러면 들어올 때마다 전체 이력의 카드를 다시 센다 */
 interface RowMemory {
   /** 아직 한 번도 못 셌으면 null */
   cardCount: number | null;
   /** 마지막으로 세려고 한 시각(실패해도 넘긴다: 늘 실패하는 방송이 다시 세는 차례를 독차지하지 않게) */
   countedAt: number;
-  recorded: boolean;
-  /** 재생 서버에 물어 녹화가 없다고 들었다(묻지 못했으면 앞 답을 둔다) */
-  missing: boolean;
+  /** 회차 경로로 정한 다시보기 표지(POK-568). 아직 회차를 묻지 않았으면 처음 보는 줄(FRESH_ROW_VOD)과 같다 */
+  vod: RowVodMemory;
 }
 
 interface VodListData {
@@ -215,7 +203,7 @@ async function loadVodList(
   // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰)
   const all: WireBroadcast[] = await fetchAllBroadcasts('past', streamerId, signal);
   const cache = new Map(Object.entries(memory));
-  // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
+  // 방송마다 카드 수·다시보기 표지는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
   const nowMs = Date.now();
   const countStale = (b: WireBroadcast) => {
     const known = cache.get(b.streamId);
@@ -241,70 +229,45 @@ async function loadVodList(
     .sort((x, y) => x.countedAt - y.countedAt)
     .slice(0, CARD_RECOUNT_PER_POLL)
     .forEach(({ id }) => recountIds.add(id));
-  const checkRecording = (b: WireBroadcast) =>
-    b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
-  // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
-  // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
-  // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
-  const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
-  // CDN 뒤 녹화 목록은 출입증 쿠키가 있어야 열린다(POK-317). 한 탭에 든 키는 12개까지라 차례가 안 온 키는 쿠키 없이 묻고
-  // 다음 주기에 다시 온다
-  const access = ensurePlaybackAccessForList(
-    all.filter(checkRecording).map((b) => ({ streamId: b.streamId, mediaKey: mediaStreamId(b) })),
-  );
-  const spansOf = (key: string) => {
-    let found = spansByKey.get(key);
-    if (found === undefined) {
-      found = Promise.resolve(access.get(key)).then(() => lookupRecordingSpans(key));
-      spansByKey.set(key, found);
-    }
-    return found;
-  };
+  // 기억에 표지가 없으면(처음 보는 방송 · 카드 수만 센 기억) 처음 보는 줄이다: 상한 밖에서 묻는다
+  const vodOf = (streamId: string) => cache.get(streamId)?.vod ?? FRESH_ROW_VOD;
+  const controlBase = mediaControlBaseUrl();
+  const roundUrls = pickRoundUrls(all, vodOf, controlBase, new Date(nowMs));
   await runLimited(
-    all.filter((b) => recountIds.has(b.streamId) || checkRecording(b)),
+    all.filter((b) => recountIds.has(b.streamId) || roundUrls.has(b.streamId)),
     ROW_READ_PARALLEL,
     async (b) => {
       if (signal.aborted) return;
       const known = cache.get(b.streamId);
       const recount = known === undefined || recountIds.has(b.streamId);
-      const [fetched, spans] = await Promise.all([
+      const roundUrl = roundUrls.get(b.streamId);
+      const [fetched, answer] = await Promise.all([
         known !== undefined && !recount
           ? Promise.resolve(known.cardCount)
           : fetchAllJumpCards(b.streamId, signal).then(
               (cards) => cards.length,
               () => null,
             ),
-        // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-        checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
+        roundUrl === undefined || controlBase === null
+          ? Promise.resolve(null)
+          : askRound(roundUrl, controlBase, signal),
       ]);
-      // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
-      // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
-      // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
-      // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
-      const recorded =
-        known?.recorded === true ||
-        (spans !== null &&
-          recordingTimeline(
-            spans,
-            recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
-            isoMs(b.endedAt),
-          ) !== null);
+      // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 표지는 카드 수와 따로 남긴다:
+      // 카드 목록만 실패해도 회차 답을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex)
+      const vod = vodOf(b.streamId);
       cache.set(b.streamId, {
         cardCount: fetched ?? known?.cardCount ?? null,
         countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
-        // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
-        // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
-        // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
-        recorded,
-        missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
+        // 물었으면 답을 접는다(못 받은 답도 askedAt 을 세운다). 404 유예의 원점은 명부 endedAt 이다
+        vod: answer === null ? vod : foldRowVod(vod, answer, Date.now(), isoMs(b.endedAt)),
       });
     },
   );
   const rows: VodBroadcast[] = all.map((b) => ({
     streamId: b.streamId,
-    // 서버 상태가 정본이다. 녹화 재생 서버가 있고 그 방송의 녹화가 실제로 있을 때만 「다시 보기 가능」으로 올린다
+    // 서버 상태가 정본이다. 회차 경로가 다시보기가 섰다고 답한 끝난 방송만 「다시 보기 가능」으로 올린다
     status:
-      b.status === 'ended' && cache.get(b.streamId)?.recorded
+      b.status === 'ended' && vodOf(b.streamId).badge === 'ready'
         ? 'vod_ready'
         : ((b.status as VodBroadcastStatus) ?? 'ended'),
     relation: b.relation === 'EDITOR' ? 'EDITOR' : 'OWNER',
@@ -321,10 +284,10 @@ async function loadVodList(
         ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
         : null;
     visuals[b.streamId] = {
-      title: titles.get(b.streamId) ?? b.streamId,
+      title: titles.get(b.streamId) ?? null,
       durationSec: dur,
       cardCount: cache.get(b.streamId)?.cardCount ?? 0,
-      recordingMissing: b.status === 'ended' && cache.get(b.streamId)?.missing === true,
+      vodMissing: b.status === 'ended' && vodOf(b.streamId).badge === 'none',
     };
   }
   return { rows, visuals, memory: Object.fromEntries(cache) };

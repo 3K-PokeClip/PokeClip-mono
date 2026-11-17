@@ -9,6 +9,7 @@ import {
   type ReactElement,
 } from 'react';
 import clsx from 'clsx';
+import { PRIVATE_TEXT_CLASS } from '../../privateText';
 import styles from './Avatar.module.css';
 
 export type AvatarSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
@@ -52,7 +53,10 @@ export const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(function Avatar(
           onError={() => setErrored(true)}
         />
       ) : (
-        <span aria-hidden={alt || name ? undefined : true}>{initials(name)}</span>
+        // 이니셜은 이름의 첫 글자라 녹화에서 가린다(POK-572)
+        <span className={PRIVATE_TEXT_CLASS} aria-hidden={alt || name ? undefined : true}>
+          {initials(name)}
+        </span>
       )}
     </span>
   );

@@ -137,9 +137,15 @@ override_data {
       rds_resource_id   = "db-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
       rds_sg_id         = "sg-0rds"
       rewind_bucket_arn = "arn:aws:s3:::pokeclip-prod-rewind-example"
-      media_secret_arns = ["arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"]
+      media_secret_arns = [
+        "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj",
+        "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-YzAbCd",
+      ]
 
       ingest_auth_resolve_token_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/stream-key-resolve-token-StUvWx"
+      clip_expiry_token_secret_arn         = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-YzAbCd"
+      broadcast_topic_arn                  = "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo"
+      edge_bounds_kvs_arn                  = "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1"
     }
   }
 }
@@ -158,6 +164,7 @@ variables {
     nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    timing_guard    = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
   }
   docker_version                = "25.0.16"
   ecr_credential_helper_version = "0.12.0-3.amzn2023"
@@ -177,6 +184,13 @@ run "composes_image_refs_from_registry_and_digests" {
       module.media_host.template_vars.sidecar_image == "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:3333333333333333333333333333333333333333333333333333333333333333"
     )
     error_message = "MediaMTX · nginx · 사이드카 이미지가 <registry repo_urls[키]>@<다이제스트> 가 아니다(저장소 · 다이제스트 짝이 바뀜)."
+  }
+
+  # 검사 핀(POK-196 PDT 기동 전 검사)은 사이드카 저장소의 다른 다이제스트다 — 사이드카를 출시 이미지로 내려도 c0 하한
+  # 이상으로 남는 핀이다.
+  assert {
+    condition     = module.media_host.template_vars.timing_guard_image == "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/pokeclip-prod/media-sidecar@sha256:6666666666666666666666666666666666666666666666666666666666666666"
+    error_message = "검사 핀 이미지가 <사이드카 저장소>@<image_digests.timing_guard> 가 아니다."
   }
 
   assert {
@@ -204,6 +218,7 @@ run "composes_ingest_auth_image_when_digest_given" {
       nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
       loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      timing_guard    = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
       ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     }
     stream_key_resolve_url = "http://auth.pokeclip.internal:28082"
@@ -275,6 +290,7 @@ run "passes_ingest_auth_settings_in_responder_mode" {
       nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
       loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      timing_guard    = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
       ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
     }
     stream_key_resolve_url = "http://auth.pokeclip.internal:28082"
@@ -290,6 +306,42 @@ run "passes_ingest_auth_settings_in_responder_mode" {
       ] == ["INGEST_AUTH_IP_LIMIT=off\n"]
     )
     error_message = "stream_key_resolve_url · ingest_auth_ip_limit 입력이 모듈(4C 주소 · ingest-auth.env)로 그대로 가지 않는다."
+  }
+}
+
+# --- 새 꼴 쓰기 스위치(sidecar.env — 결정 9: 모듈 기본 끔 · prod tfvars 만 켬) ---
+
+run "defaults_playback_round_keys_false" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.playback_round_keys == false &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+      ] == ["PLAYBACK_ROUND_KEYS=false\n"]
+    )
+    error_message = "기본값이 sidecar.env 한 줄 PLAYBACK_ROUND_KEYS=false 가 아니다."
+  }
+}
+
+run "passes_playback_round_keys_true" {
+  command = plan
+
+  variables {
+    playback_round_keys = true
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.playback_round_keys == true &&
+      [
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/sidecar.env"
+      ] == ["PLAYBACK_ROUND_KEYS=true\n"]
+    )
+    error_message = "playback_round_keys = true 가 모듈(sidecar.env)로 그대로 가지 않는다."
   }
 }
 
@@ -320,6 +372,53 @@ run "reads_auth_sg_and_port_from_platform" {
       ingress = { auth_sg_id = "sg-0auth", port = 28082 }
     }
     error_message = "Media → auth 이그레스 · auth 인그레스 ← Media 의 SG · 포트가 platform 출력 service_sg_ids.auth · service_ports.auth 와 다르다."
+  }
+}
+
+# Media → clip(60일 만료 창구) SG 짝도 media 가 만든다 — auth 짝과 같은 꼴이고
+# 주소와 상관없이 늘 있다. clip SG · 포트의 정본은 platform 이다(services.clip).
+run "reads_clip_sg_and_port_from_platform" {
+  command = plan
+
+  assert {
+    condition = module.media_host.clip_expiry_rules == {
+      egress  = { clip_sg_id = "sg-0clip", port = 28081 }
+      ingress = { clip_sg_id = "sg-0clip", port = 28081 }
+    }
+    error_message = "Media → clip 이그레스 · clip 인그레스 ← Media 의 SG · 포트가 platform 출력 service_sg_ids.clip · service_ports.clip 과 다르다."
+  }
+}
+
+# 만료 주소 기본값은 빈 값(끔)이다 — 사이드카 env · 토큰 bind 가 렌더되지 않고
+# media.env 의 토큰 비밀 ARN 도 비어 상자가 토큰을 받지 않는다.
+run "defaults_clip_internal_url_empty" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.clip_internal_url == "" &&
+      strcontains(module.media_host.rendered_user_data["a"], "CLIP_EXPIRY_TOKEN_SECRET_ARN=\n") &&
+      !strcontains(module.media_host.rendered_user_data["a"], "CLIP_INTERNAL_URL")
+    )
+    error_message = "clip_internal_url 기본값이 빈 값이 아니거나, 끔인데 만료 env · 토큰 비밀 ARN 이 user_data 에 있다."
+  }
+}
+
+# 주소를 채우면 그 값이 사이드카로, 토큰 비밀 ARN 은 런타임 1단 출력
+# clip_expiry_token_secret_arn 그대로 media.env 로 간다(tfvars 칸 없음).
+run "passes_clip_internal_url_and_token_arn_from_runtime_state" {
+  command = plan
+
+  variables {
+    clip_internal_url = "http://clip.pokeclip.internal:28081"
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.clip_internal_url == "http://clip.pokeclip.internal:28081" &&
+      strcontains(module.media_host.rendered_user_data["a"], "CLIP_EXPIRY_TOKEN_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/expired-broadcasts-token-YzAbCd\n")
+    )
+    error_message = "clip_internal_url 이 모듈로, 런타임 1단 clip_expiry_token_secret_arn 이 media.env 로 그대로 가지 않는다."
   }
 }
 
@@ -377,6 +476,134 @@ run "passes_rewind_public_base_url_input" {
   }
 }
 
+# --- 계약9 발행(O8a 당김 — 주제는 런타임 1단 출력, 목록은 이 루트 입력) ---
+
+# 주제 ARN 은 tfvars 가 아니라 런타임 상태 출력에서만 온다 — 손으로 넣은 값이
+# 다른 주제로 발행하거나 비어 발행이 꺼지지 않게.
+run "passes_broadcast_topic_from_runtime_state" {
+  command = plan
+
+  variables {
+    image_digests = {
+      bundle          = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      mediamtx        = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      timing_guard    = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+      ingest_auth     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+    stream_key_resolve_url    = "http://auth.pokeclip.internal:28082"
+    lifecycle_publish_streams = ["01ARZ3NDEKTSV4RRFFQ69G5FAV"]
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.broadcast_topic_arn == "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo" &&
+      module.media_host.template_vars.lifecycle_publish_streams == tolist(["01ARZ3NDEKTSV4RRFFQ69G5FAV"])
+    )
+    error_message = "런타임 상태의 broadcast_topic_arn · 입력 lifecycle_publish_streams 가 모듈 템플릿 변수로 그대로 가지 않는다."
+  }
+
+  assert {
+    condition = strcontains(one([
+      for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+      file.content if file.path == "/etc/pokeclip-media/compose.yml"
+    ]), "BROADCAST_TOPIC_ARN: \"arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo\"")
+    error_message = "compose.yml 사이드카 env 의 BROADCAST_TOPIC_ARN 이 런타임 상태 출력이 아니다."
+  }
+}
+
+# 기본 입력(옛 모드 · 빈 목록)에서도 주제는 런타임 상태에서 온다.
+run "keeps_broadcast_topic_out_of_tfvars" {
+  command = plan
+
+  assert {
+    condition = (
+      module.media_host.template_vars.broadcast_topic_arn == "arn:aws:sns:ap-northeast-2:111122223333:pokeclip-prod-broadcast-lifecycle.fifo" &&
+      !strcontains(file("variables.tf"), "variable \"broadcast_topic_arn\"") &&
+      !strcontains(file("terraform.tfvars.example"), "broadcast_topic_arn")
+    )
+    error_message = "기본 입력에서 주제가 런타임 상태 출력이 아니거나, broadcast_topic_arn 이 이 루트의 변수 · tfvars 예시에 있다(정본은 런타임 1단 출력)."
+  }
+}
+
+# --- /dvr 하한 Writer(POK-525 — KVS ARN 은 런타임 1단 출력 · 스위치만 tfvars) ---
+
+# 기본 끔 — 모듈에는 런타임 KVS ARN 이 늘 가고(인스턴스 역할 Resource), 사이드카
+# env 는 빈 값이다.
+run "defaults_edge_bounds_writer_off" {
+  command = plan
+
+  assert {
+    condition = (
+      var.edge_bounds_writer_enabled == false &&
+      module.media_host.template_vars.edge_bounds_kvs_arn == "" &&
+      strcontains(one([
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), "REWIND_EDGE_BOUNDS_KVS_ARN: \"\"")
+    )
+    error_message = "기본값에서 Writer 가 꺼져 있지 않다(사이드카 REWIND_EDGE_BOUNDS_KVS_ARN 이 빈 값이 아님)."
+  }
+}
+
+# 켬 — 사이드카 env 가 런타임 상태의 KVS ARN 이다(손으로 넣는 칸이 없다).
+run "passes_edge_bounds_kvs_arn_from_runtime_state" {
+  command = plan
+
+  variables {
+    edge_bounds_writer_enabled = true
+  }
+
+  assert {
+    condition = (
+      module.media_host.template_vars.edge_bounds_kvs_arn == "arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1" &&
+      strcontains(one([
+        for file in yamldecode(module.media_host.rendered_user_data["a"]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), "REWIND_EDGE_BOUNDS_KVS_ARN: \"arn:aws:cloudfront::111122223333:key-value-store/00000000-0000-0000-0000-0000000000e1\"") &&
+      !strcontains(file("variables.tf"), "variable \"edge_bounds_kvs_arn\"") &&
+      !strcontains(file("terraform.tfvars.example"), "edge_bounds_kvs_arn")
+    )
+    error_message = "edge_bounds_writer_enabled = true 인데 사이드카 env 가 런타임 상태 출력 edge_bounds_kvs_arn 이 아니거나, edge_bounds_kvs_arn 이 이 루트의 변수 · tfvars 예시에 있다(정본은 런타임 1단 출력)."
+  }
+}
+
+# --- 대리 창구 스위치(POK-574) ---
+
+# tfvars 의 키별 cred_relay 가 모듈 입력(instances = var.instances)까지 그대로
+# 간다. 루트 변수 꼴에 속성이 없으면 켬 키도 끔(홉 2)으로 뜬다. 루트 시험은 모듈
+# 안 상자를 주소로 볼 수 없어 변환된 루트 값을 본다 — 홉은 modules/media_host
+# 시험이 맡는다.
+run "passes_cred_relay_per_key" {
+  command = plan
+
+  variables {
+    instances = {
+      a = { config_version = "1" }
+      b = { config_version = "2", cred_relay = true }
+    }
+  }
+
+  assert {
+    condition     = var.instances["b"].cred_relay == true && var.instances["a"].cred_relay == false
+    error_message = "instances 의 cred_relay 가 키별로 b 켬 · a 끔(기본)이 아니다."
+  }
+
+  # 루트가 키별 스위치를 모듈의 compose 렌더까지 넘긴다 — 모듈 출력
+  # rendered_user_data 로 보면 켬 키(b)의 compose 에만 중계 서비스가 있다.
+  assert {
+    condition = [
+      for key in ["a", "b"] : strcontains(one([
+        for file in yamldecode(module.media_host.rendered_user_data[key]).write_files :
+        file.content if file.path == "/etc/pokeclip-media/compose.yml"
+      ]), "\n  cred-relay:\n")
+    ] == [false, true]
+    error_message = "모듈 렌더의 compose 중계 서비스가 b(켬)에만 있지 않다 — 루트가 cred_relay 를 모듈 렌더까지 넘기지 않는다."
+  }
+}
+
 # --- 출력(설계 3-2) ---
 
 # id 는 계산 속성이다. apply 로 돌려 mock 이 자원마다 다른 값을 만들게 한다.
@@ -420,6 +647,7 @@ run "rejects_image_tag_instead_of_digest" {
       nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
       loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      timing_guard    = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
     }
   }
 
@@ -436,6 +664,7 @@ run "rejects_malformed_ingest_auth_digest" {
       nginx           = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
       sidecar         = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
       loopback_sender = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+      timing_guard    = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
       ingest_auth     = "sha256:5555"
     }
   }

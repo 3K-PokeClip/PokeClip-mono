@@ -4,7 +4,7 @@
 // 정식 배포 때 S3 + CloudFront로 옮기면 PLUGIN_DOWNLOAD_BASE만 바꾼다(mono를 비공개로 돌리면 Release 파일이 막힌다).
 // 설치·연결 상태는 여기 없다 — 웹은 플러그인이 깔렸는지·붙었는지 알 수 없다(POK-377).
 
-export const PLUGIN_VERSION = '0.2.0';
+export const PLUGIN_VERSION = '0.2.1';
 
 const PLUGIN_RELEASE_REPO = '3K-PokeClip/PokeClip-mono';
 const PLUGIN_DOWNLOAD_BASE = `https://github.com/${PLUGIN_RELEASE_REPO}/releases/download/obs-plugin-v${PLUGIN_VERSION}`;
