@@ -25,6 +25,13 @@
 
 **아직 안 되는 것**: 종료 신호를 받는 Media 수신부(1번 M6: 플러그인 쪽만 있다), SRT RTT 통계(A6), OS가 믿는 코드 서명·macOS 공증(A7: 설치 파일은 있다, 공인 서명은 POK-360), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290: 지금은 OBS 소스 타입 6종류로만 가른다).
 
+**알려진 제약 (Windows 실기 2026-11-17, 0.2.1)** — 아래 「로컬 검증」의 Windows 실측.
+
+- 본방이 시작하자마자 실패하면(연결 거부·없는 호스트) 독이 「준비됐어요」로만 돌아가고 `main_stream_failed` 안내가 남지 않는다 — [POK-596](https://xodbs9810.atlassian.net/browse/POK-596)
+- 스트림 지연을 켠 본방을 「방송 중지 (지연된 분량 버림)」으로 끄면 종료 신호가 가지 않는다(`not sent on main_stop (not_intentional)`). 지연을 유지한 「방송 중단」은 보낸다 — [POK-597](https://xodbs9810.atlassian.net/browse/POK-597)
+- 스트림 지연을 켜면 우리 SRT는 지연 없이 바로 나가고 본방만 지연 시간 뒤에 나간다 — SRT가 본방보다 그만큼 앞선다(POK-597에서 같이 본다)
+- NVENC 인코더로는 아직 재 보지 않았다(시험 PC 드라이버가 낡아 x264로만 쟀다)
+
 ## 구조
 
 ```
@@ -149,8 +156,9 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 - 예전처럼 zip을 OBS 폴더에 풀어 둔 사본(`<OBS>\obs-plugins\64bit\pokeclip-obs.dll`·`<OBS>\data\obs-plugins\pokeclip-obs\`)이 있으면 지운다 — 남아 있으면 OBS가 플러그인을 두 번 잡는다.
 - 제거는 이 플러그인 폴더만 지운다. 페어링·설정(`%APPDATA%\obs-studio\plugin_config\pokeclip-obs`)과 다른 플러그인은 남는다.
 - 무인 설치: `…-installer.exe /VERYSILENT /SUPPRESSMSGBOXES`(경고는 「계속」으로 넘어간다).
+- 2026-11-17 Windows 10 · OBS 33.0.1 실기(0.2.1)에서 위 네 가지를 확인했다 — 실행 중 안내(「OBS Studio가 실행 중입니다. … 닫은 뒤 확인을 누르세요」) → 취소하면 설치를 멈추고 OBS는 그대로, 옛 zip 사본 두 곳 삭제 뒤 플러그인 1회 로드, 제거 뒤 `pokeclip.json` 그대로 · 다시 설치하면 페어링 유지.
 
-**포터블 OBS·수동 설치** — 포터블 OBS는 `%ProgramData%`를 읽지 않는다. zip(`pokeclip-obs-<판>-windows-x64.zip`)을 OBS 폴더에 풀면 `obs-plugins\64bit\pokeclip-obs.dll` + `data\obs-plugins\pokeclip-obs\`가 된다. 설치 파일과 함께 쓰지 않는다(두 벌).
+**포터블 OBS·수동 설치** — 포터블 OBS는 `%ProgramData%`를 읽지 않는다. zip(`pokeclip-obs-<판>-windows-x64.zip`)을 OBS 폴더에 풀면 `obs-plugins\64bit\pokeclip-obs.dll` + `data\obs-plugins\pokeclip-obs\`가 된다. 설치 파일과 함께 쓰지 않는다(두 벌). OBS 33은 내장 플러그인을 `<OBS>\core\<이름>`으로 옮겼지만 `obs-plugins\64bit`도 그대로 읽는다(2026-11-17 포터블 33.0.1에서 확인).
 
 **서명 경고** — 아직 OS가 믿는 서명이 없다(공인 서명은 [POK-360](https://xodbs9810.atlassian.net/browse/POK-360)). 그동안은 경고를 한 번 넘긴다.
 
@@ -389,6 +397,17 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 - 처음 배정: `T2 마이크 · T3 Slack A, Slack B, Slack 화면(app:com.tinyspeck.slackmacgap) · T4 Webex(app:Cisco-Systems.Spark) · T5 디스플레이(app) · T6 데스크탑 sck(app)` — 같은 번들의 오디오 캡처와 앱 모드 화면 캡처가 한 트랙, 디스플레이·데스크탑 모드는 남은 `application` 값을 쓰지 않았다
 - 빈 설정으로 추가한 「macOS 오디오 캡처」는 앱 없이 T3(앱 종류의 첫 트랙)에 앉고, 속성에서 Webex를 고르자 `source updated` 한 번에 T4, Slack으로 바꾸자 T3, 데스크탑 모드로 바꾸자 T3에 남았다(기억의 `app`은 Slack 그대로)
 - `app`을 지운 옛 형식 기억 + Slack B를 T6에 기억: 다시 켜자 Slack B는 T6에 남고 `app`만 채워졌다. 종료 `Number of memory leaks: 0`
+
+**2026-11-17 Windows 실측 (POK-265, Windows 10 22H2 · OBS 33.0.1 · 0.2.1 설치 파일 · x264 1080p60)** — 본방은 치지직, SRT는 운영 수신부(passphrase 켬) 또는 같은 PC의 MediaMTX 1.21.4. 원문은 POK-265 · POK-282 코멘트.
+
+- 치지직 본방과 동시 송출: 비디오 인코더 1개 공유, `keyint_sec 1 -> 2`(60fps `keyint 120`), 수신 쪽 `H264 + MPEG-4 Audio ×6`. 운영 경로 45분 연속 송출 뒤 종료 신호 `http 202`
+- 마크: 독 버튼 · Ctrl+Shift+M 모두 `delivered (http 201, attempt 1)`
+- 실제 회선 흔들림(치지직 RTMP도 드롭 12.6%): `disconnected` → 없는 호스트 `bad_path` → 세 번째 시도에 붙음(약 28초). 수신부 프로세스를 죽이면 약 5.1초 뒤 `Connection was broken`(macOS `stop`의 즉시 감지와 다르다)
+- 300초 창 안 재시도는 정책 표대로 5초 간격(응답 없는 주소는 시도마다 3초 접속 대기 → 주기 약 8초). 30초·60초 구간과 포기는 Windows에서 재지 않았다
+- 틀린 passphrase 수신부: `connect_failed` 약 30ms × 3회 → 키 확인 안내, 「재시도 중지」 뒤에도 남음 → 「다시 연결」로 붙음(`send-now`)
+- 재시도 중 접속 구간에 본방 정지 → 독 「준비됐어요」 · 종료 신호 202. 접속 중 OBS 종료 → 2.4초 만에 종료, 메모리 누수 0
+- 스트림 지연 20초 · 끄고 바로 다시 켜기 · 장면 컬렉션 이름 바꾼 뒤 자동 배정 끄기(원래 트랙 체크 복원) · 오디오 안내 카드 「나중에」 · Qt 폴백(`force_fallback`) 패널의 재시도 줄과 버튼 — 기대대로
+- 실패 2건은 위 「알려진 제약」(POK-596 · POK-597)
 
 ## 문제 해결 (독 사유 코드)
 
