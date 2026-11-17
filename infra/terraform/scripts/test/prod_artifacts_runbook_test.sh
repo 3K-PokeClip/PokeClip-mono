@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 #
 # runbooks/prod-artifacts.md 「CI 멈춤 절차」 의 2단계(끝나지 않은 실행 취소) ·
-# 3단계(다시 조회) 블록을 가짜 gh 로 bash 와 대화형 zsh 에서 돌린다. GitHub 에
-# 닿지 않는다 — gh 는 PATH 맨 앞의 가짜(gh_fakebin/gh)이고, 환경은 env -i 에
-# 사례 디렉터리 HOME 이라 진짜 gh 의 자격도 없다. jq 는 진짜를 쓴다.
+# 3단계(다시 조회) 블록을 가짜 gh 로 bash 와 대화형 zsh 에서 돌린다. gh 는 PATH
+# 맨 앞의 가짜(gh_fakebin/gh)다. 진짜 gh 를 부르지 않게 둘을 막는다 — 시작할 때
+# 가짜에 실행 비트가 없으면 멈추고(비트가 없으면 PATH 뒤의 진짜가 풀린다),
+# 사례마다 블록 앞에서 그 셸의 `command -v gh` 가 가짜 경로가 아니면 블록을
+# 돌리지 않고 실패한다. 환경은 env -i 에 사례 디렉터리 HOME 이지만, macOS
+# 키체인의 gh 토큰처럼 HOME 밖 자격이 있을 수 있어 그것에는 기대지 않는다.
+# jq 는 진짜를 쓴다.
 #
 # 런북 블록을 그대로 뽑는다(사본 없음). 블록은 그 안의 한 줄(줄 머리가 같아야
 # 함)로 찾고, 그 줄을 품은 shell 블록이 런북에 정확히 하나여야 한다. 목록 안
@@ -138,11 +142,15 @@ runbook_block() {
 
 #######################################
 # 블록 하나를 셸 하나에서 돌린다. 결과는 run_dir 의 out · err · gh.log 이고
-# 종료 코드는 run_rc 다(출력의 마지막 rc= 줄 · 없으면 빈 값).
+# 종료 코드는 run_rc 다(출력의 마지막 rc= 줄 · 없으면 빈 값). 블록 앞에서 그
+# 셸의 gh 가 가짜(FAKEBIN/gh)인지 보고, 아니면 블록을 돌리지 않고 셸을
+# 끝낸 뒤 실패로 센다(블록 본문은 그대로).
 # Globals:
 #   tmp_root, run_rc, run_dir, zsh_bin, FAKEBIN, ZSH_STDIN_FLAGS
 # Arguments:
 #   셸(bash · zsh), 블록 글자, 가짜 gh 응답(FAKE_GH_RUNS_<상태>=<수>)...
+# Returns:
+#   0 / 1 gh 가 가짜가 아님.
 #######################################
 run_block() {
   local shell_kind="$1" block="$2"
@@ -150,7 +158,10 @@ run_block() {
   local shell_cmd=()
   run_dir="$(mktemp -d "${tmp_root}/case.XXXXXX")" || return 1
   mkdir -p -- "${run_dir}/home" "${run_dir}/tmp"
-  printf '%s\necho "rc=$?"\n' "${block}" >"${run_dir}/stdin"
+  # shellcheck disable=SC2016
+  printf '%s\n' '[ "$(command -v gh)" = "${FAKE_GH_EXPECTED}" ] || exit 97' \
+    'echo fake-gh-ok' >"${run_dir}/stdin"
+  printf '%s\necho "rc=$?"\n' "${block}" >>"${run_dir}/stdin"
   : >"${run_dir}/gh.log"
   case "${shell_kind}" in
     bash) shell_cmd=(bash -s) ;;
@@ -158,8 +169,15 @@ run_block() {
   esac
   env -i "PATH=${FAKEBIN}:${PATH}" "HOME=${run_dir}/home" \
     "TMPDIR=${run_dir}/tmp" "LANG=${LANG:-C.UTF-8}" "TERM=dumb" \
-    "FAKE_GH_LOG=${run_dir}/gh.log" "$@" "${shell_cmd[@]}" \
-    <"${run_dir}/stdin" >"${run_dir}/out" 2>"${run_dir}/err"
+    "FAKE_GH_LOG=${run_dir}/gh.log" "FAKE_GH_EXPECTED=${FAKEBIN}/gh" "$@" \
+    "${shell_cmd[@]}" <"${run_dir}/stdin" >"${run_dir}/out" \
+    2>"${run_dir}/err"
+  if ! grep -aq 'fake-gh-ok$' "${run_dir}/out"; then
+    run_rc=""
+    fail "${shell_kind}: 블록 셸의 gh 가 가짜(${FAKEBIN}/gh)가 아님 —" \
+      "블록을 돌리지 않음"
+    return 1
+  fi
   run_rc="$(grep -aoE 'rc=[0-9]+$' "${run_dir}/out" | tail -n 1)"
   run_rc="${run_rc#rc=}"
 }
@@ -195,7 +213,7 @@ test_cancel() {
   local shell_kind="$1" name
   name="${shell_kind}: 취소 — 끝나지 않은 실행 있음"
   run_block "${shell_kind}" "${cancel_block}" FAKE_GH_RUNS_queued=1 \
-    FAKE_GH_RUNS_waiting=2
+    FAKE_GH_RUNS_waiting=2 || return 1
   if [[ "${run_rc}" == 0 && "$(gh_calls list)" == 10 \
     && "$(gh_calls cancel)" == 6 ]]; then
     pass "${name}"
@@ -205,7 +223,7 @@ test_cancel() {
   fi
 
   name="${shell_kind}: 취소 — 없음"
-  run_block "${shell_kind}" "${cancel_block}"
+  run_block "${shell_kind}" "${cancel_block}" || return 1
   if [[ "${run_rc}" == 0 && "$(gh_calls list)" == 10 \
     && "$(gh_calls cancel)" == 0 ]]; then
     pass "${name}"
@@ -215,7 +233,8 @@ test_cancel() {
   fi
 
   name="${shell_kind}: 취소 — 1000 상한이면 멈춤"
-  run_block "${shell_kind}" "${cancel_block}" FAKE_GH_RUNS_pending=5000
+  run_block "${shell_kind}" "${cancel_block}" FAKE_GH_RUNS_pending=5000 ||
+    return 1
   if [[ -n "${run_rc}" && "${run_rc}" != 0 && "$(gh_calls cancel)" == 0 ]] &&
     grep -aq '잘렸을 수 있음' "${run_dir}/out"; then
     pass "${name}"
@@ -232,7 +251,8 @@ test_cancel() {
 test_recheck() {
   local shell_kind="$1" name
   name="${shell_kind}: 다시 조회 — in_progress 3"
-  run_block "${shell_kind}" "${recheck_block}" FAKE_GH_RUNS_in_progress=3
+  run_block "${shell_kind}" "${recheck_block}" FAKE_GH_RUNS_in_progress=3 ||
+    return 1
   if [[ "${run_rc}" == 0 ]] &&
     grep -aqE '끝나지 않은 실행 6 개$' "${run_dir}/out"; then
     pass "${name}"
@@ -241,7 +261,7 @@ test_recheck() {
   fi
 
   name="${shell_kind}: 다시 조회 — 없음"
-  run_block "${shell_kind}" "${recheck_block}"
+  run_block "${shell_kind}" "${recheck_block}" || return 1
   if [[ "${run_rc}" == 0 ]] &&
     grep -aqE '끝나지 않은 실행 0 개$' "${run_dir}/out"; then
     pass "${name}"
@@ -250,7 +270,8 @@ test_recheck() {
   fi
 
   name="${shell_kind}: 다시 조회 — 1000 상한이면 멈춤"
-  run_block "${shell_kind}" "${recheck_block}" FAKE_GH_RUNS_requested=5000
+  run_block "${shell_kind}" "${recheck_block}" FAKE_GH_RUNS_requested=5000 ||
+    return 1
   if [[ -n "${run_rc}" && "${run_rc}" != 0 ]] &&
     grep -aq '잘렸을 수 있음' "${run_dir}/out"; then
     pass "${name}"
@@ -277,7 +298,7 @@ test_negative_controls() {
   fi
 
   name='bash: 음성 대조 — status 이름 사본은 bash 에서 돔(종료 0)'
-  run_block bash "${status_copy}" FAKE_GH_RUNS_queued=1
+  run_block bash "${status_copy}" FAKE_GH_RUNS_queued=1 || return 1
   if [[ "${run_rc}" == 0 && "$(gh_calls cancel)" == 2 ]]; then
     pass "${name}"
   else
@@ -290,16 +311,18 @@ test_negative_controls() {
     return 0
   fi
   name='zsh: 음성 대조 — status 이름 사본은 실패 · 취소 0번'
-  run_block zsh "${status_copy}" FAKE_GH_RUNS_queued=1
-  if [[ "${run_rc}" != 0 && "$(gh_calls cancel)" == 0 ]]; then
+  run_block zsh "${status_copy}" FAKE_GH_RUNS_queued=1 || return 1
+  if [[ -n "${run_rc}" && "${run_rc}" != 0 \
+    && "$(gh_calls cancel)" == 0 ]]; then
     pass "${name}"
   else
     fail "${name}: rc=${run_rc} 취소 $(gh_calls cancel) — $(run_output)"
   fi
 
   name='zsh: 음성 대조 — 줄 끝 주석 사본은 기대 줄로 끝나지 않음'
-  run_block zsh "${comment_copy}"
-  if ! grep -aqE '끝나지 않은 실행 0 개$' "${run_dir}/out"; then
+  run_block zsh "${comment_copy}" || return 1
+  if [[ -n "${run_rc}" ]] &&
+    ! grep -aqE '끝나지 않은 실행 0 개$' "${run_dir}/out"; then
     pass "${name}"
   else
     fail "${name}: 주석이 막히지 않음 — $(run_output)"
@@ -309,6 +332,13 @@ test_negative_controls() {
 main() {
   local total root_pattern
   local template="${TMPDIR:-/tmp}/prod_artifacts_runbook_test.XXXXXX"
+  # 실행 비트가 없으면 PATH 의 가짜 gh 가 풀리지 않고 뒤의 진짜 gh 가 풀린다 —
+  # 시작하지 않는다.
+  if [[ ! -x "${FAKEBIN}/gh" ]]; then
+    printf '%s\n' 'prod_artifacts_runbook_test: 가짜 gh 에 실행 비트가 없음' \
+      "  ${FAKEBIN}/gh" >&2
+    exit 1
+  fi
   tmp_root="$(mktemp -d "${template}")" || exit 1
   trap remove_tmp_root EXIT
   root_pattern="${tmp_root}"
