@@ -91,8 +91,19 @@ jobs:
           fi
           sha256="$(sha256sum "${plan}" | cut -d ' ' -f 1)"
           # --- 목록 끝 ---
-          echo "올릴 파일 $(wc -l <"${plan}") 개 · 목록 sha256 ${sha256}"
+          count="$(wc -l <"${plan}")"
+          echo "올릴 파일 ${count} 개 · 목록 sha256 ${sha256}"
           echo "sha256=${sha256}" >>"${GITHUB_OUTPUT}"
+          # 요약에는 수 · 해시 · 뜻만 쓴다(목록 원문 · 버킷은 로그에만).
+          {
+            echo '## apex 랜딩 dry-run'
+            echo
+            echo "올릴 파일 ${count} 개 · 목록 sha256 ${sha256}"
+            echo
+            echo '이 목록은 「무엇이 바뀌었나」 가 아니라 「무엇을 올리나」 다 —'
+            echo '체크아웃 파일의 수정 시각이 방금이라 제외 밖 전부가 잡힌다.'
+            echo '목록 원문은 이 잡의 로그에 있다.'
+          } >>"${GITHUB_STEP_SUMMARY}"
 
   upload:
     needs: dry-run
