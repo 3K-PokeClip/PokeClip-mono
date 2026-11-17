@@ -26,6 +26,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "constants.hpp"
 #include "dock-host.hpp"
 #include "end-signal-sender.hpp"
+#include "main-stream-policy.hpp"
 #include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
 #include "pairing-code.hpp"
@@ -555,12 +556,14 @@ void WatchMainStreamStart()
 
 // 본방의 이번 정지가 스트리머 조작인가. STREAMING_STOPPING은 obs_output_stop 안에서만 동기로 오므로(OBS 「방송 종료」
 // 버튼·websocket 등), 본방이 스스로 끊겨 끝나면(재연결 소진) STOPPING 없이 STOPPED만 온다. A3(4D) 종료 신호는
-// 조작일 때만 보낸다(계약4 3-1) — 자력 종료 뒤 300초 안의 재시작은 같은 회차로 이어져야 한다.
-static bool g_mainStopRequested = false;
+// 조작일 때만 보낸다(계약4 3-1) — 자력 종료 뒤 300초 안의 재시작은 같은 회차로 이어져야 한다. 판정 규칙은
+// main-stream-policy(OBS 없이 시험), 여기는 이번 방송에서 본 이벤트를 적어 둔다 — UI 스레드에서만 만진다.
+static MainStreamRun g_mainRun;
+static_assert(kMainStopSuccess == OBS_OUTPUT_SUCCESS);
 
 void OnStreamingStarting()
 {
-	g_mainStopRequested = false;
+	g_mainRun = {};
 	// 본방 인코더가 돌기 전 마지막 배정 정리 — 이후 방송 중에는 이미 나가는 배정을 옮기지 않는다.
 	// 우리 송출을 안 해도(동기화 꺼짐) 녹화 트랙이 같은 믹서를 쓰므로 먼저 한다.
 	AudioRouter::Instance().Reconcile("stream starting");
@@ -575,6 +578,25 @@ void OnStreamingStarting()
 	// 방송 표시는 우리 출력의 단계가 정해진 뒤에 올린다. 먼저 올리면 GOP 검사·출력 생성이 도는 동안 「본방은 나가는데
 	// 우리는 멈춰 있다」(CanSendNow)가 독에 나가 「다시 연결」이 잠깐 뜬다 — STOPPING에서 먼저 내리는 것과 같은 이유다.
 	AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = true; });
+}
+
+void OnStreamingStopped()
+{
+	const bool hasOutput = StreamTarget::Instance().HasOutput();
+	const int code = g_mainStopCode;
+	const bool stopRequested = g_mainRun.stopRequested;
+	const MainStopKind kind = HandleMainStopped(g_mainRun, code, hasOutput);
+	obs_log(LOG_INFO, "main stream stopped (code %d, stop requested: %s, srt output: %s) — %s", code,
+		stopRequested ? "yes" : "no", hasOutput ? "yes" : "no", MainStopKindName(kind));
+	if (kind == MainStopKind::Duplicate)
+		return; // 앞의 판정을 덮지 않는다 — 지연 중 「지연된 분량 버림」은 STOPPED가 두 번 온다(POK-597)
+	AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
+	// STOPPING이 앞서 왔으면 같은 조작의 뒷부분이고(Stop은 한 구간에 한 번만 신호를 정한다), 아니면 본방이 스스로
+	// 끊겨 끝난 것이다 — 종료 신호를 보내지 않는다. 출력 없이 미뤄 둔 판정은 본방 stop 코드로 가른다 — 공유 인코더
+	// 실패(ENCODE_ERROR)면 조작이 아니다.
+	StreamTarget::Instance().Stop(nullptr, kind == MainStopKind::Intentional);
+	UnwatchMainOutputStop();
+	AudioRouter::Instance().Schedule("stream stopped");
 }
 
 void OnFrontendEvent(enum obs_frontend_event event, void *)
@@ -644,7 +666,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		// obs_output_stop 안에서 동기로 온다. 본방과 같이 멈춘다(예약된 재시도도 버린다).
 		// 방송 표시도 여기서 내린다 — STOPPED까지 남겨 두면 그사이 독에 「다시 연결」이 잠깐 뜬다.
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
-		g_mainStopRequested = true;
+		g_mainRun.stopRequested = true;
 		// 우리 출력이 있으면 조작으로 보고 멈춘다 — 공유 인코더 실패는 그 출력의 stopping 스레드로 걸러진다. 출력이
 		// 없으면(재시도 대기·「재시도 중지」 뒤) 가를 수단이 없어 판정을 STOPPED(본방 stop 코드)로 미룬다.
 		if (StreamTarget::Instance().HasOutput())
@@ -653,15 +675,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 			StreamTarget::Instance().Stop(nullptr, false, /*deferIntent=*/true);
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPED:
-		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
-		// STOPPING이 앞서 왔으면 같은 조작의 뒷부분이고(Stop은 한 구간에 한 번만 신호를 정한다), 아니면 본방이 스스로
-		// 끊겨 끝난 것이다 — 종료 신호를 보내지 않는다. 출력 없이 미뤄 둔 판정은 본방 stop 코드로 가른다 — 공유 인코더
-		// 실패(ENCODE_ERROR)면 조작이 아니다.
-		StreamTarget::Instance().Stop(nullptr, g_mainStopRequested && (StreamTarget::Instance().HasOutput() ||
-									      g_mainStopCode == OBS_OUTPUT_SUCCESS));
-		g_mainStopRequested = false;
-		UnwatchMainOutputStop();
-		AudioRouter::Instance().Schedule("stream stopped");
+		OnStreamingStopped();
 		break;
 	case OBS_FRONTEND_EVENT_THEME_CHANGED:
 		UpdateTheme();

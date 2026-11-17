@@ -10,6 +10,7 @@
 #include "private-file.hpp"
 #include "encoder-opts.hpp"
 #include "end-signal-policy.hpp"
+#include "main-stream-policy.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
 #include "post-and-wait.hpp"
@@ -2990,6 +2991,55 @@ TEST(end_signal_connection_duration_uses_last_connection)
 	CHECK_EQ(ConnectionDurationMs(1000, false, 3000, 9000), int64_t(2000));
 	// 시계 어긋남은 0으로
 	CHECK_EQ(ConnectionDurationMs(5000, true, 0, 4000), int64_t(0));
+}
+
+// 본방 stop 신호의 code(libobs obs-defs.h) — 테스트는 libobs 없이 돈다.
+constexpr int kStopDisconnected = -5;  // OBS_OUTPUT_DISCONNECTED
+constexpr int kStopEncodeError = -8;   // OBS_OUTPUT_ENCODE_ERROR
+
+TEST(main_stop_from_the_stop_button_is_intentional)
+{
+	MainStreamRun run; // STREAMING_STARTING
+	run.stopRequested = true; // STREAMING_STOPPING
+	CHECK(HandleMainStopped(run, kMainStopSuccess, true) == MainStopKind::Intentional);
+	CHECK(run.stopHandled);
+	// 출력이 없을 때(재시도 대기·「재시도 중지」 뒤)는 본방 stop 코드로 가른다 — 성공이면 조작
+	MainStreamRun waiting;
+	waiting.stopRequested = true;
+	CHECK(ClassifyMainStop(waiting, kMainStopSuccess, false) == MainStopKind::Intentional);
+	// 공유 인코더 실패로 libobs가 멈춘 본방 — STOPPING이 나도 조작이 아니다
+	CHECK(ClassifyMainStop(waiting, kStopEncodeError, false) == MainStopKind::NotIntentional);
+}
+
+TEST(main_stop_without_stopping_is_not_intentional)
+{
+	// 본방이 스스로 끊겨 끝남(재연결 소진) — STOPPING 없이 STOPPED만
+	MainStreamRun run;
+	CHECK(HandleMainStopped(run, kStopDisconnected, true) == MainStopKind::NotIntentional);
+	MainStreamRun quiet;
+	CHECK(HandleMainStopped(quiet, kMainStopSuccess, false) == MainStopKind::NotIntentional);
+}
+
+TEST(main_stop_twice_keeps_the_first_decision)
+{
+	// POK-597 — 스트림 지연 중 「방송 중지 (지연된 분량 버림)」: STOPPING → STOPPED → STOPPED. 두 번째가 조작을
+	// 「조작 아님」으로 덮으면 종료 신호가 빠진다. 두 번째는 우리 출력이 이미 멈췄든(출력 없음) 아니든 중복이다.
+	MainStreamRun run;
+	run.stopRequested = true;
+	CHECK(HandleMainStopped(run, kMainStopSuccess, true) == MainStopKind::Intentional);
+	CHECK(HandleMainStopped(run, kMainStopSuccess, true) == MainStopKind::Duplicate);
+	CHECK(HandleMainStopped(run, kStopDisconnected, false) == MainStopKind::Duplicate);
+	// 자력 종료도 한 번만 처리한다
+	MainStreamRun self;
+	CHECK(HandleMainStopped(self, kStopDisconnected, true) == MainStopKind::NotIntentional);
+	CHECK(HandleMainStopped(self, kStopDisconnected, true) == MainStopKind::Duplicate);
+	// 다음 방송(STREAMING_STARTING)은 새로 센다
+	run = {};
+	run.stopRequested = true;
+	CHECK(HandleMainStopped(run, kMainStopSuccess, true) == MainStopKind::Intentional);
+	CHECK_EQ(std::string(MainStopKindName(MainStopKind::Duplicate)), std::string("duplicate"));
+	CHECK_EQ(std::string(MainStopKindName(MainStopKind::Intentional)), std::string("intentional"));
+	CHECK_EQ(std::string(MainStopKindName(MainStopKind::NotIntentional)), std::string("not_intentional"));
 }
 
 } // namespace
