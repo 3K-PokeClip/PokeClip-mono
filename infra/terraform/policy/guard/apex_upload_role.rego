@@ -11,7 +11,8 @@
 # 두지 않고, 역할 본문의 정책 인자(inline_policy 블록 · dynamic ·
 # managed_policy_arns)는 값과 무관하게 막는다 — 빈 값은 그 역할의 정책을
 # 비우라는 뜻이라 edge 가 붙인 정책을 지운다. 경로는 registry 아래
-# 전체다(하위 디렉터리 포함 — 엄격한 쪽).
+# 전체다(하위 디렉터리 포함 — 엄격한 쪽). resource 선언만 본다 — module
+# 경유 부착은 리뷰 몫이다.
 package main
 
 registry_dir := "prod/registry"

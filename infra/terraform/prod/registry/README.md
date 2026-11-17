@@ -51,7 +51,7 @@ GitHub Actions 의 `prod-deploy` environment 잡이 받는 역할입니다. 둘 
     키뿐입니다 — `aud` = `sts.amazonaws.com`, `sub` = 아래 고정 subject
     꼴입니다.
 
-    ```
+    ```text
     repo:3K-PokeClip@304758179/PokeClip-mono@1311593360:environment:prod-deploy
     ```
 
@@ -103,4 +103,6 @@ README](/infra/terraform/prod/edge/README.md) 「apex 업로드 정책 적용 ·
 | `apex_upload_role_arn` | GitHub environment `prod-deploy` 비밀 — 랜딩 워크플로의 역할 받기 |
 
 역할 ARN 에는 계정 ID 가 들어 있습니다. 공개 저장소의 로그 · 문서에 적지 않고
-environment 비밀로만 넘깁니다.
+environment 비밀로만 넘깁니다. `sensitive` 는 붙이지 않습니다 — 계정 ID 가
+든 `repo_urls` 와 같은 관례이고, 출력은 화면에 띄우지 않고 파이프로만
+씁니다(`terraform output -raw … | gh secret set …`).
