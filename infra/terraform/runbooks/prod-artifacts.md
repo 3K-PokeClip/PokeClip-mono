@@ -478,8 +478,16 @@ arm64 로 확인한 빌드와 같을 때만 통과하고(태그 칸 `<태그> (�
 보통은 다릅니다.
 
 *   같은 커밋을 새로 dispatch 하면 앞서 올라간 이미지의 잡은 이 확인에서
-    실패합니다. 일부 잡만 실패한 실행은 그 실행에서 **실패한 잡만 다시
-    실행**합니다.
+    실패합니다. 푸시 전에 실패한 잡(빌드 · 확인)은 그 실행에서 **실패한 잡만
+    다시 실행**합니다.
+*   푸시까지 끝난 뒤 실패한 잡(다이제스트 읽기 · 아티팩트)은 다시 실행해도
+    이번에는 기존 태그 갈래로 가서 다시 실패합니다(새 빌드는 config 가
+    다름). 출구는 둘입니다.
+    *   그 이미지는 같은 실행에서 arm64 로 확인한 뒤 올린 것이므로, kty 가
+        「기록」 의 `describe-images` 로 다이제스트를 직접 읽어 tfvars 에
+        씁니다. 단 실패 사유가 「단일 이미지 매니페스트가 아니다」 이면 이
+        출구를 쓰지 않습니다.
+    *   새 커밋(태그가 다름)으로 다시 dispatch 합니다.
 *   손으로 먼저 올린 태그와 겹쳤으면 kty 가 그 이미지를 받아
     `docker image inspect --format '{{.Os}}/{{.Architecture}}'` 로 직접
     봅니다(`linux/arm64` 여야 함).
@@ -515,24 +523,53 @@ arm64 로 확인한 빌드와 같을 때만 통과하고(태그 칸 `<태그> (�
     gh workflow disable prod-landing.yml
     ```
 
-1.  끝나지 않은 실행을 상태 구분 없이 모두 취소합니다(`queued` · `pending` ·
-    `waiting` · `requested` · `in_progress`).
+1.  끝나지 않은 실행을 모두 취소합니다. 끝나지 않은 상태(`queued` ·
+    `pending` · `waiting` · `requested` · `in_progress`)마다 따로 조회합니다.
+    조회는 상태마다 1000 개까지 받고, 그만큼 나오면 목록이 잘렸을 수 있으므로
+    취소하지 않고 멈춥니다.
 
     ```shell
-    for wf in prod-images.yml prod-landing.yml; do
-      gh run list --workflow "${wf}" --limit 100 --json databaseId,status \
-        --jq '.[] | select(.status != "completed") | .databaseId' \
-        | while read -r run_id; do gh run cancel "${run_id}"; done
-    done
+    (
+      set -euo pipefail
+      limit=1000
+      for wf in prod-images.yml prod-landing.yml; do
+        for status in queued pending waiting requested in_progress; do
+          runs="$(gh run list --workflow "${wf}" --status "${status}" \
+            --limit "${limit}" --json databaseId)"
+          count="$(jq length <<<"${runs}")"
+          if ((count >= limit)); then
+            echo "멈춤: ${wf} ${status} ${count} 개 — 잘렸을 수 있음"
+            exit 1
+          fi
+          jq -r '.[].databaseId' <<<"${runs}" \
+            | while read -r run_id; do gh run cancel "${run_id}"; done
+        done
+      done
+    )
     ```
 
-1.  다시 조회해 끝나지 않은 실행이 0 인지 확인한 뒤 다음으로 갑니다.
+1.  같은 방식으로 다시 조회해 끝나지 않은 실행이 0 인지 확인한 뒤 다음으로
+    갑니다.
 
     ```shell
-    for wf in prod-images.yml prod-landing.yml; do
-      gh run list --workflow "${wf}" --limit 100 --json status \
-        --jq '[.[] | select(.status != "completed")] | length'
-    done   # 둘 다 0
+    (
+      set -euo pipefail
+      limit=1000
+      left=0
+      for wf in prod-images.yml prod-landing.yml; do
+        for status in queued pending waiting requested in_progress; do
+          runs="$(gh run list --workflow "${wf}" --status "${status}" \
+            --limit "${limit}" --json databaseId)"
+          count="$(jq length <<<"${runs}")"
+          if ((count >= limit)); then
+            echo "멈춤: ${wf} ${status} ${count} 개 — 잘렸을 수 있음"
+            exit 1
+          fi
+          left=$((left + count))
+        done
+      done
+      echo "끝나지 않은 실행 ${left} 개"   # 0 이어야 함
+    )
     ```
 
 ### CI 거부 처분

@@ -153,11 +153,11 @@ jobs:
             echo "::error::실행 계정이 10002:10002 가 아니다: ${user}"
             exit 1
           fi
+          files="${RUNNER_TEMP}/files.txt"
           cid="$(docker create "${LOCAL_IMAGE}")"
-          docker export "${cid}" | tar -t >"${RUNNER_TEMP}/files.txt"
+          docker export "${cid}" | tar -t >"${files}"
           docker rm "${cid}" >/dev/null
-          if ! grep -qx 'hooks-bin/mtxhookwrite' "${RUNNER_TEMP}/files.txt"
-          then
+          if ! grep -qx 'hooks-bin/mtxhookwrite' "${files}"; then
             echo '::error::훅 바이너리 hooks-bin/mtxhookwrite 가 없다'
             exit 1
           fi
@@ -244,8 +244,7 @@ jobs:
             application/vnd.oci.image.manifest.v1+json \
             application/vnd.docker.distribution.manifest.v2+json \
             --query 'images[0].imageManifest' --output text)"
-          if ! remote_config="$(jq -er '.config.digest' <<<"${manifest}")"
-          then
+          if ! remote_config="$(jq -er '.config.digest' <<<"${manifest}")"; then
             echo '::error::기존 태그가 단일 이미지 매니페스트가 아니다'
             exit 1
           fi
