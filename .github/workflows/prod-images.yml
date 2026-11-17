@@ -1,0 +1,351 @@
+# prod 이미지를 빌드해 prod ECR(pokeclip-prod/<키>)에 올린다. 반영은 하지 않는다.
+#
+# 여기까지가 CI 의 몫이다(2026-11-17 결정 (가) — ECR 푸시까지만). 태스크
+# 정의 · Media 상자 반영은 그대로 kty 가 다이제스트를 tfvars 에 넣고 plan ·
+# apply 한다. 절차 · 승인 · 멈춤은 infra/terraform/runbooks/prod-artifacts.md
+# 「CI 로 올리기」 가 정본이다.
+#
+# 손으로만 돌린다(workflow_dispatch). 잡은 main 에서만 돌고, environment
+# prod-deploy 의 필수 승인자(kty)가 승인해야 러너로 간다. 역할 신뢰 조건이 그
+# environment 의 subject 라 다른 브랜치 · 다른 environment 로는 역할을 못 받는다.
+#
+# 공개 저장소라 로그 · 요약 · 아티팩트가 모두 공개된다. 계정 ID 가 든 레지스트리
+# 호스트는 echo · 요약 · 아티팩트 · 잡 출력 어디에도 쓰지 않는다 — 요약 ·
+# 아티팩트는 「서비스 · 태그 · 다이제스트 · 빌드 커밋」 네 칸뿐이다. 도구가
+# 찍는 호스트(docker push 의 저장소 줄)는 mask-aws-account-id 가 가린다.
+name: prod-images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 푸시를 중간에 끊으면 저장소마다 태그가 반쯤 올라간 상태가 남는다.
+concurrency:
+  group: prod-images
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  image:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    environment: prod-deploy
+    # 잡에 permissions 를 주면 맨 위 값을 물려받지 않으므로 contents 도 다시
+    # 적는다. id-token 은 OIDC 토큰을 받는 데 쓴다.
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 60
+    strategy:
+      # 한 이미지가 실패해도 나머지는 끝까지 올린다 — 요약에 빠진 행으로 보인다.
+      fail-fast: false
+      # 키 · Dockerfile · 컨텍스트는 prod-artifacts.md 「이미지」 표와 같다.
+      # media-nginx · media-loopback-sender(빌드 없이 핀을 다시 태그)는 CI 밖이다.
+      matrix:
+        include:
+          - key: next
+            dockerfile: web/Dockerfile
+            context: web
+          - key: auth
+            dockerfile: services/auth/Dockerfile
+            context: services
+          - key: clip
+            dockerfile: services/clip/Dockerfile
+            context: services
+          - key: chat-collector
+            dockerfile: services/chat-collector/Dockerfile
+            context: services
+          - key: chat-detector
+            dockerfile: services/chat-detector/Dockerfile
+            context: services
+          - key: render
+            dockerfile: workers/render/Dockerfile
+            context: workers/render
+          - key: upload
+            dockerfile: workers/upload/Dockerfile
+            context: workers/upload
+          - key: media-sidecar
+            dockerfile: media/Dockerfile
+            context: media
+          - key: media-mediamtx
+            dockerfile: media/Dockerfile.mtxhook
+            context: media
+          - key: media-ingest-auth
+            dockerfile: media/Dockerfile.ingest-auth
+            context: media
+          - key: media-host-bundle
+            dockerfile: infra/media-host/bundle/Dockerfile
+            context: infra/media-host
+    env:
+      KEY: ${{ matrix.key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 태그 = 빌드한 커밋 SHA 의 앞 8자(런북 「이미지」 의 짧은 SHA 와 같은 길이).
+      - name: 태그를 정한다
+        run: |
+          tag="${GITHUB_SHA::8}"
+          echo "TAG=${tag}" >>"${GITHUB_ENV}"
+          echo "LOCAL_IMAGE=pokeclip-${KEY}:${tag}" >>"${GITHUB_ENV}"
+
+      # 자격을 받기 전에 빌드한다 — 빌드 단계(의존 내려받기 · Gradle)는 prod
+      # 자격 없이 돈다. arm64 한 변형만 만들고 증명 매니페스트를 꺼서 인덱스가
+      # 되지 않게 한다(결정 146).
+      - name: 이미지를 빌드한다(자격 없음)
+        id: build
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          CONTEXT: ${{ matrix.context }}
+          # next 의 빌드 인자 — 뜻과 필수 여부는 web/README.md 「컨테이너
+          # 이미지」. 값은 environment 변수다(비밀 아님 · 번들에 들어감).
+          AUTH_API_URL: ${{ vars.AUTH_API_URL }}
+          CLIP_API_URL: ${{ vars.CLIP_API_URL }}
+          NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+          NEXT_PUBLIC_MEDIA_LIVE_BASE_URL: ${{ vars.NEXT_PUBLIC_MEDIA_LIVE_BASE_URL }}
+          NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL: ${{ vars.NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL }}
+          NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL: ${{ vars.NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL }}
+          NEXT_PUBLIC_POSTHOG_KEY: ${{ vars.NEXT_PUBLIC_POSTHOG_KEY }}
+          NEXT_PUBLIC_POSTHOG_HOST: ${{ vars.NEXT_PUBLIC_POSTHOG_HOST }}
+          NEXT_PUBLIC_POSTHOG_REPLAY: ${{ vars.NEXT_PUBLIC_POSTHOG_REPLAY }}
+          NEXT_PUBLIC_LANDING_URL: ${{ vars.NEXT_PUBLIC_LANDING_URL }}
+        run: |
+          # 값 없는 --build-arg NAME 은 같은 이름의 환경 변수 값을 쓴다.
+          # 필수 인자가 비면 web/Dockerfile 의 검사가 빌드를 멈춘다.
+          build_args=()
+          if [[ "${KEY}" == 'next' ]]; then
+            for name in AUTH_API_URL CLIP_API_URL \
+              NEXT_PUBLIC_GOOGLE_CLIENT_ID NEXT_PUBLIC_MEDIA_LIVE_BASE_URL \
+              NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL \
+              NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL NEXT_PUBLIC_POSTHOG_KEY \
+              NEXT_PUBLIC_POSTHOG_HOST NEXT_PUBLIC_POSTHOG_REPLAY \
+              NEXT_PUBLIC_LANDING_URL; do
+              build_args+=(--build-arg "${name}")
+            done
+          fi
+          docker buildx build --platform linux/arm64 --provenance=false \
+            --sbom=false --load -t "${LOCAL_IMAGE}" -f "${DOCKERFILE}" \
+            "${build_args[@]}" "${CONTEXT}"
+
+      - name: arm64 한 변형인지 확인한다
+        run: |
+          platform="$(docker image inspect \
+            --format '{{.Os}}/{{.Architecture}}' "${LOCAL_IMAGE}")"
+          if [[ "${platform}" != 'linux/arm64' ]]; then
+            echo "::error::플랫폼이 linux/arm64 가 아니다: ${platform}"
+            exit 1
+          fi
+
+      # 런북 「MediaMTX 확인」 — 실행 계정 10002 · 훅 바이너리. 이 이미지에는
+      # 셸이 없어 컨테이너를 만들어 파일 목록을 꺼낸다.
+      - name: MediaMTX 이미지의 계정 · 훅을 확인한다
+        if: matrix.key == 'media-mediamtx'
+        run: |
+          user="$(docker image inspect --format '{{.Config.User}}' \
+            "${LOCAL_IMAGE}")"
+          if [[ "${user}" != '10002:10002' ]]; then
+            echo "::error::실행 계정이 10002:10002 가 아니다: ${user}"
+            exit 1
+          fi
+          cid="$(docker create "${LOCAL_IMAGE}")"
+          docker export "${cid}" | tar -t >"${RUNNER_TEMP}/files.txt"
+          docker rm "${cid}" >/dev/null
+          if ! grep -qx 'hooks-bin/mtxhookwrite' "${RUNNER_TEMP}/files.txt"
+          then
+            echo '::error::훅 바이너리 hooks-bin/mtxhookwrite 가 없다'
+            exit 1
+          fi
+
+      # 런북 「설치 묶음 · 루프백 송출기」 — 부트스트랩의 REQUIRED_FILES 와 묶음의
+      # /bundle 아래 파일이 두 방향으로 같아야 한다(빠진 것 · 남는 것 0).
+      - name: 설치 묶음의 파일 목록을 확인한다
+        if: matrix.key == 'media-host-bundle'
+        run: |
+          work="${RUNNER_TEMP}/bundle"
+          mkdir -p "${work}"
+          cid="$(docker create "${LOCAL_IMAGE}" /bundle-not-run)"
+          docker export "${cid}" | tar -t \
+            | sed -n 's|^bundle/\(.*[^/]\)$|\1|p' \
+            | LC_ALL=C sort >"${work}/bundle.txt"
+          docker rm "${cid}" >/dev/null
+          awk '/^readonly REQUIRED_FILES=\(/ { on = 1; next }
+            on && /^\)/ { exit }
+            on { print $1 }' \
+            infra/terraform/modules/media_host/templates/bootstrap.sh.tftpl \
+            | LC_ALL=C sort >"${work}/required.txt"
+          missing="$(LC_ALL=C comm -23 "${work}/required.txt" \
+            "${work}/bundle.txt")"
+          extra="$(LC_ALL=C comm -13 "${work}/required.txt" \
+            "${work}/bundle.txt")"
+          if [[ -n "${missing}" || -n "${extra}" ]]; then
+            echo '::error::묶음과 REQUIRED_FILES 가 다르다'
+            echo "빠진 것: ${missing}"
+            echo "남는 것: ${extra}"
+            exit 1
+          fi
+
+      # 런북 「기록」 — 워커는 베이스 이미지 · apt 판이 고정되지 않아 같은
+      # 커밋이어도 빌드 날짜마다 판이 다르다. 로그에 남긴다.
+      - name: 워커 이미지의 java · ffmpeg 판을 기록한다
+        if: matrix.key == 'render' || matrix.key == 'upload'
+        run: |
+          docker run --rm --entrypoint java "${LOCAL_IMAGE}" -version
+          if [[ "${KEY}" == 'render' ]]; then
+            docker run --rm --entrypoint ffmpeg "${LOCAL_IMAGE}" -version \
+              | sed -n 1p
+          fi
+
+      # 재시도를 끈다 — 역할 받기가 거부되면 그 자리에서 멈춘다(런북 「CI 거부
+      # 처분」). 계정 ID 는 기본으로 가려지지 않아 켠다.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          mask-aws-account-id: true
+          disable-retry: true
+
+      # 저장소가 태그 불변이라 같은 태그를 다시 올리면 실패한다. 이미 있으면
+      # (런북 대행으로 먼저 올렸으면) 올리지 않고 그 다이제스트를 쓴다.
+      - name: 같은 태그가 있는지 본다
+        id: existing
+        run: |
+          err="${RUNNER_TEMP}/describe.err"
+          if aws ecr describe-images --repository-name "pokeclip-prod/${KEY}" \
+            --image-ids "imageTag=${TAG}" >/dev/null 2>"${err}"; then
+            echo '같은 태그가 이미 있다 — 올리지 않는다'
+            echo 'exists=true' >>"${GITHUB_OUTPUT}"
+          elif grep -q 'ImageNotFoundException' "${err}"; then
+            echo 'exists=false' >>"${GITHUB_OUTPUT}"
+          else
+            cat "${err}" >&2
+            echo '::error::태그 조회 실패 — 다시 시도하지 않는다'
+            exit 1
+          fi
+
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        id: ecr
+        if: steps.existing.outputs.exists == 'false'
+        with:
+          mask-password: true
+
+      # 호스트는 이 잡 안의 셸 변수로만 쓴다. 꼴이 ECR 서울이 아니면 올리지
+      # 않는다 — 빈 호스트로 태그하면 Docker Hub 로 갈 수 있다.
+      - name: 이미지를 올린다
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          host_re='^[0-9]{12}\.dkr\.ecr\.ap-northeast-2\.amazonaws\.com$'
+          if [[ ! "${REGISTRY}" =~ ${host_re} ]]; then
+            echo '::error::레지스트리 호스트가 ECR 서울 꼴이 아니다'
+            exit 1
+          fi
+          remote="${REGISTRY}/pokeclip-prod/${KEY}:${TAG}"
+          docker tag "${LOCAL_IMAGE}" "${remote}"
+          # 마스킹에 더해 12자리 숫자열을 한 번 더 가린다.
+          docker push "${remote}" 2>&1 | sed -E 's/[0-9]{12}/<계정>/g'
+
+      # 다이제스트는 푸시 출력이 아니라 ECR 에서 읽는다. 매니페스트가 단일
+      # 이미지 꼴이 아니면(인덱스 · 목록) 실패한다(결정 146).
+      - name: 다이제스트를 읽고 매니페스트 종류를 확인한다
+        id: digest
+        env:
+          EXISTS: ${{ steps.existing.outputs.exists }}
+        run: |
+          read -r digest media_type < <(aws ecr describe-images \
+            --repository-name "pokeclip-prod/${KEY}" \
+            --image-ids "imageTag=${TAG}" \
+            --query 'imageDetails[0].[imageDigest,imageManifestMediaType]' \
+            --output text)
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo '::error::다이제스트 꼴이 아니다'
+            exit 1
+          fi
+          case "${media_type}" in
+            application/vnd.oci.image.manifest.v1+json) ;;
+            application/vnd.docker.distribution.manifest.v2+json) ;;
+            *)
+              echo "::error::단일 이미지 매니페스트가 아니다: ${media_type}"
+              exit 1
+              ;;
+          esac
+          echo "다이제스트 ${digest} (${media_type})"
+          tag_cell="${TAG}"
+          if [[ "${EXISTS}" == 'true' ]]; then
+            tag_cell="${TAG} (기존 태그)"
+          fi
+          mkdir -p "${RUNNER_TEMP}/row"
+          printf '%s\t%s\t%s\t%s\n' "${KEY}" "${tag_cell}" "${digest}" \
+            "${GITHUB_SHA}" >"${RUNNER_TEMP}/row/${KEY}.tsv"
+
+      # 네 칸 한 줄만 싣는다. 잡 사이 전달은 이 아티팩트뿐이다(잡 출력 없음).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: prod-image-row-${{ matrix.key }}
+          path: ${{ runner.temp }}/row/${{ matrix.key }}.tsv
+          if-no-files-found: error
+          retention-days: 30
+
+  # 자격 없이 아티팩트의 네 칸만 표로 모은다. 이미지 잡이 하나라도 실패하면
+  # 표를 쓴 뒤 실패로 끝난다.
+  summary:
+    needs: image
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: prod-image-row-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/rows
+
+      - name: 요약 표를 쓴다
+        env:
+          IMAGE_RESULT: ${{ needs.image.result }}
+        run: |
+          rows_dir="${RUNNER_TEMP}/rows"
+          mkdir -p "${rows_dir}"
+          key_re='^[a-z0-9-]+$'
+          tag_re='^[0-9a-f]{8}( \(기존 태그\))?$'
+          digest_re='^sha256:[0-9a-f]{64}$'
+          commit_re='^[0-9a-f]{40}$'
+          table="${RUNNER_TEMP}/table.md"
+          count=0
+          bad=0
+          {
+            echo '| 서비스 | 태그 | 다이제스트 | 빌드 커밋 |'
+            echo '|---|---|---|---|'
+          } >"${table}"
+          # 꼴이 맞는 행만 싣는다 — 어긋난 행은 내용을 찍지 않고 수만 센다.
+          while IFS=$'\t' read -r key tag digest commit; do
+            if [[ "${key}" =~ ${key_re} && "${tag}" =~ ${tag_re} \
+              && "${digest}" =~ ${digest_re} \
+              && "${commit}" =~ ${commit_re} ]]; then
+              printf '| %s | %s | %s | %s |\n' "${key}" "${tag}" \
+                "${digest}" "${commit}" >>"${table}"
+              count=$((count + 1))
+            else
+              bad=$((bad + 1))
+            fi
+          done < <(find "${rows_dir}" -name '*.tsv' -exec cat {} + \
+            | LC_ALL=C sort)
+          {
+            echo "## prod 이미지 (${count} 행)"
+            echo
+            cat "${table}"
+          } >>"${GITHUB_STEP_SUMMARY}"
+          if ((bad > 0)); then
+            echo "::error::꼴이 맞지 않는 행 ${bad} 개를 뺐다"
+            exit 1
+          fi
+          if [[ "${IMAGE_RESULT}" != 'success' ]]; then
+            echo "::error::이미지 잡 결과 ${IMAGE_RESULT} — 빠진 행을 확인한다"
+            exit 1
+          fi

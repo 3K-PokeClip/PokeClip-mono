@@ -1,0 +1,176 @@
+# apex 랜딩(landing/)을 prod 버킷에 올리고 CloudFront 를 무효화한다.
+#
+# 두 잡이 따로 승인받는다(environment prod-deploy · 필수 승인자 kty).
+#   dry-run — 공개 배포 검사(check-legal --release) 뒤 「무엇을 올리나」 목록을
+#             로그에 내고, 그 목록의 sha256 만 다음 잡에 넘긴다.
+#   upload  — 목록을 다시 내서 해시가 같을 때만 올리고 '/*' 를 무효화한다.
+# upload 를 막으려면 그 승인을 누르지 않고 실행을 취소한다. 버킷에만 있는
+# 옛 파일을 지우는 --delete 는 쓰지 않는다. 절차는
+# infra/terraform/runbooks/prod-artifacts.md 「CI 로 올리기」 가 정본이다.
+#
+# 버킷 이름 · 배포 id · 역할 ARN 은 environment 비밀이라 로그에서 가려진다.
+# 잡 사이로는 해시만 넘긴다 — 가린 값이 든 잡 출력은 GitHub 가 넘기지 않고
+# 건너뛴다(workflow-syntax 「jobs.<job_id>.outputs」).
+name: prod-landing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prod-landing
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  # 올리지 않는 경로(I2-8) — landing/README.md 「배포에는 … 만 올립니다」 목록
+  # 밖의 셋이다(2026-11-16 수동 업로드와 같은 제외). aws s3 sync 의 --exclude
+  # 꼴(landing/ 기준 상대 경로)이고 공백으로 나눈다.
+  LANDING_EXCLUDES: README.md scripts/* legal-versions.json
+
+jobs:
+  dry-run:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    environment: prod-deploy
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 15
+    outputs:
+      plan-sha256: ${{ steps.plan.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.node-version
+
+      # 자리표시 〈 〉가 남았으면 여기서 멈춘다(landing/README.md 「이용약관 ·
+      # 개인정보 처리방침」 절의 --release).
+      - run: node landing/scripts/check-legal.mjs --release
+
+      # apex 버킷 · 배포는 prod/edge 의 기본 provider(us-east-1)에 있다.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_APEX_UPLOAD_ROLE_ARN }}
+          aws-region: us-east-1
+          mask-aws-account-id: true
+          disable-retry: true
+
+      # sync 는 크기 · 수정 시각으로 고르는데 체크아웃 파일은 방금 쓰인 것이라
+      # 목록은 사실상 「제외 밖 전부」 다 — 「무엇이 바뀌었나」 가 아니라
+      # 「무엇을 올리나」 로 읽는다.
+      - name: 올릴 목록을 내고 해시를 정한다
+        id: plan
+        env:
+          APEX_BUCKET: ${{ secrets.APEX_BUCKET_NAME }}
+        run: |
+          read -r -a excludes <<<"${LANDING_EXCLUDES}"
+          exclude_args=()
+          for pattern in "${excludes[@]}"; do
+            exclude_args+=(--exclude "${pattern}")
+          done
+          raw="${RUNNER_TEMP}/dryrun.txt"
+          plan="${RUNNER_TEMP}/plan.txt"
+          aws s3 sync landing/ "s3://${APEX_BUCKET}" "${exclude_args[@]}" \
+            --dryrun --no-progress | tee "${raw}"
+          # 버킷 접두를 벗긴 「동작 상대키」 줄만 남겨 정렬한다.
+          sed -nE 's#^\(dryrun\) ([a-z]+): .+ to s3://[^/]+/(.+)$#\1 \2#p' \
+            "${raw}" | LC_ALL=C sort >"${plan}"
+          if [[ "$(wc -l <"${raw}")" -ne "$(wc -l <"${plan}")" ]]; then
+            echo '::error::dry-run 출력에 읽지 못한 줄이 있다'
+            exit 1
+          fi
+          sha256="$(sha256sum "${plan}" | cut -d ' ' -f 1)"
+          # --- 목록 끝 ---
+          echo "올릴 파일 $(wc -l <"${plan}") 개 · 목록 sha256 ${sha256}"
+          echo "sha256=${sha256}" >>"${GITHUB_OUTPUT}"
+
+  upload:
+    needs: dry-run
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    environment: prod-deploy
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_APEX_UPLOAD_ROLE_ARN }}
+          aws-region: us-east-1
+          mask-aws-account-id: true
+          disable-retry: true
+
+      # 아래 「목록 끝」 표시 위는 dry-run 잡과 글자까지 같아야 한다.
+      - name: 올릴 목록을 내고 해시를 정한다
+        id: plan
+        env:
+          APEX_BUCKET: ${{ secrets.APEX_BUCKET_NAME }}
+        run: |
+          read -r -a excludes <<<"${LANDING_EXCLUDES}"
+          exclude_args=()
+          for pattern in "${excludes[@]}"; do
+            exclude_args+=(--exclude "${pattern}")
+          done
+          raw="${RUNNER_TEMP}/dryrun.txt"
+          plan="${RUNNER_TEMP}/plan.txt"
+          aws s3 sync landing/ "s3://${APEX_BUCKET}" "${exclude_args[@]}" \
+            --dryrun --no-progress | tee "${raw}"
+          # 버킷 접두를 벗긴 「동작 상대키」 줄만 남겨 정렬한다.
+          sed -nE 's#^\(dryrun\) ([a-z]+): .+ to s3://[^/]+/(.+)$#\1 \2#p' \
+            "${raw}" | LC_ALL=C sort >"${plan}"
+          if [[ "$(wc -l <"${raw}")" -ne "$(wc -l <"${plan}")" ]]; then
+            echo '::error::dry-run 출력에 읽지 못한 줄이 있다'
+            exit 1
+          fi
+          sha256="$(sha256sum "${plan}" | cut -d ' ' -f 1)"
+          # --- 목록 끝 ---
+          echo "sha256=${sha256}" >>"${GITHUB_OUTPUT}"
+
+      # 승인한 dry-run 목록과 지금 목록이 같을 때만 올린다. 해시가 비었으면
+      # (잡 출력이 건너뛰어졌으면) 올리지 않는다.
+      - name: 해시가 같으면 올리고 무효화한다
+        id: sync
+        env:
+          APEX_BUCKET: ${{ secrets.APEX_BUCKET_NAME }}
+          APEX_DISTRIBUTION_ID: ${{ secrets.APEX_DISTRIBUTION_ID }}
+          PLANNED_SHA256: ${{ needs.dry-run.outputs.plan-sha256 }}
+          CURRENT_SHA256: ${{ steps.plan.outputs.sha256 }}
+        run: |
+          if [[ ! "${PLANNED_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo '::error::dry-run 잡의 목록 해시가 없다 — 올리지 않는다'
+            exit 1
+          fi
+          if [[ "${CURRENT_SHA256}" != "${PLANNED_SHA256}" ]]; then
+            echo '::error::승인한 dry-run 목록과 지금 목록이 다르다'
+            exit 1
+          fi
+          read -r -a excludes <<<"${LANDING_EXCLUDES}"
+          exclude_args=()
+          for pattern in "${excludes[@]}"; do
+            exclude_args+=(--exclude "${pattern}")
+          done
+          aws s3 sync landing/ "s3://${APEX_BUCKET}" "${exclude_args[@]}" \
+            --no-progress
+          invalidation_id="$(aws cloudfront create-invalidation \
+            --distribution-id "${APEX_DISTRIBUTION_ID}" --paths '/*' \
+            --query 'Invalidation.Id' --output text)"
+          echo "무효화 ${invalidation_id} — 끝나기를 기다린다"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${APEX_DISTRIBUTION_ID}" \
+            --id "${invalidation_id}"
+          echo '무효화 끝'
