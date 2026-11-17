@@ -492,8 +492,10 @@ void OnMainOutputStarting(void *, calldata_t *)
 
 // 본방 출력의 stop 코드 — 우리 출력이 없는 구간(재시도 대기·「재시도 중지」 뒤)에서 본방 STOPPING이 조작인지 가를 때
 // 쓴다. 공유 인코더 실패는 본방 출력이 ENCODE_ERROR로 멈추고(rtmp-stream.c encode_error), 조작·재연결 중 정지는 0이다.
-// STREAMING_STOPPED는 이 stop 신호를 UI 스레드로 넘긴 뒤에 나므로 그때는 값이 있다. 우리 출력이 있을 때는 그 출력
-// stopping의 스레드로 가른다(StreamTarget stopInternal_).
+// STREAMING_STOPPED는 이 stop 신호에서 나오지만 값이 있다는 보장은 없다 — libobs는 콜백을 연결한 순서대로 부르고,
+// 출력을 만들 때 연결한 프런트엔드 콜백이 StreamingStop을 UI 큐에 넣은 뒤에야 이 콜백이 돈다(callback/signal.c).
+// 그래서 STOPPING 없는 STOPPED(자력 종료·시작 실패)는 이 값을 보지 않는다(main-stream-policy). 우리 출력이 있을 때는
+// 그 출력 stopping의 스레드로 가른다(StreamTarget stopInternal_).
 std::atomic<int> g_mainStopCode{0};
 obs_output_t *g_mainOutputWatched = nullptr; // UI 스레드 — 우리가 쥔 참조. 본방이 멈추거나 OBS가 닫히면 놓는다
 

@@ -3011,10 +3011,10 @@ TEST(main_stop_from_the_stop_button_is_intentional)
 	CHECK(ClassifyMainStop(waiting, kMainStopSuccess, false) == MainStopKind::Intentional);
 	// 공유 인코더 실패로 libobs가 멈춘 본방 — STOPPING이 나도 조작이 아니다
 	CHECK(ClassifyMainStop(waiting, kStopEncodeError, false) == MainStopKind::NotIntentional);
-	// 본방이 접속하기도 전에 인코더가 실패했으면 시작 실패다(종료 신호는 어느 쪽이든 보내지 않는다)
+	// 본방이 접속하기 전에 인코더가 실패해도 STOPPING이 앞서 오므로 같은 판정이다
 	MainStreamRun early;
 	early.stopRequested = true;
-	CHECK(ClassifyMainStop(early, kStopEncodeError, false) == MainStopKind::FailedToStart);
+	CHECK(ClassifyMainStop(early, kStopEncodeError, false) == MainStopKind::NotIntentional);
 }
 
 TEST(main_stop_without_stopping_is_not_intentional)
@@ -3023,7 +3023,9 @@ TEST(main_stop_without_stopping_is_not_intentional)
 	MainStreamRun run;
 	run.started = true;
 	CHECK(HandleMainStopped(run, kStopDisconnected, true) == MainStopKind::NotIntentional);
+	// 코드는 보지 않는다 — 접속한 뒤면 무엇이든 자력 종료
 	MainStreamRun quiet;
+	quiet.started = true;
 	CHECK(HandleMainStopped(quiet, kMainStopSuccess, false) == MainStopKind::NotIntentional);
 }
 
@@ -3072,9 +3074,11 @@ TEST(main_stop_before_it_went_live_is_a_start_failure)
 	MainStreamRun cancelled;
 	cancelled.stopRequested = true;
 	CHECK(ClassifyMainStop(cancelled, kStopConnectFailed, true) == MainStopKind::Intentional);
-	// 성공 코드로 끝났으면 시작 실패로 보지 않는다(지금까지처럼 조작 아님)
-	MainStreamRun clean;
-	CHECK(ClassifyMainStop(clean, kMainStopSuccess, true) == MainStopKind::NotIntentional);
+	// STOPPING 없이 온 STOPPED는 코드를 보지 않는다 — 프런트엔드 stop 콜백이 먼저 불려 STOPPED가 코드보다 앞서면
+	// 코드는 STARTING 때 리셋한 0으로 읽힌다. 그래도 시작 실패여야 한다(PR #532 리뷰 1차)
+	MainStreamRun unwritten;
+	CHECK(ClassifyMainStop(unwritten, kMainStopSuccess, true) == MainStopKind::FailedToStart);
+	CHECK(ClassifyMainStop(unwritten, kMainStopSuccess, false) == MainStopKind::FailedToStart);
 }
 
 } // namespace
