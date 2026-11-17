@@ -516,6 +516,11 @@ arm64 로 확인한 빌드와 같을 때만 통과하고(태그 칸 `<태그> (�
 ([Disabling and enabling a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)).
 그래서 셋을 이 순서로 합니다.
 
+이 절의 블록은 kty 의 대화형 zsh 에 붙여 넣어도 돌게 씁니다. `#` 주석을 두지
+않고(`interactivecomments` 가 꺼져 `#` 를 주석으로 읽지 않음) 기대값은 블록
+밖에 적습니다. 변수 이름에 zsh 특수 변수(`status` 는 `$?` 의 읽기 전용 별칭 ·
+`path` · `argv` 등)를 쓰지 않습니다.
+
 1.  두 워크플로를 먼저 끕니다(새 실행이 생기지 않게).
 
     ```shell
@@ -533,12 +538,12 @@ arm64 로 확인한 빌드와 같을 때만 통과하고(태그 칸 `<태그> (�
       set -euo pipefail
       limit=1000
       for wf in prod-images.yml prod-landing.yml; do
-        for status in queued pending waiting requested in_progress; do
-          runs="$(gh run list --workflow "${wf}" --status "${status}" \
+        for run_status in queued pending waiting requested in_progress; do
+          runs="$(gh run list --workflow "${wf}" --status "${run_status}" \
             --limit "${limit}" --json databaseId)"
           count="$(jq length <<<"${runs}")"
           if ((count >= limit)); then
-            echo "멈춤: ${wf} ${status} ${count} 개 — 잘렸을 수 있음"
+            echo "멈춤: ${wf} ${run_status} ${count} 개 — 잘렸을 수 있음"
             exit 1
           fi
           jq -r '.[].databaseId' <<<"${runs}" \
@@ -557,20 +562,22 @@ arm64 로 확인한 빌드와 같을 때만 통과하고(태그 칸 `<태그> (�
       limit=1000
       left=0
       for wf in prod-images.yml prod-landing.yml; do
-        for status in queued pending waiting requested in_progress; do
-          runs="$(gh run list --workflow "${wf}" --status "${status}" \
+        for run_status in queued pending waiting requested in_progress; do
+          runs="$(gh run list --workflow "${wf}" --status "${run_status}" \
             --limit "${limit}" --json databaseId)"
           count="$(jq length <<<"${runs}")"
           if ((count >= limit)); then
-            echo "멈춤: ${wf} ${status} ${count} 개 — 잘렸을 수 있음"
+            echo "멈춤: ${wf} ${run_status} ${count} 개 — 잘렸을 수 있음"
             exit 1
           fi
           left=$((left + count))
         done
       done
-      echo "끝나지 않은 실행 ${left} 개"   # 0 이어야 함
+      echo "끝나지 않은 실행 ${left} 개"
     )
     ```
+
+    마지막 줄이 「끝나지 않은 실행 0 개」 여야 합니다.
 
 ### CI 거부 처분
 
