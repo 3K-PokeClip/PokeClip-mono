@@ -8,10 +8,13 @@
 # SG 규칙 재조회 읽기(POK-479 — 결정 65 예외 · 그 덩어리의 주석).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
-# GitHub OIDC 공급자 확인 · 참조(없으면 생성)
+# GitHub OIDC 공급자 참조 — 만들지 않는다(계정에 이미 있고 dev CI 도 쓴다).
+# prod/registry 의 data "aws_iam_openid_connect_provider" "github" 는 URL 로
+# 찾는다 — provider 6.68.0 의 데이터 소스 Read 가 ListOpenIDConnectProviders
+# 로 ARN 을 찾고 GetOpenIDConnectProvider 로 읽는다(internal/service/iam 의
+# openid_connect_provider_data_source.go). 생성 행은 뺐다(prod CI B12 계획).
 iam:ListOpenIDConnectProviders	us-east-1	*
 iam:GetOpenIDConnectProvider	us-east-1	*
-iam:CreateOpenIDConnectProvider	us-east-1	*
 
 # CI 푸시 역할 · apex 업로드 역할 · 정책 · 되돌림
 iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
@@ -19,9 +22,27 @@ iam:CreateRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 # 래퍼의 dev 역할 해석(get-role) 둘 다 덮는다(같은 (동작, 리전)은 한 행).
 iam:GetRole	us-east-1	*
 iam:TagRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# 신뢰 변경(sub 정정 등) — provider 6.68.0 의 aws_iam_role Update 가
+# assume_role_policy 변경을 UpdateAssumeRolePolicy 로 보낸다(role.go
+# resourceRoleUpdate).
+iam:UpdateAssumeRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:PutRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:DeleteRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 iam:DeleteRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+
+# 역할 · 인라인 정책 refresh 읽기(결정 65 예외 · prod CI B12 계획 조사 ⑤).
+# provider 6.68.0 의 aws_iam_role Read 는 GetRole 뒤에 ListRolePolicies ·
+# 인라인 정책마다 GetRolePolicy · ListAttachedRolePolicies 를 부른다(role.go
+# resourceRoleRead — registry 의 apex 역할 refresh 도 edge 가 붙인 인라인
+# 정책을 읽는다). aws_iam_role_policy 의 Read 는 GetRolePolicy 다
+# (role_policy.go). 첫 apply 의 생성 뒤 Read 도 같은 동작을 부르므로 거부되면
+# apply 가 역할을 만든 뒤 멈춘다. ListAttachedRolePolicies 는 같은 (동작,
+# 리전)이 한 행이라 아래 2-3 판정 래퍼 덩어리의 행(자원 *)을 쓴다.
+iam:ListRolePolicies	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+iam:GetRolePolicy	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
+# 되돌림의 역할 삭제는 DeleteRole 앞에 ListInstanceProfilesForRole 을 부른다
+# (role.go deleteRole → deleteRoleInstanceProfiles).
+iam:ListInstanceProfilesForRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*
 
 # SG 규칙 재조회(서울) — 이 단계의 edge 추가 apply 가 prod/edge 의 SG 규칙
 # (vpc_origin_ingress.tf 의 internal_alb_from_vpc_origins — O7f 가 만듦)을

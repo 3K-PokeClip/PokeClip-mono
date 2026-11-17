@@ -1249,7 +1249,7 @@ main() {
     echo "guard_test: ${failures}건 실패" >&2
     exit 1
   fi
-  echo "guard_test: 전부 통과(bad ${count}개 · ok 5개 · 운영 표지 5개)"
+  echo "guard_test: 전부 통과(bad ${count}개 · ok 6개 · 운영 표지 5개)"
 }
 
 main "$@"
