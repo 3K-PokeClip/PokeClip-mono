@@ -68,6 +68,14 @@ GitHub Actions 의 `prod-deploy` environment 잡이 받는 역할입니다. 둘 
 
 ## 적용
 
+**CI 역할 선행(prod CI B12):** CI 역할을 처음 적용하기 전에 GitHub
+environment `prod-deploy` 의 보호 규칙(배포 브랜치 main · 필수 승인자 · 관리자
+우회 끔)을 먼저 만들고, 다시 읽어 규칙을 확인합니다. environment 가 없으면
+아무 브랜치의 잡이 그 이름을 가리켜 보호 없는 environment 를 자동으로 만들고
+역할을 받을 수 있습니다. 절차는 [prod 산출물
+런북](/infra/terraform/runbooks/prod-artifacts.md) 「CI 준비」 입니다(prod CI
+워크플로 PR 이 더함).
+
 `terraform.tfvars` 가 필요 없습니다(기본값). 적용은 O7b 의 2(kty
 승인)입니다. 백엔드는 `backend.hcl.example` 을 `backend.hcl` 로 복사하고
 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를 `pokeclip-tfstate-prod-apne2` 로
@@ -87,8 +95,10 @@ GitHub Actions 의 `prod-deploy` environment 잡이 받는 역할입니다. 둘 
 보고, 이어서 prod/edge 를 apply 합니다(정책 생성 하나 — [edge
 README](/infra/terraform/prod/edge/README.md) 「apex 업로드 정책 적용 · 되돌림」).
 
-**되돌림:** prod/edge 의 정책을 먼저 지우고 이 루트의 역할을 지웁니다 —
-정책이 남은 역할은 지워지지 않습니다. OIDC 공급자는 dev 도 쓰므로 건드리지
+**되돌림:** prod/edge 의 정책을 먼저 지우고 이 루트의 역할을 지웁니다.
+provider 는 refresh 때 역할의 인라인 정책을 상태에 담고, 역할을 지울 때 그
+정책까지 지웁니다 — registry 를 먼저 지우면 edge 정책이 edge 상태 밖에서
+사라져 edge 상태가 어긋납니다. OIDC 공급자는 dev 도 쓰므로 건드리지
 않습니다.
 
 ## 출력

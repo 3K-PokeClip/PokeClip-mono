@@ -151,8 +151,10 @@ terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
     합니다. 그 밖의 줄이 보이면 적용하지 않습니다.
 1.  apply 뒤 다시 plan 해 변경 0 을 봅니다.
 
-되돌릴 때는 이 루트의 정책을 먼저 지우고(그다음 registry 역할), 정책이 남은
-역할은 지워지지 않습니다(`DeleteConflict`).
+되돌릴 때는 이 루트의 정책을 먼저 지우고 그다음 registry 역할을 지웁니다.
+provider 는 refresh 때 역할의 인라인 정책을 상태에 담고, 역할을 지울 때 그
+정책까지 지웁니다 — registry 를 먼저 지우면 이 루트의 정책이 이 루트 상태
+밖에서 사라져 상태가 어긋납니다.
 
 ## 적용 뒤 할 일
 

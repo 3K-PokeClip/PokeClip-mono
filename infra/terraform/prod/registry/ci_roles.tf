@@ -1,7 +1,9 @@
 # prod CI 역할(B12) — GitHub Actions 가 OIDC 로 받는 역할 둘이다. 신원 ·
 # 신뢰는 이 루트가, apex 업로드 권한은 prod/edge 가 갖는다(guard R7 이
 # 이 루트의 apex 역할 정책 부착을 막는다). 되돌릴 때는 edge 정책을 먼저
-# 지운다 — 정책이 남은 역할은 지워지지 않는다.
+# 지운다 — provider 는 refresh 때 역할의 인라인 정책을 상태에 담고 역할을
+# 지울 때 그 정책까지 지우므로, registry 를 먼저 지우면 edge 정책이 edge
+# 상태 밖에서 사라져 edge 상태가 어긋난다.
 #
 # 두 역할은 같은 신뢰를 쓴다: prod-deploy environment 의 잡만 받는다. main
 # 브랜치 · 필수 승인자는 environment 보호 규칙이 건다.
