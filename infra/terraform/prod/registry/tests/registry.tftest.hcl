@@ -123,25 +123,33 @@ run "finds_existing_github_oidc_provider_by_url" {
 # 두 역할의 신뢰 정책은 문 하나 — 그 공급자의 웹 ID 역할 받기를
 # StringEquals 두 키(aud · sub)로만 허용한다. sub 는 고정 subject 꼴의
 # prod-deploy environment 하나다(main + 필수 승인자는 environment 가 건다).
+#
+# 자원 객체가 아니라 신뢰 정책 문자열을 돈다 — 객체에는 deprecated 속성
+# (inline_policy · managed_policy_arns)의 표지가 붙어, 단언이 실패하면
+# Terraform 1.16.4 가 그 값을 JSON 으로 못 옮겨 panic 한다. 원소마다 try 로
+# 감싸 키가 빠진 꼴(StringLike 등)도 오류가 아니라 단언 실패로 떨어지게 한다.
 run "ci_roles_trust_only_prod_deploy_environment" {
   command = plan
 
   assert {
     condition = alltrue([
-      for role in [aws_iam_role.ci_push, aws_iam_role.apex_upload] :
-      length(jsondecode(role.assume_role_policy).Statement) == 1
+      for policy in [aws_iam_role.ci_push.assume_role_policy, aws_iam_role.apex_upload.assume_role_policy] :
+      try(length(jsondecode(policy).Statement) == 1, false)
     ])
     error_message = "CI 역할의 신뢰 정책 문이 하나가 아니다."
   }
 
   assert {
     condition = alltrue([
-      for role in [aws_iam_role.ci_push, aws_iam_role.apex_upload] :
-      jsondecode(role.assume_role_policy).Statement[0].Effect == "Allow" &&
-      jsondecode(role.assume_role_policy).Statement[0].Action == "sts:AssumeRoleWithWebIdentity" &&
-      jsondecode(role.assume_role_policy).Statement[0].Principal == {
-        Federated = data.aws_iam_openid_connect_provider.github.arn
-      } &&
+      for policy in [aws_iam_role.ci_push.assume_role_policy, aws_iam_role.apex_upload.assume_role_policy] :
+      try(
+        jsondecode(policy).Statement[0].Effect == "Allow" &&
+        jsondecode(policy).Statement[0].Action == "sts:AssumeRoleWithWebIdentity" &&
+        jsondecode(policy).Statement[0].Principal == {
+          Federated = data.aws_iam_openid_connect_provider.github.arn
+        },
+        false,
+      ) &&
       data.aws_iam_openid_connect_provider.github.arn == "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
     ])
     error_message = "CI 역할의 신뢰가 GitHub OIDC 공급자(data source)의 sts:AssumeRoleWithWebIdentity 허용 하나가 아니다."
@@ -151,30 +159,37 @@ run "ci_roles_trust_only_prod_deploy_environment" {
   # 다른 environment · 브랜치를 받는다.
   assert {
     condition = alltrue([
-      for role in [aws_iam_role.ci_push, aws_iam_role.apex_upload] :
-      keys(jsondecode(role.assume_role_policy).Statement[0].Condition) == ["StringEquals"]
+      for policy in [aws_iam_role.ci_push.assume_role_policy, aws_iam_role.apex_upload.assume_role_policy] :
+      try(keys(jsondecode(policy).Statement[0].Condition) == ["StringEquals"], false)
     ])
     error_message = "CI 역할의 신뢰 조건 연산자가 StringEquals 하나가 아니다(StringLike 등 금지)."
   }
 
   assert {
     condition = alltrue([
-      for role in [aws_iam_role.ci_push, aws_iam_role.apex_upload] :
-      jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals == {
-        "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        "token.actions.githubusercontent.com:sub" = "repo:3K-PokeClip@304758179/PokeClip-mono@1311593360:environment:prod-deploy"
-      }
+      for policy in [aws_iam_role.ci_push.assume_role_policy, aws_iam_role.apex_upload.assume_role_policy] :
+      try(
+        jsondecode(policy).Statement[0].Condition.StringEquals == {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = "repo:3K-PokeClip@304758179/PokeClip-mono@1311593360:environment:prod-deploy"
+        },
+        false,
+      )
     ])
     error_message = "CI 역할의 StringEquals 가 aud = sts.amazonaws.com · sub = prod-deploy environment 고정 subject 두 키가 아니다."
   }
 
   assert {
-    condition = alltrue(flatten([
-      for role in [aws_iam_role.ci_push, aws_iam_role.apex_upload] : [
-        for value in values(jsondecode(role.assume_role_policy).Statement[0].Condition.StringEquals) :
-        !strcontains(value, "*") && !strcontains(value, "?")
-      ]
-    ]))
+    condition = alltrue([
+      for policy in [aws_iam_role.ci_push.assume_role_policy, aws_iam_role.apex_upload.assume_role_policy] :
+      try(
+        alltrue([
+          for value in values(jsondecode(policy).Statement[0].Condition.StringEquals) :
+          !strcontains(value, "*") && !strcontains(value, "?")
+        ]),
+        false,
+      )
+    ])
     error_message = "CI 역할의 신뢰 조건 값에 와일드카드(* · ?)가 있다."
   }
 }
@@ -254,6 +269,9 @@ run "ci_push_policy_pushes_only_to_prod_repositories" {
 
 # apex 업로드 역할의 권한은 prod/edge 가 붙인다(guard R7 이 registry 안의
 # 부착 선언을 막는다). 여기서는 역할 본문의 정책 인자가 비었는지만 본다.
+# 두 인자는 deprecated 라 값에 표지가 붙고, 이 단언이 실패하면 Terraform
+# 1.16.4 가 진단을 그리다 panic(종료 11)한다 — 그 값을 읽지 않는 꼴이 없다.
+# 같은 회귀는 guard R7(역할 본문 정책 인자)이 먼저 잡는다.
 run "apex_upload_role_carries_no_policy_in_registry" {
   command = apply
 
