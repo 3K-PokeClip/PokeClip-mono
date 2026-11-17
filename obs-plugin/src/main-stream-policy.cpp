@@ -8,6 +8,8 @@ MainStopKind ClassifyMainStop(const MainStreamRun &run, int mainStopCode, bool h
 		return MainStopKind::Duplicate;
 	if (run.stopRequested && (hasOutput || mainStopCode == kMainStopSuccess))
 		return MainStopKind::Intentional;
+	if (!run.started && mainStopCode != kMainStopSuccess)
+		return MainStopKind::FailedToStart;
 	return MainStopKind::NotIntentional;
 }
 
@@ -28,6 +30,8 @@ const char *MainStopKindName(MainStopKind kind)
 		return "intentional";
 	case MainStopKind::NotIntentional:
 		return "not_intentional";
+	case MainStopKind::FailedToStart:
+		return "failed_to_start";
 	}
 	return "unknown";
 }

@@ -9,6 +9,9 @@ namespace pokeclip {
 inline constexpr int kMainStopSuccess = 0;
 
 struct MainStreamRun {
+	// STREAMING_STARTED를 봤다 — 본방이 실제로 접속했다(본방 출력의 start 신호). 스트림 지연을 켜면 지연 시간 뒤에
+	// 온다(지연을 기다리는 동안은 StreamDelayStarting뿐이다).
+	bool started = false;
 	// STREAMING_STOPPING을 봤다 — obs_output_stop·force_stop 안에서만 온다(OBS 「방송 종료」 버튼·단축키·websocket).
 	// 본방이 스스로 끊겨 끝나면 STOPPING 없이 STOPPED만 온다.
 	bool stopRequested = false;
@@ -23,6 +26,10 @@ enum class MainStopKind {
 	Duplicate,      // 같은 방송의 두 번째 STOPPED — 무시한다
 	Intentional,    // 스트리머가 본방을 멈췄다 — 우리 송출도 조작으로 멈춘다(종료 신호를 보낸다)
 	NotIntentional, // 본방이 스스로 끊겨 끝났다 · 공유 인코더 실패 — 같이 멈추되 종료 신호는 보내지 않는다
+	// 본방이 한 번도 접속하지 못하고 오류로 끝났다(POK-596). 연결 거부·없는 호스트처럼 접속 스레드에서 난 실패는
+	// obs_output_start가 이미 받아들인 뒤라 그 자리 실패 감시(plugin-main WatchMainStreamStart)를 지나고, STOPPING 없이
+	// STOPPED(예: CONNECT_FAILED)만 온다. 우리 송출도 main_stream_failed 사유로 멈춘다(종료 신호는 보내지 않는다).
+	FailedToStart,
 };
 
 // STREAMING_STOPPED 하나를 가른다. mainStopCode는 이번 방송에서 본방 출력 stop 신호가 준 code, hasOutput은 지금 우리

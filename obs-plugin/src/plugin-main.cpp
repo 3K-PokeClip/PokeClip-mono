@@ -525,7 +525,8 @@ void WatchMainOutputStop(obs_output_t *mainOutput)
 // 보내지 않는다 — 방송 중 표시(obsStreaming)도, 이미 시작한 우리 출력도 그대로 남는다. OBS는 STREAMING_STARTING을
 // 보낸 같은 호출 안에서 본방 obs_output_start를 부르므로 다음 이벤트 루프 차례에 결과가 나와 있다. 시간으로 재지 않는다
 // — 접속이 느리거나 스트림 지연을 켠 본방은 start 신호(obs_frontend_streaming_active)가 몇 초~수십 초 뒤에 온다.
-// 그 뒤의 실패는 OBS가 STREAMING_STOPPED를 보낸다.
+// 그 뒤의 실패는 OBS가 STREAMING_STOPPED를 보낸다 — 한 번도 접속하지 못한 본방(연결 거부·없는 호스트)은
+// OnStreamingStopped가 STREAMING_STARTED를 봤는지로 시작 실패를 가른다(POK-596).
 void WatchMainStreamStart()
 {
 	obs_output_t *mainOutput = obs_frontend_get_streaming_output();
@@ -591,10 +592,18 @@ void OnStreamingStopped()
 	if (kind == MainStopKind::Duplicate)
 		return; // 앞의 판정을 덮지 않는다 — 지연 중 「지연된 분량 버림」은 STOPPED가 두 번 온다(POK-597)
 	AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
-	// STOPPING이 앞서 왔으면 같은 조작의 뒷부분이고(Stop은 한 구간에 한 번만 신호를 정한다), 아니면 본방이 스스로
-	// 끊겨 끝난 것이다 — 종료 신호를 보내지 않는다. 출력 없이 미뤄 둔 판정은 본방 stop 코드로 가른다 — 공유 인코더
-	// 실패(ENCODE_ERROR)면 조작이 아니다.
-	StreamTarget::Instance().Stop(nullptr, kind == MainStopKind::Intentional);
+	if (kind == MainStopKind::FailedToStart && IsStreamingPhase(AppState::Instance().Snapshot().phase)) {
+		// 본방이 접속하지 못하고 끝났다(연결 거부·없는 호스트) — 그 자리 실패(WatchMainStreamStart)와 같게 사유를
+		// 남기고 멈춘다. 우리 출력이 아직 접속 중이면 붙자마자 멈추고, 그때도 이 사유가 남는다(HandleStop).
+		obs_log(LOG_WARNING, "main stream failed before it went live — stopping SRT output with it");
+		StreamTarget::Instance().Stop("main_stream_failed");
+		SetStreamError(StreamPhase::Error, "main_stream_failed");
+	} else {
+		// STOPPING이 앞서 왔으면 같은 조작의 뒷부분이고(Stop은 한 구간에 한 번만 신호를 정한다), 아니면 본방이 스스로
+		// 끊겨 끝난 것이다 — 종료 신호를 보내지 않는다. 출력 없이 미뤄 둔 판정은 본방 stop 코드로 가른다 — 공유
+		// 인코더 실패(ENCODE_ERROR)면 조작이 아니다.
+		StreamTarget::Instance().Stop(nullptr, kind == MainStopKind::Intentional);
+	}
 	UnwatchMainOutputStop();
 	AudioRouter::Instance().Schedule("stream stopped");
 }
@@ -659,6 +668,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		OnStreamingStarting();
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STARTED:
+		g_mainRun.started = true; // 본방이 실제로 접속했다 — 뒤의 실패는 시작 실패가 아니다
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = true; });
 		AudioRouter::Instance().Schedule("stream started"); // 위 RECORDING_STARTED와 같은 이유 — 잠금을 뷰에 싣는다
 		break;
