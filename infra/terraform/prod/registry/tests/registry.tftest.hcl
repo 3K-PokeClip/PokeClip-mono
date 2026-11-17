@@ -1,7 +1,10 @@
-# prod ECR 저장소(설계 3-1 의 ⑦ — ECR 만)를 mock provider 로 단언한다. 저장소
-# 키 집합 · 이름 규약(pokeclip-prod/<키>) · 태그 불변과 푸시 때 스캔(변수 기본
-# 켬) · 출력 repo_urls. IAM 역할 · GitHub OIDC 공급자가 없다는 것은 tftest 로
-# 볼 수 없어 리뷰가 확인한다.
+# prod ECR 저장소(설계 3-1 의 ⑦)와 CI 역할(prod CI B12)을 mock provider 로
+# 단언한다. 저장소 키 집합 · 이름 규약(pokeclip-prod/<키>) · 태그 불변과 푸시
+# 때 스캔(변수 기본 켬) · 출력 repo_urls, 그리고 CI 역할 둘의 신뢰(GitHub
+# OIDC 공급자 data source · StringEquals aud · sub 두 키) · 이름 · 경로 · 푸시
+# 정책(동작 집합 · 저장소 ARN 범위 · 삭제 0) · 출력 셋. tftest 는 선언의
+# 부재를 볼 수 없다 — apex 업로드 역할에 붙는 정책 자원이 없다는 것은 guard
+# R7 이, OIDC 공급자 자원이 없다는 것은 리뷰가 확인한다.
 
 mock_provider "aws" {}
 

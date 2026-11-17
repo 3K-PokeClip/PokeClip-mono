@@ -17,6 +17,9 @@
 # - VPC origin 서비스 SG 는 서울 별칭으로 이름 · network vpc_id 로 조회하고,
 #   내부 ALB SG 에 그 SG 출처 443 인그레스 하나를 둔다. 조회는 VPC origin
 #   하나만 기다려, VPC origin 밖 media 변경 plan 에서도 출처 SG 가 정해져 있다.
+# - apex 업로드 정책(prod CI B12)은 registry 출력 apex_upload_role_name 의
+#   역할에 붙고, apex 버킷 목록 · 객체 올리기 · apex 배포 무효화 세 문뿐이다
+#   (지우기 · ACL · 와일드카드 0). 그 출력이 없거나 이름이 다르면 멈춘다.
 # - 앞 루트 출력의 꼴이 어긋나면 terraform_data.remote_contract 가 멈춘다.
 #
 # 앞 루트 상태는 override_data 로 흉내 낸다. ARN · id · 계정 ID(111122223333)는

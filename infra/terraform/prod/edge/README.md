@@ -40,6 +40,13 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
     로그를 세는 지표 필터 둘과 경보 셋, 알림 주제
     `pokeclip-prod-edge-alarms` 입니다. 이메일 구독은 저장소 밖입니다(아래
     「경보(POK-525)」).
+*   **apex 업로드 정책**(`aws_iam_role_policy.apex_upload` · prod CI B12):
+    prod/registry 의 apex 업로드 역할(출력 `apex_upload_role_name`)에 붙는
+    인라인 정책입니다. apex 버킷 목록(`s3:ListBucket`) · 객체
+    올리기(`s3:PutObject` — `/*`) · apex 배포 무효화(`CreateInvalidation` ·
+    `GetInvalidation`)뿐입니다. 랜딩 sync 에 `--delete` 를 쓰지 않으므로
+    지우기 · ACL · 객체 읽기 동작은 없습니다. 역할(신원 · 신뢰)은 registry
+    에 있고, guard R7 이 registry 쪽 정책 부착을 막습니다.
 *   **내부 ALB 인그레스 ← VPC origin**(서울): VPC origin 이 생긴 뒤
     CloudFront 가 그 VPC 에 만드는 SG `CloudFront-VPCOrigins-Service-SG` 를
     이름과 network `vpc_id` 로 조회하고, platform 내부 ALB SG 에 그 SG 출처
@@ -52,7 +59,7 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
 
 | 자원 | 루트 |
 |---|---|
-| apex 업로드 역할 · 정책 | 후속 승인 지점(설계 8절 — 40차). 지금 업로드는 kty IAM 사용자 |
+| apex 업로드 역할(신원 · 신뢰) | [`prod/registry`](/infra/terraform/prod/registry/README.md) — 이 루트는 정책만 붙입니다 |
 | rewind 버킷 정책(OAC 허용문) | 런타임 트랙 2단 [`prod/runtime-2`](../runtime-2/README.md)(출력 `media_distribution_arn` 을 씀 — 이 루트 apply 뒤) |
 | KVS 값(`cdn-secret`) | `scripts/kvs-put-cdn-secret.sh`(O7f 멈춤 자리 ②) |
 | 운영 이름 레코드 | `prod/records` |
@@ -76,13 +83,17 @@ G14 · T10 에서 OPTIONS 0건 확인), 버킷 자체의 규칙은 S3 직접 요
 | platform | `internal_alb_arn` · `internal_alb_dns_name` · `internal_alb_sg_id` | VPC origin · media-alb 원본 도메인 · 인그레스 규칙 |
 | runtime | `rewind_bucket_regional_domain_name` | rewind-s3 오리진 |
 | runtime | `edge_bounds_kvs_arn` | dvr-floor 함수의 KVS 연결(POK-525) |
+| registry | `apex_upload_role_name` | apex 업로드 정책을 붙일 역할(prod CI B12) |
 
 `terraform_data.remote_contract` 의 precondition 이 이 값들의 꼴(VPC id ·
 us-east-1 ACM ARN · 공개키 id `K…` · ALB ARN · `internal-` 로 시작하는 내부
 ALB DNS · SG id · S3 리전 도메인 · CloudFront KVS ARN)을 봅니다. 출력이
 빠졌거나 꼴이 다르면 plan 이 멈춥니다. `edge_bounds_kvs_arn` 은 prod/runtime
 을 POK-525 판으로 다시 apply 해야 생깁니다 — 그 전에는 이 검사의 문구로
-멈춥니다.
+멈춥니다. `apex_upload_role_name` 은 이름이 정확히
+`pokeclip-prod-ci-apex-upload` 여야 합니다 — 다른 역할(CI 푸시 역할 등)에
+apex 권한이 붙지 않게 합니다. prod/registry 를 CI 역할 판으로 apply 하기
+전에는 이 출력이 없어 멈춥니다.
 
 ## 출력
 
@@ -90,7 +101,7 @@ ALB DNS · SG id · S3 리전 도메인 · CloudFront KVS ARN)을 봅니다. 출
 
 | 출력 | 소비자 |
 |---|---|
-| `apex_bucket_name` · `apex_distribution_id` | kty 로컬 랜딩 업로드(sync · 무효화) |
+| `apex_bucket_name` · `apex_distribution_id` | 랜딩 업로드(sync · 무효화) — CI 의 environment 비밀 · kty 로컬 대행 |
 | `apex_distribution_domain` · `apex_distribution_zone_id` | records(apex · www) |
 | `media_distribution_domain` · `media_distribution_zone_id` | records(media) |
 | `media_distribution_arn` | 런타임 트랙 2단 `prod/runtime-2`(rewind 버킷 OAC 허용문의 `AWS:SourceArn`) |
@@ -127,6 +138,21 @@ edge apply 는 [엣지 비밀 런북](../../runbooks/edge-secrets.md) 「초기�
 terraform import 'aws_cloudwatch_log_group.cloudfront_function["live_auth"]' \
   /aws/cloudfront/function/pokeclip-prod-live-auth
 ```
+
+## apex 업로드 정책 적용 · 되돌림(prod CI B12)
+
+정책을 붙일 역할은 prod/registry 가 만듭니다. 그래서 순서가 정해져
+있습니다.
+
+1.  단계 직전 점검(공통 묶음 `ci-followup`).
+1.  prod/registry apply — 역할 둘 · 푸시 정책([registry
+    README](/infra/terraform/prod/registry/README.md) 「CI 역할」).
+1.  이 루트 plan — `aws_iam_role_policy.apex_upload` 생성 하나뿐이어야
+    합니다. 그 밖의 줄이 보이면 적용하지 않습니다.
+1.  apply 뒤 다시 plan 해 변경 0 을 봅니다.
+
+되돌릴 때는 이 루트의 정책을 먼저 지우고(그다음 registry 역할), 정책이 남은
+역할은 지워지지 않습니다(`DeleteConflict`).
 
 ## 적용 뒤 할 일
 
