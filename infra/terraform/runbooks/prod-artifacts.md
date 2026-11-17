@@ -1,10 +1,20 @@
 # prod 산출물 올리기 런북
 
 prod 이미지를 ECR 에 올리고 apex 랜딩을 S3 에 올리는 절차입니다. 계획 M7 의
-운영 단계 O7c(이미지)와 O7f 의 5(랜딩 업로드)에 해당합니다. CI 자동 푸시는
-아직 없어서(설계 8절 후속 승인 지점 · 40차) 이 런북이 기본 경로입니다.
+운영 단계 O7c(이미지)와 O7f 의 5(랜딩 업로드)에 해당합니다. **기본 경로는
+CI 입니다** — 아래 「CI 로 올리기」(GitHub Actions 가 OIDC 로 prod 역할을 받아
+올림). 이 런북의 손 절차는 CI 가 안 될 때와 CI 밖 이미지(`media-nginx` ·
+`media-loopback-sender`)를 올릴 때 쓰는 대행 경로입니다.
 
-*   기본 실행자는 kty 입니다. kty 의 IAM 사용자 프로필로 **kty 로컬
+반영은 둘이 다릅니다.
+
+*   **이미지**: 올리기만으로는 prod 가 바뀌지 않습니다. 반영(다이제스트를
+    tfvars 에 넣고 plan · apply)은 어느 경로든 kty 가 합니다.
+*   **랜딩**: 업로드가 곧 운영 S3 sync · CloudFront 무효화라 올리는 순간
+    반영됩니다. 되돌리려면 이전 정상 내용을 다시 올리고 다시 무효화합니다
+    (아래 「랜딩 되돌리기」).
+
+*   대행 경로의 실행자는 kty 입니다. kty 의 IAM 사용자 프로필로 **kty 로컬
     터미널**에서 돌립니다. 에이전트 세션이나 세션의 `!` 로 돌리지 않습니다 — 레지스트리
     호스트 · 버킷 이름에 계정 ID 가 들어 있어 세션 기록에 남습니다.
     `docker tag` · `docker push` 출력에도 같은 호스트가 찍히므로 터미널
@@ -361,7 +371,8 @@ docker logout "${registry_host}"
 ## 랜딩 업로드(O7f 의 5)
 
 원천은 mono `landing/` 입니다(빌드 없음 · ADR-089). 버킷 · 배포는 `prod/edge`
-출력 `apex_bucket_name` · `apex_distribution_id` 에서 읽습니다.
+출력 `apex_bucket_name` · `apex_distribution_id` 에서 읽습니다. 기본은 CI 의
+`prod-landing` 이고(아래 「CI 로 올리기」), 이 절은 대행 경로입니다.
 
 1.  2번이 넘긴 업로드 제외 경로(I2-8 — 예: `landing/scripts/` 아래 검사
     스크립트)를 `--exclude` 로 붙여 dry-run 으로 대상을 봅니다.
@@ -383,11 +394,267 @@ docker logout "${registry_host}"
 
 1.  배포 주소 · 시각을 kty 가 2번에게 알립니다(I2-8).
 
-## CI 로 옮길 때
+## CI 로 올리기
 
-CI 자동 푸시는 설계 8절 후속 승인 지점(40차)을 따릅니다 — CI 푸시 역할 ·
-apex 업로드 역할과 그 신뢰 조건을 만드는 별도 PR 과 kty 결정이 필요합니다.
-그 뒤에도 이 런북은 CI 가 안 될 때의 수동 대행 경로로 남깁니다.
+워크플로 둘이 있습니다. 둘 다 손으로만 돌리고(`workflow_dispatch`), 잡은
+main 에서만 돌며, environment `prod-deploy` 의 필수 승인자(kty)가 승인해야
+러너로 갑니다. 역할 신뢰 조건이 그 environment 의 subject 라 다른 브랜치 ·
+environment 로는 역할을 받지 못합니다(설계 8절 · 2026-11-17 결정 (가)).
+
+| 워크플로 | 하는 일 | 역할 |
+|---|---|---|
+| `prod-images.yml` | 아래 11종을 빌드 · 확인 · ECR 푸시 · 요약 표 | ECR 푸시 |
+| `prod-landing.yml` | 공개 배포 검사 · 올릴 목록(dry-run) → 업로드 · 무효화 | apex 업로드 |
+
+`prod-images` 의 11종은 「이미지」 표의 `next` · `auth` · `clip` ·
+`chat-collector` · `chat-detector` · `render` · `upload` · `media-sidecar` ·
+`media-mediamtx` · `media-ingest-auth` 와 「설치 묶음 · 루프백 송출기」 의
+`media-host-bundle` 입니다. Dockerfile · 컨텍스트 · 빌드 인자는 표와 같고,
+태그는 빌드 커밋 SHA 앞 8자입니다. 자격을 받기 전에 `linux/arm64` 로
+빌드하고(증명 · SBOM 끔), 확인(arm64 · MediaMTX 계정 10002 와 훅 · 묶음
+`REQUIRED_FILES` 두 방향)을 통과해야 올립니다. 푸시 뒤 매니페스트가 단일
+이미지 꼴이 아니면(인덱스) 실패합니다.
+
+CI 가 하지 않는 것 — 위 절차대로 사람이 합니다.
+
+*   `media-nginx` · `media-loopback-sender` 다시 태그해 올리기.
+*   `media/Dockerfile.mtxhook` 의 `FROM` 이 현행 포크 태그인지 대조하기
+    (「MediaMTX 확인」 첫 줄).
+*   실행 이미지의 로컬 기동 확인.
+*   사이드카 롤백 하한 · 검사 핀 c0 하한 판정과 「기록」 의 나머지 칸.
+    워커의 `java` · `ffmpeg` 판은 CI 로그에 찍힙니다.
+
+### CI 준비
+
+environment `prod-deploy` 는 배포 브랜치 main 하나 · 필수 승인자 kty · 관리자
+우회 끔 · 자기 승인 막기(`prevent_self_review`) 끔으로 둡니다. 보호 규칙을 먼저
+만들고 다시 읽어 확인한 뒤 역할을 apply 합니다 — 없는 environment 를 잡이
+가리키면 보호 규칙 없이 자동으로 생깁니다.
+
+다시 읽을 때 아래 필드가 모두 맞아야 합니다. 하나라도 다르면 역할을 apply
+하지 않습니다.
+
+*   `deployment_branch_policy.custom_branch_policies` 가 `true` 이고
+    `protected_branches` 가 `false`.
+*   배포 규칙 목록(`deployment-branch-policies`)이 `total_count` 1 —
+    `name` `main` · `type` `branch` 하나.
+*   `can_admins_bypass` 가 `false`. 이 필드는 공개 API 설명(OpenAPI)에는
+    없지만 응답에는 있습니다(2026-11-17 `dev-deploy` 조회로 확인).
+*   `protection_rules` 의 `required_reviewers` 규칙이 있고, 그 `reviewers` 가
+    kty(`User` · `xodbs1021`) 하나 · `prevent_self_review` 가 `false`.
+
+확인은 읽기(GET)만 합니다. 저장소 뿌리에서 돌리면 `{owner}` · `{repo}` 를
+gh 가 채웁니다.
+
+```shell
+env_path='repos/{owner}/{repo}/environments/prod-deploy'
+gh api "${env_path}" --jq '{
+  policy: .deployment_branch_policy,
+  admins: .can_admins_bypass,
+  rules: [.protection_rules[] | {type, prevent_self_review,
+    reviewers: [.reviewers[]? | {type, login: .reviewer.login}]}]}'
+gh api "${env_path}/deployment-branch-policies" \
+  --jq '{total_count, branch_policies: [.branch_policies[] | {name, type}]}'
+```
+
+비밀 넷과 변수를 environment 에 넣습니다. 값은 출력에서 파이프로만 넘기고
+화면 · 세션에 내지 않습니다.
+
+| 이름 | 종류 | 값 |
+|---|---|---|
+| `AWS_ECR_PUSH_ROLE_ARN` | 비밀 | `prod/registry` 출력 `ci_push_role_arn` |
+| `AWS_APEX_UPLOAD_ROLE_ARN` | 비밀 | `prod/registry` 출력 `apex_upload_role_arn` |
+| `APEX_BUCKET_NAME` | 비밀 | `prod/edge` 출력 `apex_bucket_name` |
+| `APEX_DISTRIBUTION_ID` | 비밀 | `prod/edge` 출력 `apex_distribution_id` |
+| `next` 빌드 인자 10개 | 변수 | web README 「컨테이너 이미지」 표의 이름 그대로 · prod 값 |
+
+### CI 실행
+
+```shell
+gh workflow run prod-images.yml --ref main
+gh workflow run prod-landing.yml --ref main
+```
+
+*   에이전트 세션은 실행(dispatch)까지만 합니다. 승인은 kty 가 실행 화면의
+    **Review deployments** 에서 직접 누릅니다. 세션은 kty 토큰으로
+    `pending_deployments` 에 승인 · 거부를 보내지 않습니다.
+*   main 이 아닌 ref 로 돌리면 잡이 건너뛰어집니다(잡 조건). 이 음성 대조는
+    environment 보호 규칙을 만들고 다시 읽은 뒤에 합니다.
+*   랜딩(`prod-landing`)은 `check-legal.mjs --release` 가 통과할 때까지
+    (약관 · 처리방침의 자리표시가 채워질 때까지) 돌리지 않습니다. 그래서 첫
+    실측은 이미지만 합니다.
+*   첫 실측 직전에 kty 에게 「이번 실측은 `prod-images` 만 — 이미지 잡 승인만
+    누름 · 랜딩은 돌리지 않음」 을 한 줄로 알립니다.
+
+### CI 승인
+
+*   **이미지**: 이미지 잡 11개가 같은 environment 를 함께 기다립니다. 승인
+    단위는 「실행 · environment」 입니다 — 대기 중 배포를 승인하는 API 가
+    잡이 아니라 environment id 목록을 받습니다. 그래서 한 번 승인으로 11개가
+    함께 풀린다고 보고, 첫 실측에서 확인합니다. 잡마다 따로 승인을 요구하면
+    「자격 없는 빌드 matrix + 자격 받는 푸시 잡 하나」 로 구조를 바꿉니다.
+*   **랜딩**: `dry-run` 잡을 승인하고, 로그의 목록을 본 뒤 `upload` 잡을
+    따로 승인합니다. `upload` 승인이 곧 운영 반영입니다(이미지처럼 tfvars
+    단계가 뒤에 없음). 올리지 않으려면 `upload` 를 승인하지 않고 실행을
+    취소합니다.
+
+### 다이제스트 읽기
+
+실행 요약의 표 「서비스 · 태그 · 다이제스트 · 빌드 커밋」 이 결과입니다. 행
+수가 11 이 아니면 빠진 이미지 잡의 로그를 봅니다. 같은 값을 「기록」 의
+`describe-images` 로 다시 읽을 수 있습니다. tfvars 에는 다이제스트를 넣습니다.
+
+같은 태그가 이미 있으면 올리지 않습니다. 그 기존 이미지도 arm64 한 변형인지
+확인해야 하는데, 아키텍처가 든 config 를 읽으려면 레이어 내려받기 권한이 들어
+CI 역할에는 없습니다. 그래서 기존 태그의 config 다이제스트가 이번 실행에서
+arm64 로 확인한 빌드와 같을 때만 통과하고(태그 칸 `<태그> (기존 태그)`),
+다르면 그 이미지 잡은 실패합니다. 빌드는 재현되지 않아(시각 · 내려받은 판)
+보통은 다릅니다.
+
+*   같은 커밋을 새로 dispatch 하면 앞서 올라간 이미지의 잡은 이 확인에서
+    실패합니다. 푸시 전에 실패한 잡(빌드 · 확인)은 그 실행에서 **실패한 잡만
+    다시 실행**합니다.
+*   푸시까지 끝난 뒤 실패한 잡(다이제스트 읽기 · 아티팩트)은 다시 실행해도
+    이번에는 기존 태그 갈래로 가서 다시 실패합니다(새 빌드는 config 가
+    다름). 출구는 둘입니다.
+    *   그 이미지는 같은 실행에서 arm64 로 확인한 뒤 올린 것이므로, kty 가
+        「기록」 의 `describe-images` 로 다이제스트를 직접 읽어 tfvars 에
+        씁니다. 단 실패 사유가 「단일 이미지 매니페스트가 아니다」 이면 이
+        출구를 쓰지 않습니다.
+    *   새 커밋(태그가 다름)으로 다시 dispatch 합니다.
+*   손으로 먼저 올린 태그와 겹쳤으면 kty 가 그 이미지를 받아
+    `docker image inspect --format '{{.Os}}/{{.Architecture}}'` 로 직접
+    봅니다(`linux/arm64` 여야 함).
+
+### 랜딩 dry-run 의 뜻
+
+`aws s3 sync` 는 크기 · 수정 시각으로 올릴 파일을 고르는데, CI 체크아웃의
+파일은 방금 쓰인 것이라 목록은 사실상 「제외 밖 전부」 입니다. 「무엇이
+바뀌었나」 가 아니라 「무엇을 올리나」 로 읽습니다. 바뀐 파일만 알고 싶으면
+2026-11-16 처럼 ETag 를 대조합니다.
+
+*   제외 경로(I2-8)는 `README.md` · `scripts/*` · `legal-versions.json` 이고
+    워크플로 `LANDING_EXCLUDES` 에 있습니다. `landing/README.md` 의 배포 목록이
+    바뀌면 함께 고칩니다. 그때 두 잡(`dry-run` · `upload`)의 허용 목록
+    `case`(`.github/workflows/prod-landing.yml` 의 「올릴 파일이 허용 목록
+    안인지 본다」 단계)도 두 잡이 같게 고칩니다. 허용 밖 파일 · 심볼릭 링크 ·
+    커밋과 다른 파일이 하나라도 있으면 `dry-run` 이 그 경로를 찍고 실패합니다.
+*   잡 사이로는 목록의 sha256 만 넘깁니다. 목록 원문은 로그에만 있고(버킷
+    이름은 가려짐) 아티팩트로 남기지 않습니다. `upload` 는 같은 방식으로
+    다시 낸 해시가 같을 때만 올립니다.
+*   `check-legal.mjs --release` 가 먼저 돕니다. 자리표시 〈 〉가 남았으면
+    목록을 내기 전에 멈춥니다.
+*   업로드를 막은 실측은 S3 쓰기 · 무효화를 검증하지 않습니다. 첫 실제
+    업로드는 kty 가 승인하는 다음 랜딩 변경 때 따로 판정합니다.
+
+### 랜딩 되돌리기
+
+업로드는 올리는 순간 운영에 반영되므로, 되돌림은 tfvars 를 바꾸는 것이 아니라
+이전 정상 내용을 다시 올리고 `/*` 를 다시 무효화하는 것입니다.
+
+*   **CI 로**: `prod-landing` 은 main 에서만 돌므로, `landing/` 을 이전 정상
+    내용으로 되돌린 변경이 main 에 들어간 뒤 다시 dispatch 하고 `dry-run` ·
+    `upload` 를 승인합니다.
+*   **급하면 대행으로**: 위 「랜딩 업로드(O7f 의 5)」 를 이전 정상 커밋을
+    체크아웃한 트리에서 kty 로컬로 돌립니다(같은 제외 경로 · 무효화).
+*   어느 쪽이든 `--delete` 없이 올리므로, 잘못 올라간 새 파일은 버킷에
+    남습니다. 지울지는 대행 경로에서 `--delete` 를 붙인 dry-run 의 지울
+    목록을 보고 kty 가 정합니다(위 「랜딩 업로드」 의 2).
+
+### CI 멈춤 절차
+
+`gh workflow disable` 은 돌고 있거나 승인을 기다리는 실행을 취소하지 않습니다
+([Disabling and enabling a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)).
+그래서 셋을 이 순서로 합니다.
+
+이 절의 블록은 kty 의 대화형 zsh 에 붙여 넣어도 돌게 씁니다. `#` 주석을 두지
+않고(`interactivecomments` 가 꺼져 `#` 를 주석으로 읽지 않음) 기대값은 블록
+밖에 적습니다. 변수 이름에 zsh 특수 변수(`status` 는 `$?` 의 읽기 전용 별칭 ·
+`path` · `argv` 등)를 쓰지 않습니다.
+
+아래 2 · 3단계 블록은
+`bash infra/terraform/scripts/test/prod_artifacts_runbook_test.sh` 가 런북
+글자 그대로 뽑아 가짜 gh 로 bash · 대화형 zsh 에서 봅니다 — 끝나지 않은 실행
+있음 · 없음 · 1000 상한 멈춤과 음성 대조(`status` 이름 · 줄 끝 `#` 주석).
+시험은 블록을 그 안의 기준 줄(2단계
+`| while read -r run_id; do gh run cancel` · 3단계 `left=$((left + count))`)로
+찾으므로, 블록을 고치면(특히 기준 줄) 그 시험도 함께 맞춥니다.
+
+1.  두 워크플로를 먼저 끕니다(새 실행이 생기지 않게).
+
+    ```shell
+    gh workflow disable prod-images.yml
+    gh workflow disable prod-landing.yml
+    ```
+
+1.  끝나지 않은 실행을 모두 취소합니다. 끝나지 않은 상태(`queued` ·
+    `pending` · `waiting` · `requested` · `in_progress`)마다 따로 조회합니다.
+    조회는 상태마다 1000 개까지 받고, 그만큼 나오면 목록이 잘렸을 수 있으므로
+    취소하지 않고 멈춥니다.
+
+    ```shell
+    (
+      set -euo pipefail
+      limit=1000
+      for wf in prod-images.yml prod-landing.yml; do
+        for run_status in queued pending waiting requested in_progress; do
+          runs="$(gh run list --workflow "${wf}" --status "${run_status}" \
+            --limit "${limit}" --json databaseId)"
+          count="$(jq length <<<"${runs}")"
+          if ((count >= limit)); then
+            echo "멈춤: ${wf} ${run_status} ${count} 개 — 잘렸을 수 있음"
+            exit 1
+          fi
+          jq -r '.[].databaseId' <<<"${runs}" \
+            | while read -r run_id; do gh run cancel "${run_id}"; done
+        done
+      done
+    )
+    ```
+
+1.  같은 방식으로 다시 조회해 끝나지 않은 실행이 0 인지 확인한 뒤 다음으로
+    갑니다.
+
+    ```shell
+    (
+      set -euo pipefail
+      limit=1000
+      left=0
+      for wf in prod-images.yml prod-landing.yml; do
+        for run_status in queued pending waiting requested in_progress; do
+          runs="$(gh run list --workflow "${wf}" --status "${run_status}" \
+            --limit "${limit}" --json databaseId)"
+          count="$(jq length <<<"${runs}")"
+          if ((count >= limit)); then
+            echo "멈춤: ${wf} ${run_status} ${count} 개 — 잘렸을 수 있음"
+            exit 1
+          fi
+          left=$((left + count))
+        done
+      done
+      echo "끝나지 않은 실행 ${left} 개"
+    )
+    ```
+
+    마지막 줄이 「끝나지 않은 실행 0 개」 여야 합니다.
+
+### CI 거부 처분
+
+역할 받기가 거부되면(`AccessDenied` 등) 원인과 관계없이 — sub 오탈자처럼
+우리 오류가 분명해도 — 먼저 회수합니다. 워크플로는 재시도하지 않고 그 자리에서
+멈춥니다(`disable-retry`).
+
+1.  위 「CI 멈춤 절차」.
+1.  `prod/edge` 의 apex 업로드 정책 → `prod/registry` 의 역할 둘 순으로
+    destroy 합니다. 코드 경로는 develop revert PR 이고, 머지 뒤 apply 합니다.
+1.  environment 비밀 넷을 지웁니다.
+1.  원인을 고친 PR 을 머지하고 「CI 준비」 부터 다시 합니다. 끝나면
+    `gh workflow enable` 로 두 워크플로를 켭니다. 원인이 워크플로 파일이면
+    고친 파일이 main 에 들어가야 하므로 새 릴리스(v2.0.2) 갈래로 갑니다.
+
+공개 로그 · 요약 · 아티팩트에서 계정 ID 를 찾으면 `gh run delete <실행 id>` 로
+그 실행을 지우고(로그 · 요약 · 아티팩트가 함께 지워짐), 지워졌는지 다시 조회한
+뒤 원인을 고치기 전에는 다시 돌리지 않습니다.
 
 ## See also
 

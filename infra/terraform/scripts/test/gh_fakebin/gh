@@ -1,0 +1,70 @@
+#!/bin/bash
+#
+# prod_artifacts_runbook_test.sh 의 가짜 gh. 진짜 GitHub 에 닿지 않는다.
+#
+# `gh run list … --status <상태> --limit <상한> --json databaseId` 는
+# FAKE_GH_RUNS_<상태> 개(없으면 0 · 상한까지만)의 [{"databaseId":N},…] 를 내고,
+# `gh run cancel <id>` 는 받기만 한다. 둘 다 FAKE_GH_LOG 에 「list <상태>」 ·
+# 「cancel <id>」 한 줄을 적는다. 그 밖의 호출은 적고 실패한다(종료 99).
+
+set -uo pipefail
+
+#######################################
+# 받은 인자에서 옵션 하나의 값을 낸다(없으면 빈 글자).
+# Arguments:
+#   옵션 이름, 나머지 인자.
+#######################################
+option_value() {
+  local name="$1" prev='' arg
+  shift
+  for arg in "$@"; do
+    if [[ "${prev}" == "${name}" ]]; then
+      printf '%s' "${arg}"
+      return 0
+    fi
+    prev="${arg}"
+  done
+}
+
+#######################################
+# gh run list 의 가짜 응답을 낸다.
+# Arguments:
+#   gh 에 받은 인자 전부.
+#######################################
+fake_run_list() {
+  local run_status limit var count i
+  run_status="$(option_value --status "$@")"
+  limit="$(option_value --limit "$@")"
+  printf 'list %s\n' "${run_status}" >>"${FAKE_GH_LOG}"
+  var="FAKE_GH_RUNS_${run_status}"
+  count="${!var:-0}"
+  if ((count > ${limit:-20})); then
+    count="${limit:-20}"
+  fi
+  printf '['
+  for ((i = 1; i <= count; i++)); do
+    if ((i > 1)); then
+      printf ','
+    fi
+    printf '{"databaseId":%d}' "${i}"
+  done
+  printf ']\n'
+}
+
+main() {
+  case "${1-} ${2-}" in
+    'run list')
+      fake_run_list "$@"
+      ;;
+    'run cancel')
+      printf 'cancel %s\n' "${3-}" >>"${FAKE_GH_LOG}"
+      ;;
+    *)
+      printf 'unexpected %s\n' "$*" >>"${FAKE_GH_LOG}"
+      printf '%s\n' "fake gh: 이 시험이 쓰지 않는 호출 — $*" >&2
+      exit 99
+      ;;
+  esac
+}
+
+main "$@"
