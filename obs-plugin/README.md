@@ -21,14 +21,12 @@
 | Qt 폴백 | obs-browser가 없거나(일부 Linux·Wayland) 페이지가 붙지 않으면 최소 Qt 패널 — 기능은 같다 |
 | 자동 재연결 (A5) | 우리 SRT가 송출 중에 끊기거나 처음부터 붙지 못하면 플러그인이 정책 표(300초 안 5초 → 30초 → 60초, 65분에 포기)대로 다시 붙인다. 본방은 그대로다. 독에 「M초 뒤 다시 시도해요 · N번째」와 「다시 시도」·「재시도 중지」·「다시 연결」 — 아래 「자동 재연결」 |
 | 핫키 마킹 (A4) | 단축키(기본 Ctrl+Shift+M)·독 버튼으로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다(재시도·중복 방지 포함). 받는 서버 창구는 clip `POST /api/clip/marks`(POK-391). 단축키는 독 설정 탭 맨 위에서 바로 바꾼다(POK-494). macOS는 송출 중 시스템 전역 단축키로도 받아 OBS가 뒤에 있어도·보안 입력 중에도 된다(POK-496). 아래 「핫키 마킹」 |
-| 종료 신호 (A3·4D) | 스트리머가 본방을 끝내면(OBS 「방송 종료」·방송 중 OBS 닫기) 우리 SRT 출력이 실제로 멈춘 직후 Media에 `POST /api/ingest/end-signal`을 1회 보낸다 — Media가 그 회차를 바로 닫고 뒤 송출을 새 회차로 연다(보장 시간 300초를 기다리지 않는다). 오류·끊김·「재시도 중지」·포기·본방 자력 종료에는 보내지 않는다. **받는 Media 수신부는 아직 없다(1번 M6)** — 아래 「종료 신호」 |
+| 종료 신호 (A3·4D) | 스트리머가 본방을 끝내면(OBS 「방송 종료」·방송 중 OBS 닫기) 우리 SRT 출력이 실제로 멈춘 직후 Media에 `POST /api/ingest/end-signal`을 1회 보낸다 — Media가 그 회차를 바로 닫고 뒤 송출을 새 회차로 연다(보장 시간 300초를 기다리지 않는다). 오류·끊김·「재시도 중지」·포기·본방 자력 종료에는 보내지 않는다. 받는 쪽은 Media 수신부다(운영에서 `http 202` 확인, 2026-11-17) — 아래 「종료 신호」 |
 
-**아직 안 되는 것**: 종료 신호를 받는 Media 수신부(1번 M6: 플러그인 쪽만 있다), SRT RTT 통계(A6), OS가 믿는 코드 서명·macOS 공증(A7: 설치 파일은 있다, 공인 서명은 POK-360), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290: 지금은 OBS 소스 타입 6종류로만 가른다).
+**아직 안 되는 것**: SRT RTT 통계(A6), OS가 믿는 코드 서명·macOS 공증(A7: 설치 파일은 있다, 공인 서명은 POK-360), 오디오 소스를 앱 단위(디스코드·게임·크롬)로 가르기(POK-290: 지금은 OBS 소스 타입 6종류로만 가른다).
 
 **알려진 제약 (Windows 실기 2026-11-17, 0.2.1)** — 아래 「로컬 검증」의 Windows 실측.
 
-- 본방이 시작하자마자 실패하면(연결 거부·없는 호스트) 독이 「준비됐어요」로만 돌아가고 `main_stream_failed` 안내가 남지 않는다 — [POK-596](https://xodbs9810.atlassian.net/browse/POK-596)
-- 스트림 지연을 켠 본방을 「방송 중지 (지연된 분량 버림)」으로 끄면 종료 신호가 가지 않는다(`not sent on main_stop (not_intentional)`). 지연을 유지한 「방송 중단」은 보낸다 — [POK-597](https://xodbs9810.atlassian.net/browse/POK-597)
 - 스트림 지연을 켜면 우리 SRT는 지연 없이 바로 나가고 본방만 지연 시간 뒤에 나간다 — SRT가 본방보다 그만큼 앞선다(POK-597에서 같이 본다)
 - NVENC 인코더로는 아직 재 보지 않았다(시험 PC 드라이버가 낡아 x264로만 쟀다)
 
@@ -116,7 +114,7 @@ Chrome이 아티팩트를 「위험한 파일」로 막으면 `gh run download <
   전까지의 빌드가 이 값을 운영 수신으로 썼고, 지금 판은 옛 기본값으로 보고 올린다(「설정 파일」
   `ingest_host`). 포트 8890은 운영 수신 모듈 `srt_port`의 기본값이다.
 - `media-dev.pokeclip.com`은 팀 공인 IP에서만 받는다(ADR-040).
-- **종료 신호(A3·4D)는 이 짝 밖이다.** 기준 주소는 환경과 무관하게 운영 `https://media.pokeclip.com`이고 루프백만 덮어쓸 수 있다(「설정 파일」 `end_signal_base`, 규약 「개발 빌드만 루프백」). 그래서 개발 환경에서 방송을 끝내도 신호는 운영으로 가고(dev 키라 거절된다) dev 수신부에는 닿지 않는다. 받는 수신부가 아직 없어(1번 M6) 지금은 영향이 없다 — 개발 환경에서 보내지 않을지, dev 기준 주소를 둘지는 M6 때 정한다.
+- **종료 신호(A3·4D)는 이 짝 밖이다.** 기준 주소는 환경과 무관하게 운영 `https://media.pokeclip.com`이고 루프백만 덮어쓸 수 있다(「설정 파일」 `end_signal_base`, 규약 「개발 빌드만 루프백」). 그래서 개발 환경에서 방송을 끝내도 신호는 운영으로 가고(dev 키라 거절된다) dev 수신부에는 닿지 않는다. 개발 환경에서 보내지 않을지, dev 기준 주소를 둘지는 아직 정하지 않았다.
 
 ### 3. macOS 개발 빌드 — Xcode 없이 (OBS.app 링크)
 
@@ -297,23 +295,24 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 
 ## 종료 신호 (A3·계약4 4D)
 
-스트리머가 우리 SRT 송출을 **멈추는 조작**을 하면, 우리 출력이 실제로 멈춘 직후(출력의 `stop` 신호) Media에 `POST /api/ingest/end-signal`을 1회 보낸다. Media는 그 회차(계약9)를 멈춘 순간에 끝내고 뒤 송출을 새 회차로 시작한다 — 연결 끊김 보장 시간 300초를 기다리지 않는다. 신호가 없으면 방송을 끝내고 300초 안에 같은 키로 다시 켠 방송이 앞 회차에 합쳐진다(VOD·클립 회차가 섞인다). 규격 정본은 위키 계약4 3절(2026-09-26 발행, POK-249). **받는 쪽(Media 수신부)은 1번 M6에서 만든다** — 지금은 수신부가 없어 운영 주소로는 연결 실패(3회 뒤 포기)나 404(1회)로 끝나며 해는 없다.
+스트리머가 우리 SRT 송출을 **멈추는 조작**을 하면, 우리 출력이 실제로 멈춘 직후(출력의 `stop` 신호) Media에 `POST /api/ingest/end-signal`을 1회 보낸다. Media는 그 회차(계약9)를 멈춘 순간에 끝내고 뒤 송출을 새 회차로 시작한다 — 연결 끊김 보장 시간 300초를 기다리지 않는다. 신호가 없으면 방송을 끝내고 300초 안에 같은 키로 다시 켠 방송이 앞 회차에 합쳐진다(VOD·클립 회차가 섞인다). 규격 정본은 위키 계약4 3절(2026-09-26 발행, POK-249). 받는 쪽은 Media 수신부(`media/cmd/segment-indexer`)다 — 연결이 4초보다 짧았던 송출의 신호는 받고도(`202`) 적용하지 않는다(`short_conn`).
 
-**보내는 때 / 보내지 않는 때** — 판정은 `StreamTarget::DecideEndSignal`(한 방송 구간에 한 번), 규칙은 `src/end-signal-policy.hpp`.
+**보내는 때 / 보내지 않는 때** — 판정은 `StreamTarget::DecideEndSignal`(한 방송 구간에 한 번), 규칙은 `src/end-signal-policy.hpp`. 본방 정지 이벤트가 조작인지·시작 실패인지·중복인지는 `src/main-stream-policy.hpp`가 가르고, 본방 `STREAMING_STOPPED`마다 로그 `main stream stopped (code …, stop requested: …, srt output: …) — intentional | not_intentional | failed_to_start | duplicate`가 남는다.
 
 | 상황 | 신호 | 로그 trigger |
 |---|---|---|
 | OBS 「방송 종료」(`STREAMING_STOPPING` → `STOPPED`) | 보낸다 | `main_stop` |
+| 스트림 지연 중 「방송 중지 (지연된 분량 버림)」 | 보낸다 — 이때 OBS가 `STOPPED`를 두 번 보낸다(libobs 32.2.1 소스 기준, 실측 확인 전 — 강제 정지가 지연 버퍼를 비우며 한 번, 이어 멈춘 RTMP 출력이 한 번). 한 방송의 두 번째 `STOPPED`는 무시한다 — 처리하면 앞의 조작 판정을 덮어 신호가 빠졌다(POK-597) | `main_stop` · 로그 `— duplicate` |
 | 자동 재연결 중에 「방송 종료」 | 보낸다 — 마지막 연결은 끊긴 그 연결 | `main_stop` |
 | 방송 중 OBS 닫기 | 보낸다(보낼 수 있을 때만 — 언로드가 진행 중 전송을 끊는다) | `obs_exit` |
 | 「방송 종료」 뒤 우리 출력이 다 멈추기 전에 본방을 다시 켬 | 보낸다 — 새 구간을 시작하기 전에 앞 구간 몫을 정한다(멈춘 순간은 그 시각으로 어림). 안 그러면 새 출력이 앞 출력의 신호를 끊어 판정이 사라진다 | `restart_before_stop` |
 | 정지가 접속 중에 들어왔는데 접속이 성공함 | 붙은 것으로 세고 곧바로 멈춘다 — 보낸다(지속 시간 ≈ 0) | `main_stop` |
-| 본방이 스스로 끊겨 끝남(`STOPPING` 없이 `STOPPED`) | 안 보낸다(`not_intentional`) | `main_stop` |
+| 시작한 본방이 스스로 끊겨 끝남(`STARTED` 뒤 `STOPPING` 없이 `STOPPED`) | 안 보낸다(`not_intentional`) | `main_stop` |
 | 오류 코드로 멈춤(다시 해도 같은 오류) | 안 보낸다 | `output_error` |
 | 독 「재시도 중지」 | 그때는 안 보낸다 — 본방은 살아 있고 마지막 연결은 이미 끊겼다(보내면 키를 고쳐 다시 붙는 송출이 새 회차가 돼 되감기를 잃는다). 구간은 열어 두고, 뒤에 「방송 종료」·OBS 닫기가 오면 그때 마지막 연결(끊긴 그 연결) 기준으로 보낸다. 「다시 연결」로 새 구간을 시작하면 잊는다 | 로그 `deferred on stop_retry` → 뒤의 `main_stop`·`obs_exit` |
 | 공유 인코더 실패로 libobs가 두 출력을 강제로 멈춤(본방 `STOPPING`이 나도) | 안 보낸다 — 우리 출력이 있으면 그 `stopping`이 UI 스레드 밖(인코더 스레드)에서 난 것으로, 없으면(재시도 대기·「재시도 중지」 뒤) 판정을 `STOPPED`로 미뤄 본방 stop 코드(`ENCODE_ERROR`)로 가른다 | `internal_stop` · 로그 `intent deferred to main STOPPED` |
 | 65분 포기 · 재시도 시작 실패 | 안 보낸다 | `gave_up` · `retry_start_failed` |
-| 본방 시작 실패로 같이 멈춤 | 안 보낸다 | `stopped_with_reason` |
+| 본방 시작 실패로 같이 멈춤 — OBS가 시작을 그 자리에서 거절했거나, 본방이 한 번도 접속하지 못하고 끝남(연결 거부·없는 호스트: `STARTED` 없이 오류 코드로 `STOPPED`, POK-596). 독에 `main_stream_failed`가 남는다 | 안 보낸다 | `stopped_with_reason` |
 | 그 송출에서 연결이 한 번도 성립하지 않음 | 안 보낸다(`never_connected`) | — |
 
 스트리머 조작인지는 우리 출력의 `stop` 코드가 아니라 **본방 정지 이벤트로 가른다** — `OBS_FRONTEND_EVENT_STREAMING_STOPPING`은 `obs_output_stop` 안에서만 동기로 오고(버튼·websocket), 본방이 스스로 끊기면(재연결 소진) `STOPPED`만 온다(2026-10-08 실측). 본방이 재연결 중일 때 「방송 종료」를 눌러도 `obs_output_force_stop`이 `stopping`을 내므로 `STOPPING`이 온다(libobs 32.2.1 `obs-output.c` 대조). A5가 libobs 재연결을 꺼서 끊길 때마다 우리 출력의 `stop`(−5)이 나므로 코드로는 가를 수 없다. 예외가 하나 있다 — 공유 인코더가 실패하면 libobs `full_stop`이 **인코더 스레드에서** 본방·우리 출력을 `obs_output_force_stop`(stop_code 0)하고, 본방의 그 `stopping`으로 `STREAMING_STOPPING`까지 난다. 우리가 부르는 정지는 모두 UI 스레드에서 나므로, 우리 출력의 `stopping`이 다른 스레드에서 났으면(`stopInternal_`) 조작으로 보지 않는다. 이 신호는 큐에 넣는 STOPPING·HandleStop보다 먼저 돌아 순서가 보장된다. 우리 출력이 없는 동안(재시도 대기·「재시도 중지」 뒤)에 STOPPING이 오면 가를 수단이 없어 판정을 `STREAMING_STOPPED`로 미루고, 그때 본방 출력의 stop 코드(`OnMainOutputStop`이 받아 둔다)가 0이면 조작, `ENCODE_ERROR`면 오류로 본다. 본방 출력의 `stopping` 스레드로 가르지 않는 이유는 「방송 강제 종료」 단축키가 핫키 스레드에서 직접 `force_stop`을 불러 조작인데도 UI 스레드 밖에서 나기 때문이다(OBS 32.2.1 `OBSBasic_Hotkeys.cpp`).
@@ -407,7 +406,7 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 - 틀린 passphrase 수신부: `connect_failed` 약 30ms × 3회 → 키 확인 안내, 「재시도 중지」 뒤에도 남음 → 「다시 연결」로 붙음(`send-now`)
 - 재시도 중 접속 구간에 본방 정지 → 독 「준비됐어요」 · 종료 신호 202. 접속 중 OBS 종료 → 2.4초 만에 종료, 메모리 누수 0
 - 스트림 지연 20초 · 끄고 바로 다시 켜기 · 장면 컬렉션 이름 바꾼 뒤 자동 배정 끄기(원래 트랙 체크 복원) · 오디오 안내 카드 「나중에」 · Qt 폴백(`force_fallback`) 패널의 재시도 줄과 버튼 — 기대대로
-- 실패 2건은 위 「알려진 제약」(POK-596 · POK-597)
+- 실패 2건 — 본방 시작 실패 안내(POK-596)·지연 중 「지연된 분량 버림」의 종료 신호(POK-597) — 은 그 뒤 고쳤다(Windows 재실측 전, 위 「종료 신호」 표)
 
 ## 문제 해결 (독 사유 코드)
 
@@ -421,7 +420,7 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 | `timeout` | 우리 URL로는 거의 나오지 않는다 — 무응답은 `connect_failed`로 온다 |
 | `disconnected` · `output_error` | 송출 중 끊김 — 자동으로 다시 붙는다(「자동 재연결」). 65분 동안 못 붙으면 멈추고 독에 「다시 연결」이 뜬다 |
 | `main_not_live` · `send_unavailable` · `not_retrying` | 「다시 연결」·「재시도 중지」를 누르는 사이 상태가 바뀌었다(본방이 끝남 · 이미 붙음 · 재시도 중이 아님) |
-| `main_stream_failed` | 본방 출력이 뜨지 않아 같이 멈춤 |
+| `main_stream_failed` | 본방이 시작되지 않아 같이 멈춤 — OBS가 시작을 그 자리에서 거절했거나, 한 번도 접속하지 못하고 끝났다(연결 거부·없는 호스트). OBS의 「연결 실패」 창과 설정 › 방송의 서버·스트림 키를 본다 |
 | `output_no_multitrack` | 이 OBS의 MPEG-TS 출력이 다중 오디오 트랙을 받지 않는다 — OBS 버전 확인(32.x 기준) |
 | `audio_encoder_failed` | AAC 인코더를 만들지 못함 — OBS 로그의 인코더 id 확인 (`ffmpeg_aac`가 기본 대체) |
 | `audio_track_attach_failed` | 6트랙 중 일부가 출력에 안 붙음 — 반쯤 붙은 채 보내지 않고 시작을 멈춘다 |
