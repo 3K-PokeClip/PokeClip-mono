@@ -9,8 +9,9 @@ namespace pokeclip {
 inline constexpr int kMainStopSuccess = 0;
 
 struct MainStreamRun {
-	// STREAMING_STARTED를 봤다 — 본방이 실제로 접속했다(본방 출력의 start 신호). 스트림 지연을 켜면 지연 시간 뒤에
-	// 온다(지연을 기다리는 동안은 StreamDelayStarting뿐이다).
+	// 본방이 실제로 접속했다 — STREAMING_STARTED(본방 출력의 start 신호)를 봤거나, 첫 접속이 libobs 재연결로 성공해
+	// start 대신 reconnect_success가 났다(plugin-main이 STOPPED 때 합친다). 스트림 지연을 켜면 STARTED는 지연 시간
+	// 뒤에 온다(지연을 기다리는 동안은 StreamDelayStarting뿐이다).
 	bool started = false;
 	// STREAMING_STOPPING을 봤다 — obs_output_stop·force_stop 안에서만 온다(OBS 「방송 종료」 버튼·단축키·websocket).
 	// 본방이 스스로 끊겨 끝나면 STOPPING 없이 STOPPED만 온다.

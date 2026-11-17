@@ -499,28 +499,44 @@ void OnMainOutputStarting(void *, calldata_t *)
 std::atomic<int> g_mainStopCode{0};
 obs_output_t *g_mainOutputWatched = nullptr; // UI 스레드 — 우리가 쥔 참조. 본방이 멈추거나 OBS가 닫히면 놓는다
 
+// 본방 출력이 재연결로 붙었다. 첫 접속이 libobs 재연결 경로로 성공하면 start 대신 reconnect_success만 나와
+// STREAMING_STARTED가 오지 않는다 — 첫 접속에서 메타데이터 전송이 실패하면 rtmp 출력이 begin_data_capture 전에
+// DISCONNECTED를 내고, 재연결이 켜져 있으면 stop 없이 다시 붙는다(rtmp-stream.c init_send · obs-output.c
+// obs_output_begin_data_capture, 32.2.1). 그 방송도 실제로 나갔다 — STOPPED 때 started에 합친다.
+std::atomic<bool> g_mainReconnected{false};
+
 void OnMainOutputStop(void *, calldata_t *params)
 {
 	g_mainStopCode = (int)calldata_int(params, "code");
 }
 
-void UnwatchMainOutputStop()
+void OnMainOutputReconnectSuccess(void *, calldata_t *)
+{
+	g_mainReconnected = true;
+}
+
+void UnwatchMainOutput()
 {
 	if (!g_mainOutputWatched)
 		return;
-	signal_handler_disconnect(obs_output_get_signal_handler(g_mainOutputWatched), "stop", OnMainOutputStop, nullptr);
+	signal_handler_t *sh = obs_output_get_signal_handler(g_mainOutputWatched);
+	signal_handler_disconnect(sh, "stop", OnMainOutputStop, nullptr);
+	signal_handler_disconnect(sh, "reconnect_success", OnMainOutputReconnectSuccess, nullptr);
 	obs_output_release(g_mainOutputWatched);
 	g_mainOutputWatched = nullptr;
 }
 
-void WatchMainOutputStop(obs_output_t *mainOutput)
+void WatchMainOutput(obs_output_t *mainOutput)
 {
-	UnwatchMainOutputStop();
+	UnwatchMainOutput();
 	g_mainOutputWatched = obs_output_get_ref(mainOutput);
 	if (!g_mainOutputWatched)
 		return;
 	g_mainStopCode = 0;
-	signal_handler_connect(obs_output_get_signal_handler(g_mainOutputWatched), "stop", OnMainOutputStop, nullptr);
+	g_mainReconnected = false;
+	signal_handler_t *sh = obs_output_get_signal_handler(g_mainOutputWatched);
+	signal_handler_connect(sh, "stop", OnMainOutputStop, nullptr);
+	signal_handler_connect(sh, "reconnect_success", OnMainOutputReconnectSuccess, nullptr);
 }
 
 // 본방 시작이 그 자리에서 실패하면(OBSBasic::StartStreaming → DisplayStreamStartError) OBS는 STREAMING_STOPPED를
@@ -537,7 +553,7 @@ void WatchMainStreamStart()
 	signal_handler_t *sh = obs_output_get_signal_handler(mainOutput);
 	g_mainStartAccepted = false;
 	signal_handler_connect(sh, "starting", OnMainOutputStarting, nullptr);
-	WatchMainOutputStop(mainOutput); // 이 방송의 본방 stop 코드를 받아 둔다(종료 신호 판정)
+	WatchMainOutput(mainOutput); // 이 방송의 본방 stop 코드·재연결 접속을 받아 둔다(종료 신호·시작 실패 판정)
 
 	auto *main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	QTimer::singleShot(0, main, [mainOutput, sh]() {
@@ -587,6 +603,8 @@ void OnStreamingStopped()
 {
 	const bool hasOutput = StreamTarget::Instance().HasOutput();
 	const int code = g_mainStopCode;
+	if (g_mainReconnected)
+		g_mainRun.started = true; // 첫 접속이 재연결로 성공한 본방 — STARTED 없이도 접속했다
 	const bool stopRequested = g_mainRun.stopRequested;
 	const MainStopKind kind = HandleMainStopped(g_mainRun, code, hasOutput);
 	obs_log(LOG_INFO, "main stream stopped (code %d, stop requested: %s, srt output: %s) — %s", code,
@@ -606,7 +624,7 @@ void OnStreamingStopped()
 		// 인코더 실패(ENCODE_ERROR)면 조작이 아니다.
 		StreamTarget::Instance().Stop(nullptr, kind == MainStopKind::Intentional);
 	}
-	UnwatchMainOutputStop();
+	UnwatchMainOutput();
 	AudioRouter::Instance().Schedule("stream stopped");
 }
 
@@ -710,7 +728,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		// 방송 중 OBS 닫기 — 스트리머 조작이므로 종료 신호를 보낸다(보낼 수 있을 때만). 송신기는 여기서 멈추지 않는다 —
 		// 언로드까지 남은 시간에 한 번 시도하고, obs_module_unload가 진행 중인 전송을 끊는다(남은 시도는 버린다).
 		StreamTarget::Instance().ForceStop(/*intentional=*/true);
-		UnwatchMainOutputStop();
+		UnwatchMainOutput();
 		if (g_statsTimer)
 			g_statsTimer->stop();
 		if (g_dock)
