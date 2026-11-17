@@ -196,6 +196,15 @@ override_data {
   }
 }
 
+override_data {
+  target = data.terraform_remote_state.registry
+  values = {
+    outputs = {
+      apex_upload_role_name = "pokeclip-prod-ci-apex-upload"
+    }
+  }
+}
+
 # --- 출력(설계 3-2 · records 계약) ---
 
 run "outputs_carry_module_values" {
@@ -819,4 +828,92 @@ run "edge_alarm_topic_is_private_and_cloudwatch_only_publishes" {
     )
     error_message = "CloudWatch 발행 문장이 이 루트의 경보 셋(aws:SourceArn) · 이 계정(aws:SourceAccount)으로 좁혀져 있지 않다."
   }
+}
+
+# --- apex 업로드 정책(prod CI B12) ---
+
+# 역할(신원)은 prod/registry 가, apex 권한은 이 루트가 갖는다. 정책은
+# registry 출력 apex_upload_role_name 의 역할에 붙는다.
+run "apex_upload_policy_attaches_to_registry_role" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_iam_role_policy.apex_upload.role == data.terraform_remote_state.registry.outputs.apex_upload_role_name &&
+      aws_iam_role_policy.apex_upload.role == "pokeclip-prod-ci-apex-upload" &&
+      aws_iam_role_policy.apex_upload.name == "pokeclip-prod-ci-apex-upload"
+    )
+    error_message = "apex 업로드 정책이 registry 출력 apex_upload_role_name 의 역할에 붙어 있지 않다."
+  }
+}
+
+# 업로드는 목록 · 올리기 · 무효화뿐이다 — 버킷은 apex 버킷 하나, 배포는
+# apex 배포 하나(override 한 값)다. sync 에 --delete 를 쓰지 않으므로 지우기
+# 동작이 없다.
+run "apex_upload_policy_uploads_landing_without_delete" {
+  command = plan
+
+  assert {
+    condition = [
+      for statement in jsondecode(aws_iam_role_policy.apex_upload.policy).Statement :
+      [statement.Effect, flatten([statement.Action]), flatten([statement.Resource])]
+      ] == [
+      ["Allow", ["s3:ListBucket"], ["arn:aws:s3:::pokeclip-prod-apex-example"]],
+      ["Allow", ["s3:PutObject"], ["arn:aws:s3:::pokeclip-prod-apex-example/*"]],
+      [
+        "Allow",
+        ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"],
+        ["arn:aws:cloudfront::111122223333:distribution/E0APEXEXAMPLE"],
+      ],
+    ]
+    error_message = "apex 업로드 정책이 버킷 목록(ListBucket) · 객체 올리기(PutObject /*) · apex 배포 무효화(Create · GetInvalidation) 세 문이 아니다."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for statement in jsondecode(aws_iam_role_policy.apex_upload.policy).Statement : [
+        for action in flatten([statement.Action]) :
+        !can(regex("(?i)delete|acl|\\*", action))
+      ]
+    ]))
+    error_message = "apex 업로드 정책에 삭제(DeleteObject 등) · ACL · 와일드카드 동작이 있다."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.apex_upload.policy).Statement :
+      length(keys(statement)) == length(setintersection(keys(statement), ["Sid", "Effect", "Action", "Resource"]))
+    ])
+    error_message = "apex 업로드 정책 문에 Sid · Effect · Action · Resource 밖의 키(NotAction · Condition 등)가 있다."
+  }
+}
+
+# registry 를 CI 역할 판으로 apply 하기 전이면 출력이 없어 멈춘다.
+run "rejects_missing_registry_apex_upload_role_name" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.registry
+    values = {
+      outputs = {}
+    }
+  }
+
+  expect_failures = [terraform_data.remote_contract]
+}
+
+# 다른 역할(CI 푸시 역할 등)에 apex 권한이 붙지 않게 한다.
+run "rejects_registry_role_name_not_apex_upload" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.registry
+    values = {
+      outputs = {
+        apex_upload_role_name = "pokeclip-prod-ci-ecr-push"
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.remote_contract]
 }
