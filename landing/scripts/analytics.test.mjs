@@ -20,7 +20,7 @@ function loadConfig(hostname = 'pokeclip.com') {
 }
 
 // 주소(search·hash)까지 정해 페이지를 연다. SDK가 받은 capture 호출과 주소창을 고친 값도 돌려준다
-function loadPage({ hostname = 'pokeclip.com', pathname = '/', search = '', hash = '' } = {}) {
+function loadPage({ hostname = 'pokeclip.com', pathname = '/', search = '', hash = '', source = SOURCE } = {}) {
   const scripts = [];
   const captures = [];
   const replaced = [];
@@ -46,7 +46,7 @@ function loadPage({ hostname = 'pokeclip.com', pathname = '/', search = '', hash
       addEventListener: () => {},
     },
   };
-  vm.runInNewContext(SOURCE, context);
+  vm.runInNewContext(source, context);
   if (scripts.length === 0) return null;
   scripts[0].onload();
   return { config, captures, replaced };
@@ -146,8 +146,15 @@ test('꼴이 다른 값(이름·이메일·대문자·길이·앞뒤 덧붙임)�
     assert.deepEqual(page.captures, [], value);
     assert.deepEqual(page.replaced, [`/?${MAIL_TAGS}`], value);
   }
-  // 꼴이 맞아도 메일 캠페인 꼬리표가 없거나 다르면 보내지 않는다 — 8글자 아이디(gamerkim)를 r에 넣은 링크가 섞이지 않게
-  for (const search of ['?r=gamerkim', '?utm_source=email&r=k3f7x2ab', '?utm_campaign=launch_2026_10&r=k3f7x2ab']) {
+  // 꼴이 맞아도 메일 링크 꼬리표(utm_source=email + 허용 목록의 utm_campaign)가 없으면 보내지 않는다
+  // — 8글자 아이디(gamerkim)를 r에 넣은 링크가 섞이지 않게
+  const notMail = [
+    '?r=gamerkim',
+    '?utm_source=email&r=k3f7x2ab',
+    '?utm_source=chzzk&utm_campaign=2026_11_streamer_outreach&r=k3f7x2ab',
+    '?utm_source=email&utm_campaign=2026_12_streamer_outreach&r=k3f7x2ab',
+  ];
+  for (const search of notMail) {
     const page = loadPage({ search });
     assert.deepEqual(page.captures, [], search);
     assert.equal(page.replaced.length, 1, search);
@@ -189,4 +196,12 @@ test('대시보드 「이용 분석 참여」를 끈 선택(.pokeclip.com 쿠키
 
 test('null 이벤트는 null로 돌려준다', () => {
   assert.equal(loadBeforeSend()(null), null);
+});
+
+test('새 메일 캠페인은 UTM 허용 목록에 더하기만 하면 수신 코드도 읽는다', () => {
+  const search = '?utm_source=email&utm_medium=dm&utm_campaign=2026_12_streamer_outreach&utm_content=draft_a&r=k3f7x2ab';
+  const source = SOURCE.replace('|2026_11_streamer_outreach)$/', '|2026_11_streamer_outreach|2026_12_streamer_outreach)$/');
+  assert.notEqual(source, SOURCE, '허용 목록의 캠페인 줄을 찾지 못함');
+  assert.deepEqual(loadPage({ search }).captures, []); // 지금 목록에는 없다
+  assert.deepEqual(loadPage({ search, source }).captures, [['outreach_link_opened', { outreach_code: 'k3f7x2ab' }]]);
 });

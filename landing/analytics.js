@@ -15,31 +15,6 @@
   if (!KEY) return;
   if (location.hostname !== 'pokeclip.com' && location.hostname !== 'www.pokeclip.com') return;
 
-  // 안내 메일 링크의 수신 코드(?r=) — README 「메일 수신 코드」, 처리방침 2절.
-  // 보내는 쪽 도구가 만든 8글자(영문 소문자와 2~7)이고 이름·이메일이 아니다. 이 꼴이 아니면 버린다 — 주소에 든 다른 값이
-  // 실려 나가지 않게 한다. 꼴만 보면 8글자 아이디(gamerkim 등)도 통과하므로, 메일 캠페인 꼬리표가 함께 있을 때만 읽는다.
-  // 아래 before_send가 주소의 쿼리를 떼므로 여기서 따로 읽어 둔다.
-  // 읽은 뒤에는 주소창에서 지운다 — 주소를 복사해 남에게 건네도 그 방문이 같은 코드로 적히지 않는다(utm_* 는 그대로 둔다)
-  var OUTREACH_CODE = /^[a-z2-7]{8}$/;
-  // 수신 코드를 붙이는 메일 캠페인(utm_campaign). 새 메일 캠페인은 README 표·두 허용 목록과 함께 여기에도 더한다
-  var OUTREACH_CAMPAIGNS = /^(2026_11_streamer_outreach)$/;
-  var outreachCode = null;
-  try {
-    var params = new URLSearchParams(location.search);
-    var given = params.get('r');
-    if (given !== null) {
-      var campaign = params.get('utm_campaign');
-      if (OUTREACH_CODE.test(given) && campaign !== null && OUTREACH_CAMPAIGNS.test(campaign)) outreachCode = given;
-      params.delete('r');
-      var rest = params.toString();
-      if (typeof history !== 'undefined' && history.replaceState) {
-        history.replaceState(history.state, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
-      }
-    }
-  } catch (e) {
-    // 주소를 읽지 못하면 코드 없이 간다
-  }
-
   // 주소의 쿼리·해시를 뗀다 — 홍보 링크의 utm_* 는 SDK가 먼저 따로 뽑아 두므로 남는다.
   // 우리 주소가 아닌 곳(유입 경로)은 origin만 남긴다 — 방송 채널·영상 주소는 경로에 채널 ID·영상 ID가 실린다(처리방침 13절)
   function scrubUrl(value) {
@@ -64,6 +39,33 @@
     utm_campaign: /^(launch_2026_10|2026_11_streamer_outreach)$/,
     utm_content: /^(pinned_comment|banner|draft_a|draft_b|draft_c)$/,
   };
+
+  // 안내 메일 링크의 수신 코드(?r=) — README 「메일 수신 코드」, 처리방침 2절.
+  // 보내는 쪽 도구가 만든 8글자(영문 소문자와 2~7)이고 이름·이메일이 아니다. 이 꼴이 아니면 버린다 — 주소에 든 다른 값이
+  // 실려 나가지 않게 한다. 꼴만 보면 8글자 아이디(gamerkim 등)도 통과하므로, 메일 링크 꼬리표(utm_source=email, 위 허용
+  // 목록에 있는 utm_campaign)가 함께 있을 때만 읽는다 — 새 메일 캠페인은 허용 목록에 더하면 여기는 고치지 않아도 된다.
+  // 아래 before_send가 주소의 쿼리를 떼므로 여기서 따로 읽어 둔다. SDK를 붙이기(맨 아래) 전에 읽고 지운다.
+  // 읽은 뒤에는 주소창에서 지운다 — 주소를 복사해 남에게 건네도 그 방문이 같은 코드로 적히지 않는다(utm_* 는 그대로 둔다)
+  var OUTREACH_CODE = /^[a-z2-7]{8}$/;
+  var outreachCode = null;
+  try {
+    var params = new URLSearchParams(location.search);
+    var given = params.get('r');
+    if (given !== null) {
+      var campaign = params.get('utm_campaign');
+      var fromMail =
+        params.get('utm_source') === 'email' && campaign !== null && UTM_ALLOWED.utm_campaign.test(campaign);
+      if (fromMail && OUTREACH_CODE.test(given)) outreachCode = given;
+      params.delete('r');
+      var rest = params.toString();
+      if (typeof history !== 'undefined' && history.replaceState) {
+        history.replaceState(history.state, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+      }
+    }
+  } catch (e) {
+    // 주소를 읽지 못하면 코드 없이 간다
+  }
+
   // 접두 없음(그 페이지)·$initial_(처음 방문)·$session_entry_(그 세션 첫 진입 — SDK가 모든 이벤트에 싣는다) 셋 다 본다.
   // $fbc·$fbp는 SDK가 fbclid·Meta 쿠키로 만드는 식별자다(PR #382 3차 리뷰)
   var UTM_KEY = /^(?:\$initial_|\$session_entry_)?(utm_[a-z]+)$/;
