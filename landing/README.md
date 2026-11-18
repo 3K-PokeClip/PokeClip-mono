@@ -204,7 +204,7 @@ https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_stream
 | 기능 이용 | `broadcast_playback_started`(`mode`), `highlight_marked`·`highlight_card_seeked`, `clip_download_requested`, `pending_feature_clicked`(`feature`별 — 준비 중 기능 수요), `setup_step_clicked`(`step`별) |
 | 주간 재방문 | 시작 `login_completed`(사람별 첫 번째만 — first time), 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
 | 출시 대시보드 | 위 화면들 + `onboarding_tour_started`(`entry`) → `onboarding_tour_finished` 결과 분포 + `platform_unlinked`·`editor_invited`·`editor_delegation_ended`(`initiator`) 추이 |
-| 안내 메일 반응 | 메일을 연 사람(`outreach_email_opened`)·링크를 누른 사람(`outreach_link_opened`)·메일에서 온 방문자(`$pageview`, `utm_campaign` = `2026_11_streamer_outreach`) 수와 날짜별 추이, 시안별 비교(`outreach_draft`·`utm_content`), 메일 방문 → `landing_cta_clicked` → `login_completed` 퍼널(사람 기준·순서대로·전환 기간 14일), 수신 코드별 표(처음 연 시각·처음 누른 시각). 사람 수는 고유 수로 세고 시험 코드 `testtest`는 뺀다. **발송 수는 PostHog에 없다** — 열람률·클릭률의 분모는 발송 명단 시트로 본다. 열람은 참고 값이다(「메일 수신 코드」) |
+| 안내 메일 반응 | 메일을 연 사람(`outreach_email_opened`)·링크를 누른 사람(`outreach_link_opened`)·메일에서 온 방문자(`$pageview`, `utm_campaign`이 `<yyyy>_<mm>_streamer_outreach` 꼴 — 새 달 메일도 저절로 들어간다) 수와 날짜별 추이, 시안별 비교(`outreach_draft`·`utm_content`), 메일 방문 → `landing_cta_clicked` → `login_completed` 퍼널(사람 기준·순서대로·전환 기간 14일), 수신 코드별 표(처음 연 시각·처음 누른 시각). 사람 수는 고유 수로 세고 시험 코드 `testtest`는 뺀다. **발송 수는 PostHog에 없다** — 열람률·클릭률의 분모는 발송 명단 시트로 본다. 열람은 참고 값이다(「메일 수신 코드」) |
 
 대시보드 설명에 그대로 적어 둡니다.
 
