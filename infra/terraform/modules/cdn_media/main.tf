@@ -23,10 +23,13 @@ locals {
   # 캐시 정책의 최대 TTL 은 원본 Cache-Control 에도 상한이라 두 TTL 을 한
   # 비헤이비어로 만족할 수 없다(설계 4-4).
   #
-  # compress — 재생 목록(.m3u8)을 내는 동작만 켠다(HLS 저작 규격 10.1: 목록은
-  # gzip). 그 동작의 캐시 정책도 gzip · brotli 를 허용해야 CloudFront 가
-  # 압축한다. /dvr · /vod 는 조각과 목록이 한 동작이라 조각 캐시도 인코딩마다
-  # 갈리지만, 조각 유형은 압축 대상이 아니라 바이트는 같다.
+  # compress — 되감기 · VOD 목록 동작(/dvr/*.m3u8 · /vod/*.m3u8)만 켜고, 그
+  # 캐시 정책(dvr_vod_playlist)은 gzip 만 허용한다(HLS 저작 규격 10.1: 목록은
+  # gzip). 목록을 조각 동작과 떼어 조각 캐시 키는 인코딩마다 갈리지 않는다.
+  # CloudFront 는 1,000바이트 미만이거나 Content-Length 가 없는 응답은
+  # 압축하지 않는다. /live/*.m3u8 은 원본(MediaMTX)이 2KB 넘는 목록을 길이
+  # 없이(chunked) 보내 이 동작으로는 압축되지 않으므로 끄고, 원본 압축
+  # (nginx)은 후속이다.
   ordered_behaviors = [
     {
       path_pattern               = "/api/ingest/*"
@@ -41,7 +44,7 @@ locals {
     },
     {
       path_pattern               = "/live/*.m3u8"
-      compress                   = true
+      compress                   = false
       origin_id                  = local.media_alb_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
@@ -62,10 +65,22 @@ locals {
       response_headers_policy_id = aws_cloudfront_response_headers_policy.media_cors.id
     },
     # 버킷에는 Authorization 을 넘기지 않는다(OAC 서명과 충돌) — 원본 요청
-    # 정책 없음.
+    # 정책 없음. 목록 동작은 짝(조각 동작) 바로 앞에 두고 원본 · 키 그룹 ·
+    # 함수 · 응답 헤더 정책을 짝과 같게 둔다 — 캐시 정책과 compress 만 다르다.
+    {
+      path_pattern               = "/dvr/*.m3u8"
+      compress                   = true
+      origin_id                  = local.rewind_origin_id
+      allowed_methods            = local.read_methods
+      trusted_key_groups         = local.key_group_ids
+      functions                  = local.dvr_floor_events
+      cache_policy_id            = aws_cloudfront_cache_policy.dvr_vod_playlist.id
+      origin_request_policy_id   = null
+      response_headers_policy_id = aws_cloudfront_response_headers_policy.media_cors.id
+    },
     {
       path_pattern               = "/dvr/*"
-      compress                   = true
+      compress                   = false
       origin_id                  = local.rewind_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
@@ -75,8 +90,19 @@ locals {
       response_headers_policy_id = aws_cloudfront_response_headers_policy.media_cors.id
     },
     {
-      path_pattern               = "/vod/*"
+      path_pattern               = "/vod/*.m3u8"
       compress                   = true
+      origin_id                  = local.rewind_origin_id
+      allowed_methods            = local.read_methods
+      trusted_key_groups         = local.key_group_ids
+      functions                  = {}
+      cache_policy_id            = aws_cloudfront_cache_policy.dvr_vod_playlist.id
+      origin_request_policy_id   = null
+      response_headers_policy_id = aws_cloudfront_response_headers_policy.media_cors.id
+    },
+    {
+      path_pattern               = "/vod/*"
+      compress                   = false
       origin_id                  = local.rewind_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids

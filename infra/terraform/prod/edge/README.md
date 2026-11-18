@@ -26,11 +26,11 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
 *   **media 배포**(`modules/cdn_media`): `media.pokeclip.com` 별칭, KVS 그릇 ·
     함수 셋(live-auth · deny-default · /dvr 하한 dvr-floor) · 키 그룹 · VPC
     origin(내부 ALB) · rewind 버킷 오리진(OAC)을 포함합니다. dvr-floor 는
-    스위치가 켜졌을 때만 `/dvr/*` 에 붙습니다(아래 「/dvr 하한(POK-525)」).
-    재생 목록(`.m3u8`)은 gzip · brotli 로 압축해 보냅니다(POK-601 — HLS
-    저작 규격 10.1). `/live/*.m3u8` · `/dvr/*` · `/vod/*` 동작의 Compress 와
-    그 캐시 정책의 압축 허용을 함께 켰고, 조각 유형은 압축 대상이 아니라
-    바이트가 그대로입니다.
+    스위치가 켜졌을 때만 `/dvr/*.m3u8` · `/dvr/*` 에 붙습니다(아래 「/dvr
+    하한(POK-525)」). 되감기 · VOD 목록(`/dvr/*.m3u8` · `/vod/*.m3u8`)은
+    gzip 으로 압축해 보냅니다(POK-601 — HLS 저작 규격 10.1). 1KB 미만이거나
+    길이 머리(`Content-Length`)가 없는 응답은 압축되지 않습니다. 라이브
+    목록은 원본이 길이 없이 보내 압축되지 않고, 원본 압축은 후속입니다.
 *   **표준 로그 로그 그룹**(`pokeclip-prod-media-access` · us-east-1): media
     배포의 표준 로그(v2)를 JSON 으로 받습니다. 보존은 `log_retention_days`
     (기본 7)입니다.
@@ -185,8 +185,8 @@ provider 는 refresh 때 역할의 인라인 정책을 상태에 담고, 역할�
 
 ## /dvr 하한(POK-525)
 
-dvr-floor(`pokeclip-prod-dvr-floor`)는 `/dvr/*` viewer-request 함수입니다.
-회차 꼴 조각의 seq 가 그 회차 하한보다 작으면 본문 없는 404 로 막습니다.
+dvr-floor(`pokeclip-prod-dvr-floor`)는 `/dvr/*.m3u8` · `/dvr/*`
+viewer-request 함수입니다. 회차 꼴 조각의 seq 가 그 회차 하한보다 작으면 본문 없는 404 로 막습니다.
 하한은 런타임 1단 KVS(`edge_bounds_kvs_arn`)에서 읽고, 값은 media 사이드카
 Writer 가 씁니다([media README](../../../../media/README.md) 「/dvr 하한
 Writer」).
@@ -194,8 +194,8 @@ Writer」).
 실패하거나 값이 이상하면 막지 않고 넘깁니다.
 
 스위치는 `dvr_floor_enabled`(기본 `false`)입니다. 함수와 함수 로그 그룹은
-스위치와 무관하게 생기고, 스위치는 `/dvr/*` 에 붙일지만 정합니다. 켜는 것은
-두 단 apply 이고 걸음마다 kty 승인을 받습니다.
+스위치와 무관하게 생기고, 스위치는 `/dvr/*.m3u8` · `/dvr/*` 에 붙일지만
+정합니다. 켜는 것은 두 단 apply 이고 걸음마다 kty 승인을 받습니다.
 
 1.  선행 — prod/runtime 을 POK-525 판으로 apply 해 출력
     `edge_bounds_kvs_arn` 이 있고, POK-528(하한 404 를 받는 웹)이 prod 에
@@ -215,9 +215,9 @@ Writer」).
     · 「/dvr 하한 끄기」).
 
 켠 뒤의 edge apply(표준 로그 끄기 · WAF 속도 조정 포함)는 모두
-`-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에 `/dvr/*` 의
-`function_association` 제거가 끼고, 그대로 apply 하면 하한이 조용히
-풀립니다(떼어진 함수는 로그를 내지 않아 경보도 울리지 않습니다). **plan 에
+`-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에
+`/dvr/*.m3u8` · `/dvr/*` 의 `function_association` 제거가 끼고, 그대로
+apply 하면 하한이 조용히 풀립니다(떼어진 함수는 로그를 내지 않아 경보도 울리지 않습니다). **plan 에
 `function_association` 제거가 보이면 apply 하지 않고 멈춥니다.**
 
 붙은 채로 함수 코드를 고칠 때는 먼저 `false` 로 떼고, 1단으로 새 코드를
@@ -226,8 +226,8 @@ Writer」).
 
 런타임 1단 KVS 그릇의 해체 · 교체는 지금 실행할 수단이 없습니다.
 
-*   스위치는 `/dvr/*` 연결만 뗍니다. dvr-floor 의 KVS 연결은 스위치와
-    무관하게 늘 남습니다.
+*   스위치는 `/dvr/*.m3u8` · `/dvr/*` 연결만 뗍니다. dvr-floor 의 KVS
+    연결은 스위치와 무관하게 늘 남습니다.
 *   그 연결을 떼려면 함수를 지워야 하는데, 단계 데이터 O7f
     (`scripts/precheck/data/stage_actions/O7f.tsv`)에 `cloudfront:DeleteFunction`
     이 없습니다.
