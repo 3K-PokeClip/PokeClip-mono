@@ -54,9 +54,9 @@ prod/network(O7a) 뒤, platform(O7d) · media(O7e) 앞입니다. platform · med
 
 1단-다(일 큐 · 새 버킷 · auth 설정 · 값 넣기)는 아래 「1단-다」 절의 순서를
 따릅니다. O7d 뒤 1단-다를 되돌리는 동안(clip 0개부터 다시 올리기까지 —
-회부로 보류된 동안 포함) platform apply 는 다시 올리기 하나뿐입니다. 다른 PR
-의 platform plan 에 `module.clip.aws_ecs_service.this` 의 `desired_count`
-0 → 1 이 보이면 그 apply 는 거부합니다(「1단-다 되돌리기 — O7d 뒤」).
+회부로 보류된 동안 포함) platform apply 는 다시 올리기의 첫 걸음 하나뿐입니다.
+그 밖의 platform apply(다른 PR 포함)는 거부합니다 — 되돌림 중간의 runtime
+출력을 clip 태스크 정의에 굳히기 때문입니다(「1단-다 되돌리기 — O7d 뒤」).
 
 1단-가를 이미 적용한 RDS 에 M6 장부 스키마(POK-196)를 더하는 것은 아래
 「M6 스키마 재실행」 절입니다 — 1단-나 ①을 끝낸 뒤 이 표의 4–7 을 다시
@@ -2335,12 +2335,14 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
     탈퇴는 auth 장부에 쌓이고, auth 가 15초에서 시작해 두 배씩 · 상한
     1시간으로 다시 보냅니다(`PurgeDispatcher.java:35-36` · `86-88`).
 *   **platform 동결**: 1걸음부터 4걸음까지(회부로 보류된 동안 포함) platform
-    apply 는 4걸음 하나뿐입니다. platform `ecs_service` 모듈은
-    `desired_count = 1` 을 고정하고 `ignore_changes` 가 없어
-    (`modules/ecs_service/main.tf:181-186`), 어느 platform apply 든 clip 을
-    다시 1 로 올립니다. 다른 PR 의 platform plan 에
-    `module.clip.aws_ecs_service.this` 의 `desired_count` 0 → 1 이 보이면 그
-    apply 는 거부합니다.
+    apply 는 4걸음의 첫 걸음(platform plan · apply) 하나뿐입니다. platform
+    `ecs_service` 모듈은 `desired_count` 를 생성 초기값으로만 두고 무시하므로
+    (`modules/ecs_service/main.tf:199-242` — POK-605), platform apply 가 clip
+    을 올리지는 않습니다. 그러나 platform 은 runtime 출력(env)을 clip 태스크
+    정의에 굳힙니다(`prod/platform/services.tf:93-94` ·
+    `modules/ecs_service/main.tf:176-196`). 4걸음 밖의 platform apply 는
+    되돌림 중간의 env 를 굳혀, 그 판으로 clip 이 뜨게 합니다. 그래서 4걸음
+    밖의 platform apply(다른 PR 포함)는 plan 내용과 무관하게 거부합니다.
 
 1.  **clip 0개**(ECS 쓰기 — 실행 직전 승인):
 
@@ -2447,7 +2449,9 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
 1.  **런타임 되돌림**(되돌리는 범위만큼): 버킷 비우기 → `git revert -m 1`
     판에서 runtime plan(ECS 변경 0 — plan 승인) → apply. 그릇은 30일 복구
     대기입니다. clip 은 계속 `runningCount` 0 입니다.
-1.  **clip 다시 올리기** = platform apply(plan 승인). 먼저 조건을 봅니다.
+1.  **clip 다시 올리기**(세 걸음 — platform apply · 확인 · 올리기). platform
+    apply 는 clip 태스크 정의만 바꾸고 원하는 수는 0 으로 둡니다 — 모듈이
+    `desired_count` 를 무시합니다(위 「platform 동결」). 먼저 조건을 봅니다.
 
     ```shell
     cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime"
@@ -2459,9 +2463,9 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
     ```
 
     *   `RENDER_ENABLED` · `UPLOAD_ENABLED` 가운데 하나 이상이 `true` 이고
-        두 창고가 `있음=true` 이면 올립니다. 기동 로그
-        `clip.purge.storage_enabled … segments=true` 를 확인 신호로 봅니다
-        — `segments=false` 면 조각을 지우지 않습니다.
+        두 창고가 `있음=true` 이면 아래 세 걸음으로 올립니다. 이 블록은
+        창고가 있는지만 냅니다 — 값이 태스크 정의에 실렸는지는 둘째 걸음이
+        대조합니다.
     *   관측 창은 **1시간 이상**입니다 — 1걸음 뒤 쌓인 탈퇴가 auth 의
         재전송(상한 1시간)으로 모두 다시 들어오고 정리기가 돌 때까지
         `clip.purge.*` 를 봅니다.
@@ -2476,6 +2480,88 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         출력 · 미완료 명부 수 · 2걸음 숫자. 언제 · 어떤 판으로 올릴지는 회부
         때 정합니다.
 
+    앞의 두 걸음 가운데 하나라도 기대와 다르면 올리기로 가지 않고 멈춰 kty
+    에게 회부합니다. 그동안 clip 은 0 으로 둡니다. 세 걸음은 같은 셸에서
+    합니다(첫 걸음이 적은 `td_before` 를 둘째 걸음이 읽음).
+
+    1.  **platform plan · apply**(plan 승인). 지금 clip 리비전을 적어 두고,
+        저장 plan 에서 clip 서비스의 동작과 원하는 수 before · after 를
+        봅니다.
+
+        ```shell
+        td_before="$(aws ecs describe-services --region ap-northeast-2 \
+          --cluster pokeclip-prod --services pokeclip-prod-clip \
+          --query 'services[0].taskDefinition' --output text)"
+        cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/platform"
+        rm -f clip-up.tfplan
+        terraform plan -out=clip-up.tfplan
+        terraform show -json clip-up.tfplan | jq -r '
+          .resource_changes[]
+          | select(.address == "module.clip.aws_ecs_service.this")
+          | "\(.change.actions | join(",")) \(.change.before.desired_count) \(.change.after.desired_count)"'
+        ```
+
+        이 apply 는 되돌린 runtime 출력을 platform 전체(auth 포함)에
+        반영합니다. 마지막 명령의 출력은 한 줄이어야 하고, 그 줄이 아래 둘
+        가운데 하나이면 kty 승인을 받고
+        `terraform apply clip-up.tfplan && rm clip-up.tfplan` 을 합니다. 두
+        갈래의 차이는 둘째 걸음의 리비전 기대뿐입니다.
+
+        *   `update 0 0`: 되돌림이 clip env 를 바꾼 판입니다. clip 쪽 요지는
+            태스크 정의 교체와 서비스의 `task_definition` 갱신입니다.
+        *   `no-op 0 0`: 되돌림이 clip env 를 바꾸지 않은 판입니다(예: auth
+            설정 · rewind CORS 만 되돌림). clip 리비전은 그대로입니다.
+        *   그 밖(출력 없음 · 두 줄 이상 · 원하는 수가 `0 0` 이 아님 — 예
+            `update 0 1` · 다른 동작 — 예 `delete,create 0 0`)이면 apply
+            하지 않고 멈춥니다.
+    1.  **확인**(읽기). clip 의 원하는 수 · 리비전과, 그 리비전의 env 가
+        runtime 출력과 같은지 봅니다. 값은 내지 않고 일치 여부만 냅니다.
+
+        ```shell
+        td="$(aws ecs describe-services --region ap-northeast-2 \
+          --cluster pokeclip-prod --services pokeclip-prod-clip \
+          --query 'services[0].taskDefinition' --output text)"
+        aws ecs describe-services --region ap-northeast-2 \
+          --cluster pokeclip-prod --services pokeclip-prod-clip \
+          --query 'services[0].desiredCount' --output text
+        if [[ "${td}" != "${td_before}" ]]; then
+          echo '새 리비전'
+        else
+          echo '리비전 그대로'
+        fi
+        cd "$(git rev-parse --show-toplevel)/infra/terraform/prod/runtime"
+        want="$(terraform output -json app_env | jq -c '.clip
+          | {RENDER_ENABLED, UPLOAD_ENABLED, CLIPS_BUCKET, SEGMENT_BUCKET}')"
+        aws ecs describe-task-definition --region ap-northeast-2 \
+          --task-definition "${td}" \
+          --query 'taskDefinition.containerDefinitions[0].environment' \
+          --output json |
+          jq -r --argjson want "${want}" 'from_entries as $have
+            | $want | to_entries[]
+            | "\(.key) \(if .value == null then "출력없음"
+                elif $have[.key] == .value then "일치" else "불일치" end)"'
+        ```
+
+        `0` 과 네 이름 모두 `일치` 여야 하고, 리비전은 첫 걸음의 갈래와
+        맞아야 합니다 — `update 0 0` 이면 `새 리비전`, `no-op 0 0` 이면
+        `리비전 그대로` 입니다. 갈래와 다른 리비전 줄 · `불일치` ·
+        `출력없음` 이 하나라도 나오면 멈춥니다.
+    1.  **올리기**(ECS 쓰기 — 실행 직전 승인).
+
+        ```shell
+        aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+          --service pokeclip-prod-clip --desired-count 1 \
+          --query 'service.desiredCount' --output text
+        aws ecs describe-services --region ap-northeast-2 --cluster pokeclip-prod \
+          --services pokeclip-prod-clip \
+          --query 'services[0].[desiredCount,runningCount,pendingCount]' \
+          --output text
+        ```
+
+        둘째 명령이 `1 1 0` 이 될 때까지 다시 읽습니다. 그다음 기동 로그
+        `clip.purge.storage_enabled … segments=true` 가 보여야 합니다 —
+        `segments=false` 면 조각을 지우지 않으므로 회부합니다.
+
 ### 1단-다 한계
 
 *   `runtime-1a` 묶음에는 삭제 동작이 없습니다(삭제 계열은 실행기 끔의 ec2 ·
@@ -2486,7 +2572,8 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
     정책만 잡습니다.
 *   O7d 부터 일꾼 배치까지 주문이 소비자 없이 쌓입니다(고착 알람 없음).
 *   `clip_job_features` 거부 규칙은 런타임 변수 값만 막습니다. 코드
-    되돌리기 길은 위 「clip 먼저 0개」 절차(platform 동결 포함)가 막습니다.
+    되돌리기 길은 위 「clip 먼저 0개」 절차(platform 동결 · 다시 올리기의
+    env 대조 포함)가 막습니다.
 
 ## 1단-나 ① — 앱별 스키마 · DB 권한(POK-428)
 
