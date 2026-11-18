@@ -170,7 +170,7 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 
 ### 메일 수신 코드 (POK-600)
 
-안내 메일의 링크에는 꼬리표 뒤에 **수신 코드** `r`이 하나 더 붙습니다. 어느 메일의 링크가 열렸는지 보려는 것이고, 위 「사람을 알아볼 수 있는 값은 넣지 않는다」의 하나뿐인 예외입니다(2026-11-18 결정).
+안내 메일의 링크에는 꼬리표 뒤에 **수신 코드** `r`이 하나 더 붙고, 메일 끝에는 같은 코드를 실은 **열람 표시 그림**(1×1)이 들어갑니다. 어느 메일이 열렸고 어느 메일의 링크가 눌렸는지 보려는 것이고, 위 「사람을 알아볼 수 있는 값은 넣지 않는다」의 하나뿐인 예외입니다(2026-11-18 결정).
 
 ```text
 https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a&r=k3f7x2ab
@@ -181,9 +181,15 @@ https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_stream
 - 읽은 뒤에는 주소창에서 `r`을 지웁니다. 주소를 복사해 남에게 건네도 그 방문이 같은 코드로 적히지 않습니다. 메일을 통째로 전달한 경우는 막지 못하니, 한 코드의 방문이 꼭 그 사람이라고 단정하지 않습니다.
 - 대시보드(app.pokeclip.com)는 이 값을 읽지 않습니다. 가입까지 이어졌는지는 PostHog가 같은 방문자로 이어 봅니다.
 - 시험 발송의 코드는 `testtest`입니다. 볼 때 뺍니다.
-- 브라우저 추적 금지와 「이용 분석 참여」 끔은 이 이벤트에도 그대로 적용됩니다.
-- PostHog에서는 `outreach_link_opened`를 `outreach_code`로 나눠 봅니다(화면은 아직 만들지 않았습니다).
-- **처리방침 2절이 이 수집을 적습니다.** 꼴·이벤트 이름·하는 일을 바꾸면 처리방침과 `scripts/check-legal.mjs`를 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
+- 브라우저 추적 금지와 「이용 분석 참여」 끔은 `outreach_link_opened`에도 그대로 적용됩니다.
+- **열람 표시 그림**은 PostHog의 추적 픽셀 소스(데이터 파이프라인 → 소스 「Outreach email open pixel」, 2026-11-18에 만듦)를 가리킵니다. 받는 사람의 메일 프로그램이 그림을 불러오면 `outreach_email_opened` 이벤트가 적힙니다.
+  - 주소에는 수신 코드(`r`)·시안(`v`, `draft_a` 꼴)·캠페인(`c`)만 싣습니다. 소스의 코드(Hog)가 `r`이 위 꼴일 때만 적고, 꼴이 다르면 그림만 돌려줍니다(이름·이메일을 넣어 불러 봐도 적히지 않는 것을 2026-11-18에 확인).
+  - 속성은 `outreach_code`·`outreach_draft`·`outreach_campaign`뿐입니다. 접속 IP는 적히지 않고(실측: `$ip`가 `127.0.0.1`, 국가 없음), 사람 프로필을 만들지 않습니다(`$process_person_profile: false`).
+  - **SDK를 거치지 않습니다.** `before_send`도, 브라우저 추적 금지·「이용 분석 참여」도 닿지 않습니다. 받는 사람이 막는 방법은 메일 프로그램의 그림 차단뿐입니다.
+  - 정확하지 않습니다. 그림을 막아 둔 메일 프로그램에서는 읽어도 안 적히고, 그림을 미리 받아 두는 메일 앱(Apple Mail 등)에서는 안 읽어도 적힙니다. 답장에 인용된 원문을 우리가 열어도 적힙니다. 사람별 사실이 아니라 참고 값으로 봅니다.
+  - 소스의 코드를 바꾸면(적는 속성·꼴) 이 절을 함께 고칩니다. 소스는 저장소 밖(PostHog 콘솔)에 있어 시험이 지키지 못합니다.
+- PostHog에서는 `outreach_link_opened`·`outreach_email_opened`를 `outreach_code`로 나눠 봅니다(화면은 아직 만들지 않았습니다).
+- **처리방침 2절이 링크로 들어온 방문의 수신 코드 수집을 적습니다.** 꼴·이벤트 이름·하는 일을 바꾸면 처리방침과 `scripts/check-legal.mjs`를 함께 고칩니다. **열람 표시는 처리방침에 아직 적지 않았습니다** — 적을지와 그 방식은 따로 정합니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
