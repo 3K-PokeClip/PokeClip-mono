@@ -47,12 +47,23 @@ data "terraform_remote_state" "runtime" {
   }
 }
 
+# apex 업로드 역할(prod CI B12) — 정책을 붙일 역할 이름.
+data "terraform_remote_state" "registry" {
+  backend = "s3"
+  config = {
+    bucket = var.state_bucket
+    key    = var.state_keys.registry
+    region = var.region
+  }
+}
+
 locals {
   network  = data.terraform_remote_state.network.outputs
   certs    = data.terraform_remote_state.certs.outputs
   secrets  = data.terraform_remote_state.secrets.outputs
   platform = data.terraform_remote_state.platform.outputs
   runtime  = data.terraform_remote_state.runtime.outputs
+  registry = data.terraform_remote_state.registry.outputs
 }
 
 # 앞 루트 출력을 모듈 · SG 조회 · 규칙에 쓰기 전에 꼴을 본다. 출력 이름이
@@ -96,6 +107,14 @@ resource "terraform_data" "remote_contract" {
     precondition {
       condition     = can(regex("^arn:aws:cloudfront::[0-9]{12}:key-value-store/[0-9a-f-]{36}$", local.runtime.edge_bounds_kvs_arn))
       error_message = "runtime 출력 edge_bounds_kvs_arn 이 없거나 CloudFront KVS ARN(arn:aws:cloudfront::<계정>:key-value-store/<id>) 꼴이 아니다."
+    }
+
+    # apex 업로드 정책의 역할(prod CI B12). prod/registry 를 CI 역할 판으로
+    # apply 하기 전이면 이 출력이 없어 멈춘다. 이름을 고정해 다른 역할(CI
+    # 푸시 역할 등)에 apex 권한이 붙지 않게 한다.
+    precondition {
+      condition     = try(local.registry.apex_upload_role_name, null) == "pokeclip-prod-ci-apex-upload"
+      error_message = "registry 출력 apex_upload_role_name 이 없거나 apex 업로드 역할 이름(pokeclip-prod-ci-apex-upload)이 아니다."
     }
   }
 }

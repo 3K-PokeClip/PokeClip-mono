@@ -46,6 +46,13 @@ test_r13_other_lengths_allowed if {
 	}
 }
 
+# GitHub OIDC 고정 subject 의 소유자 · 저장소 id(9 · 10자리)는 계정 ID 꼴이
+# 아니다(prod/registry CI 역할 신뢰 정책 — prod CI B12).
+test_r13_github_subject_ids_allowed if {
+	value := "repo:3K-PokeClip@304758179/PokeClip-mono@1311593360:environment:prod-deploy"
+	count(hits("R13", [r13_local(value)])) == 0
+}
+
 # 사례 7: data.aws_caller_identity 참조는 통과한다.
 test_r13_caller_identity_allowed if {
 	values := [

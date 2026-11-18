@@ -48,7 +48,7 @@ infra/terraform/
     ├── network/                   # ④ VPC · 서브넷(2 AZ) · NAT 1개 · S3 Gateway EP
     ├── runtime/                   # ⑤ 런타임 1단 — RDS · 앱 비밀 그릇 · 계약9 SNS/SQS · rewind 버킷 · SQL 실행기 스위치
     ├── certs/                     # ⑥ ACM 서울 · us-east-1 + 검증 레코드 한 벌(존 = 이름 조회)
-    ├── registry/                  # ⑦ ECR 11개(CI 역할은 쓰기로 할 때 — 40차)
+    ├── registry/                  # ⑦ ECR 13개 · CI 역할 둘(ECR 푸시 · apex 업로드 — prod CI B12)
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
     ├── media/                     # ⑨ Media EC2 · 인스턴스 역할 · Media SG
     ├── edge/                      # ⑩ CloudFront 배포 · WAF · KVS · CF Function
@@ -206,9 +206,11 @@ bash infra/terraform/scripts/test/put_secret_test.sh
 bash infra/terraform/scripts/test/kvs_put_test.sh
 bash infra/terraform/scripts/test/network_vpce_runbook_test.sh
 bash infra/terraform/scripts/test/workers_watch_runbook_test.sh
+bash infra/terraform/scripts/test/prod_artifacts_runbook_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
   infra/terraform/scripts/test/fakebin/aws \
-  infra/terraform/scripts/test/kvs_fakebin/*
+  infra/terraform/scripts/test/kvs_fakebin/* \
+  infra/terraform/scripts/test/gh_fakebin/gh
 node --test infra/terraform/modules/*/functions/test/*.test.mjs
 for d in infra/terraform/modules/*/ infra/terraform/nonprod/*/ \
   infra/terraform/prod/*/; do tflint --chdir="$d" || printf 'FAIL %s\n' "$d"; done
@@ -318,6 +320,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 부터
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
 | R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 루트가 출력 ARN 으로 비밀에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
+| R7 | `prod/registry/`(하위 디렉터리 포함) | apex 업로드 역할의 권한을 registry 가 쥐는 선언(prod CI B12 — 신원 · 신뢰는 registry, apex 권한은 버킷 · 배포가 있는 `prod/edge`). **역할 정책 자원**: `aws_iam_role_policy` · `aws_iam_role_policy_attachment` 의 `role`, `aws_iam_role_policies_exclusive` · `aws_iam_role_policy_attachments_exclusive` 의 `role_name` 이 정확히 `aws_iam_role.ci_push.name` · `.id` 참조가 아님(apex 역할 참조 · 이름 리터럴 · 변수 · 지역값 · 빠짐 — 허용 목록). **연결 대상 목록**: `aws_iam_policy_attachment` 선언. **역할 본문**: `aws_iam_role` 에 `inline_policy`(블록 · `dynamic`) · `managed_policy_arns` 가 있음(값과 무관 — 빈 값은 그 역할의 정책을 비우라는 뜻이라 edge 가 붙인 정책을 지움). registry 밖(edge 의 `aws_iam_role_policy.apex_upload`)은 보지 않음. `resource` 선언만 봄 — `module` 경유 부착은 리뷰 몫 |
 | R8 | `modules/cdn_media/` · `modules/cdn_static_site/` · `prod/edge/` | 관리형 캐시 정책 `UseOriginCacheControlHeaders` · `UseOriginCacheControlHeaders-QueryStrings` 참조 — 어느 문자열이든(맵 키 · 설명 포함, 대소문자 무관) 이름 `UseOriginCacheControlHeaders` 가 들어 있거나 두 정책의 id(`83da9c7e-98b4-4e11-a168-04f0df8e2c65` · `4cc15a8a-d715-48a4-82b8-cc0b614638fe`)가 들어 있음 · `data "aws_cloudfront_cache_policy"` 의 `name` · `id` 가 식(대조할 수 없음). 쿠키 전부를 캐시 키에 넣어 서명 쿠키가 시청자마다 키를 쪼갠다(설계 3-3). 대상 경로에 `.tf` 가 없으면 위반 없음 |
 | R10 | `modules/media_host/` · `prod/media/` | **유형 허용 목록(경로 전체)**: 자원이 `aws_iam_role` · `aws_iam_instance_profile` · `aws_iam_role_policy` · `aws_iam_role_policy_attachment` · `aws_security_group` · `aws_vpc_security_group_ingress_rule` · `aws_vpc_security_group_egress_rule` · `aws_instance` · `aws_lb_target_group_attachment` · `aws_ssm_parameter` 밖, data 가 `aws_iam_policy_document` · `aws_caller_identity` · `aws_region` · `aws_partition` · `aws_ssm_parameter` · `aws_ec2_instance_type` · `terraform_remote_state` 밖(정책 조회 · 고객 관리 정책 · `awscc_*` · `aws_cloudformation_stack` 포함 — 두 경로가 지금 쓰는 유형만, 새 유형을 쓰려면 이 목록부터 고친다) · 최상위 블록이 `terraform` · `provider` · `variable` · `output` · `locals` · `resource` · `data` · `module` 밖(`ephemeral` · `action` · `check` · `import` · `moved` · `removed`) · `module` 이 `prod/media/` 의 `source = "../../modules/media_host"` 가 아님(`modules/media_host/` 안의 `module` 은 모두) · 그 `module` 의 `instances` 가 정확히 `var.instances` 가 아님(없음 · 다른 변수 · 가공 식 — 루트가 키별 `cred_relay` 를 덮으면 tfvars 와 다른 홉으로 뜸, POK-574) · 공급자가 `hashicorp/aws` 가 아님(`provider` 블록 이름이 `aws` 가 아님 · `required_providers` 항목이 `aws = { source = "hashicorp/aws" … }` 가 아님 — 문자열 판 표기 포함). **관리형 연결**: 주소가 `managed` 하나가 아님 · `policy_arn` 이 `each.value` 가 아님 · `for_each` 가 `local.managed_policy_arns` 가 아님 · 그 지역값이 `{ AmazonSSMManagedInstanceCore = <그 ARN 리터럴> }` 하나가 아님 · 문자열 속 관리형 정책 ARN(`iam::aws:policy/<이름>`)의 이름이 그 리터럴이 아님. **정책 문서**: statement `actions` 원소가 `서비스:동작` 꼴(`^[a-z0-9-]+:[A-Za-z0-9]+$`)이 아님(허용 목록 — 와일드카드 · 템플릿 지시자 · 보간 · 공백 · 식 금지) · `iam:` · `sts:` 동작이 있음(Get · List 포함 — 서비스째 · iam · sts 밖 권한 상승 동작(`ssm:SendCommand` 등)은 동작 이름 형식만 본다 — 리뷰 몫). **역할 참조**: `aws_iam_role_policy` · `aws_iam_instance_profile` · `aws_iam_role_policy_attachment` 의 `role` 이 같은 경로의 `aws_iam_role.<이름>.name` · `.id` 참조가 아님 · `aws_instance` 의 `iam_instance_profile` 이 `aws_iam_instance_profile.<이름>.name` 참조가 아님(리터럴 이름 · 변수 · 가공 식 — 다른 서비스 역할 · 이미 있는 특권 프로필) · `aws_instance` 에 `launch_template` 이 있음(`dynamic` 포함 — 시작 템플릿에 달린 다른 프로필로 비켜 감) · `aws_instance` 에 `key_name` 이 있음(SSH 키 쌍 — 접속은 SSM 세션으로만) · `aws_instance` 의 `metadata_options` 블록 하나에 `http_tokens = "required"` 리터럴이 없음(블록 · 속성 없음 · 식 · `dynamic` 포함 — IMDSv1 은 SSRF 로 역할 자격을 내줌) · 그 블록의 `http_put_response_hop_limit` 이 리터럴 `1` 도 정확히 `each.value.cred_relay ? 1 : 2` 도 아님(없음 · `2` · 변수 · 다른 식 — 대리 창구 켬 키 컨테이너의 IMDS 차단, POK-574) · `aws_instance` 의 `for_each` 가 정확히 `var.instances` 가 아님(없음 · 다른 변수 · 지역값 · 가공 식 — 홉 스위치가 읽는 `each.value.cred_relay` 의 출처) · 그 블록의 `http_protocol_ipv6` 이 리터럴 `"disabled"` 가 아님(없음 · 식 포함 — IPv6 IMDS 엔드포인트는 홉 · 망 칸 실측 밖). **명령 블록**: 자원 본문에 `provisioner`(`local-exec` · `remote-exec` · `file`) · `connection` 이 있음(`dynamic` 포함 — 허용 유형 안에서도). **허용 속성**: IAM 자원(유형마다) · 정책 문서(`statement` · `version`) · statement(`sid` · `effect` · `actions` · `resources` · `condition`)가 허용 속성과 메타 인자 밖의 키를 씀 — `dynamic` 포함(역할 `inline_policy` · `managed_policy_arns` · `permissions_boundary`, 문서 합치기 `source_policy_documents` · `override_policy_documents`, statement `not_actions` · `not_resources` · `principals` 가 여기서 걸림). **역할 인라인 정책**: 정책 문서 `json` 이 아님(`jsonencode` 등 — 신뢰 정책 `assume_role_policy` 는 예외). **rds-db**: `dbuser:` 뒤 와일드카드(`*` · `?`) · 동작이 `rds-db:connect` 인 statement 의 Resource 가 `[for <u> in local.db_users : "…:dbuser:${var.rds_resource_id}/${<u>}"]` 꼴이 아님(파티션 · 리전 · 계정 자리만 참조 보간, 사용자 자리는 for 변수뿐) · 그 경로의 `local.db_users` 가 리터럴 목록 `["media_indexer", "media_janitor"]` 정확히가 아님 · rds-db 동작이 정책 문서 statement `actions` 밖에 있음. **lifecycle**: 거부 목록 그릇(`aws_ssm_parameter`)에 리터럴 `prevent_destroy` · `ignore_changes` 의 `value` 가 없음 · media_host 상자(`aws_instance`)의 `ignore_changes` 에 `ami` · `user_data_base64` 가 없음. **템플릿 지시자**: 대상 경로의 어느 문자열이든 `%{`(설명 · 맵 키 포함). 설명 문자열(`description`)은 rds-db 동작 이름 검사만 보지 않음(관리형 정책 ARN · dbuser 와일드카드 · 템플릿 지시자 검사는 설명도 봄). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 모듈 · 다른 루트가 출력 `instance_role_arn` 의 역할에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
@@ -345,9 +348,8 @@ dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙
 R8 · R9 는 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
 모듈과 같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
 fixture 를 함께). R10 은 그렇게 `modules/media_host` · `prod/media` 와 함께,
-R8 은 엣지 모듈 둘 · `prod/edge` 와 함께 들어왔습니다. R5 · R7 은
-**보류**입니다 — R5 는 재개 키트(결정 46), R7 은 CI 자동 푸시를 켜는 후속
-PR(40차)이 더합니다.
+R8 은 엣지 모듈 둘 · `prod/edge` 와 함께, R7 은 CI 역할(prod CI B12)과
+함께 들어왔습니다. R5 는 **보류**입니다 — 재개 키트(결정 46)가 더합니다.
 
 ### 설치와 실행
 

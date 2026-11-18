@@ -21,6 +21,7 @@ variable "state_keys" {
     secrets  = string
     platform = string
     runtime  = string
+    registry = string
   })
   default = {
     network  = "prod/network/terraform.tfstate"
@@ -28,6 +29,7 @@ variable "state_keys" {
     secrets  = "prod/secrets/terraform.tfstate"
     platform = "prod/platform/terraform.tfstate"
     runtime  = "prod/runtime/terraform.tfstate"
+    registry = "prod/registry/terraform.tfstate"
   }
 }
 

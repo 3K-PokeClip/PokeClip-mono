@@ -4,9 +4,12 @@
 # VPC origin 포함). media 배포의 표준 로그는 이 루트의 us-east-1 로그 그룹으로
 # 받는다.
 #
-# 이 루트에 없는 것: apex 업로드 역할 · 정책(설계 8절 후속 승인 지점 — 40차),
-# rewind 버킷 정책(런타임 트랙 2단 — 출력 media_distribution_arn 을 씀) · 버킷
-# CORS 규칙(런타임 1단 — CONTRACT-runtime.md 「rewind 버킷 CORS」).
+# apex 랜딩 업로드 정책(prod CI B12)은 apex_upload_policy.tf 다 — 역할은
+# prod/registry 가 갖는다.
+#
+# 이 루트에 없는 것: apex 업로드 역할(prod/registry), rewind 버킷
+# 정책(런타임 트랙 2단 — 출력 media_distribution_arn 을 씀) · 버킷 CORS
+# 규칙(런타임 1단 — CONTRACT-runtime.md 「rewind 버킷 CORS」).
 
 locals {
   # 관리 그룹은 platform 공개 ALB WAF 와 같은 둘이다(prod/platform 의

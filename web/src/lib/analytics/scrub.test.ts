@@ -199,6 +199,63 @@ describe('scrubEvent — PostHog before_send', () => {
     });
   });
 
+  it('메일 홍보 링크 값(README 표)은 그대로 남는다 — 시안 구분은 draft_ 뒤 영문 한 글자만', () => {
+    const tags = {
+      utm_source: 'email',
+      utm_medium: 'dm',
+      utm_campaign: '2026_11_streamer_outreach',
+      utm_content: 'draft_b',
+    };
+    const out = scrubEvent(
+      event(
+        'login_completed',
+        { ...tags, $session_entry_utm_source: 'email', $session_entry_utm_content: 'draft_ab' },
+        {
+          $set_once: {
+            $initial_utm_source: 'email',
+            $initial_utm_campaign: '2026_11_streamer_outreach',
+          },
+        },
+      ),
+    );
+    expect(out?.properties).toEqual({
+      ...tags,
+      $session_entry_utm_source: 'email',
+      $session_entry_utm_content: 'other',
+    });
+    expect(out?.$set_once).toEqual({
+      $initial_utm_source: 'email',
+      $initial_utm_campaign: '2026_11_streamer_outreach',
+    });
+  });
+
+  it('새 달 안내 메일 캠페인과 새 시안은 배포 없이 받는다 — 날짜·글자 자리 밖으로 벗어나면 other', () => {
+    for (const campaign of ['2026_12_streamer_outreach', '2027_01_streamer_outreach']) {
+      const out = scrubEvent(
+        event('$pageview', { utm_campaign: campaign, utm_content: 'draft_d' }),
+      );
+      expect(out?.properties).toEqual({ utm_campaign: campaign, utm_content: 'draft_d' });
+    }
+    const badCampaigns = [
+      '2026_13_streamer_outreach',
+      '2026_1_streamer_outreach',
+      '2026_12_streamer_outreach_kim',
+      'kim_2026_12_streamer_outreach',
+      'gamerkim_12_streamer_outreach',
+      '2026_12_partner_outreach',
+    ];
+    for (const campaign of badCampaigns) {
+      expect(scrubEvent(event('$pageview', { utm_campaign: campaign }))?.properties).toEqual({
+        utm_campaign: 'other',
+      });
+    }
+    for (const content of ['draft_ab', 'draft_1', 'draft_', 'draft_kim']) {
+      expect(scrubEvent(event('$pageview', { utm_content: content }))?.properties).toEqual({
+        utm_content: 'other',
+      });
+    }
+  });
+
   it('세션 첫 진입($session_entry_*)·Meta 식별자($fbc·$fbp)도 같은 규칙이다 — SDK가 모든 이벤트에 싣는다 (PR #382 3차 리뷰)', () => {
     // posthog-js 1.435.8 SessionPropsManager.getSessionProps()가 첫 진입 속성에 붙이는 이름 그대로
     const out = scrubEvent(

@@ -33,12 +33,41 @@
 
   // 홍보 링크 값은 README 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 other로 바꾼다.
   // 자유 문자열(utm_term)과 광고 클릭 식별자는 지운다 — 대시보드 web/src/lib/analytics/scrub.ts와 같은 규칙이다
+  // 값 목록이 원칙이고, 안내 메일의 캠페인(<연도>_<월>_streamer_outreach)과 시안(draft_ + 영문 한 글자)만 닫힌 꼴로 받는다 —
+  // 바뀌는 자리가 날짜 숫자와 글자 한 개뿐이라 이름·아이디가 들어갈 틈이 없고, 새 달 메일을 배포 없이 쓸 수 있다
   var UTM_ALLOWED = {
-    utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
+    utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram|email)$/,
     utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
-    utm_campaign: /^(launch_2026_10)$/,
-    utm_content: /^(pinned_comment|banner)$/,
+    utm_campaign: /^(launch_2026_10|20[0-9]{2}_(0[1-9]|1[0-2])_streamer_outreach)$/,
+    utm_content: /^(pinned_comment|banner|draft_[a-z])$/,
   };
+
+  // 안내 메일 링크의 수신 코드(?r=) — README 「메일 수신 코드」, 처리방침 2절.
+  // 보내는 쪽 도구가 만든 8글자(영문 소문자와 2~7)이고 이름·이메일이 아니다. 이 꼴이 아니면 버린다 — 주소에 든 다른 값이
+  // 실려 나가지 않게 한다. 꼴만 보면 8글자 아이디(gamerkim 등)도 통과하므로, 메일 링크 꼬리표(utm_source=email, 위 허용
+  // 목록에 있는 utm_campaign)가 함께 있을 때만 읽는다 — 새 메일 캠페인은 허용 목록에 더하면 여기는 고치지 않아도 된다.
+  // 아래 before_send가 주소의 쿼리를 떼므로 여기서 따로 읽어 둔다. SDK를 붙이기(맨 아래) 전에 읽고 지운다.
+  // 읽은 뒤에는 주소창에서 지운다 — 주소를 복사해 남에게 건네도 그 방문이 같은 코드로 적히지 않는다(utm_* 는 그대로 둔다)
+  var OUTREACH_CODE = /^[a-z2-7]{8}$/;
+  var outreachCode = null;
+  try {
+    var params = new URLSearchParams(location.search);
+    var given = params.get('r');
+    if (given !== null) {
+      var campaign = params.get('utm_campaign');
+      var fromMail =
+        params.get('utm_source') === 'email' && campaign !== null && UTM_ALLOWED.utm_campaign.test(campaign);
+      if (fromMail && OUTREACH_CODE.test(given)) outreachCode = given;
+      params.delete('r');
+      var rest = params.toString();
+      if (typeof history !== 'undefined' && history.replaceState) {
+        history.replaceState(history.state, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+      }
+    }
+  } catch (e) {
+    // 주소를 읽지 못하면 코드 없이 간다
+  }
+
   // 접두 없음(그 페이지)·$initial_(처음 방문)·$session_entry_(그 세션 첫 진입 — SDK가 모든 이벤트에 싣는다) 셋 다 본다.
   // $fbc·$fbp는 SDK가 fbclid·Meta 쿠키로 만드는 식별자다(PR #382 3차 리뷰)
   var UTM_KEY = /^(?:\$initial_|\$session_entry_)?(utm_[a-z]+)$/;
@@ -113,6 +142,10 @@
       advanced_disable_flags: true,
       before_send: beforeSend,
     });
+    // 안내 메일 링크로 들어온 방문 — 어느 메일의 링크가 열렸는지만 적는다(코드가 누구인지는 보낸 쪽 컴퓨터만 안다)
+    if (outreachCode && typeof window.posthog.capture === 'function') {
+      window.posthog.capture('outreach_link_opened', { outreach_code: outreachCode });
+    }
   };
   document.head.appendChild(script);
 

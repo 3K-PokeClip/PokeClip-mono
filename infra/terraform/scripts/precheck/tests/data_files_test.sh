@@ -366,6 +366,14 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7f\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
   $'9\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
   $'ci-followup\tec2:DescribeSecurityGroupRules\tap-northeast-2\t*'
+  $'ci-followup\tiam:UpdateAssumeRolePolicy\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
+  $'ci-followup\tiam:ListRolePolicies\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
+  $'ci-followup\tiam:GetRolePolicy\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
+  $'ci-followup\tiam:ListInstanceProfilesForRole\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
   $'workers\tservicediscovery:GetService\tap-northeast-2\t*'
   $'workers\tiam:GetRolePolicy\tus-east-1\t'\
 'arn:aws:iam::${ACCOUNT}:role/pokeclip/prod/*'
