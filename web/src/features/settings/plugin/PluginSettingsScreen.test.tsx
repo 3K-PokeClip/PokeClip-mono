@@ -79,7 +79,11 @@ describe('PluginSettingsScreen', () => {
     expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
     expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
+    // 다운로드 자리는 상태를 읽은 뒤에 선다 — 코드를 받은 적 있는 회원은 맨 아래 배너다
+    expect(await screen.findByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: /먼저 OBS 플러그인을 설치/ }),
+    ).not.toBeInTheDocument();
     // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
     expect(
       await screen.findByText(new RegExp(`최초 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
@@ -320,7 +324,7 @@ describe('PluginSettingsScreen', () => {
     stubStreamKeyFetch();
     renderWithProviders(<PluginSettingsScreen />);
 
-    fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
+    fireEvent.click(await screen.findByRole('button', { name: '플러그인 다운로드' }));
 
     const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
     expect(dialog).toBeInTheDocument();
@@ -331,5 +335,38 @@ describe('PluginSettingsScreen', () => {
       PLUGIN_DOWNLOADS.windows.url,
     );
     expect(document.body).not.toHaveTextContent(/설치됨|연결됨/);
+  });
+
+  it('코드를 받은 적 없으면 맨 위 설치 안내가 배너를 대신하고, 첫 코드를 받아도 이 화면에선 남는다 (시안 C)', async () => {
+    stubStreamKeyFetch({ issued: false });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    const guide = await screen.findByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' });
+    // 맨 위다 — 코드 카드보다 앞에 온다
+    const codeCard = screen.getByRole('region', { name: '연동 코드' });
+    expect(guide.compareDocumentPosition(codeCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 다운로드 버튼은 안내 안의 하나뿐 — 맨 아래 배너는 없다
+    expect(screen.getAllByRole('button', { name: '플러그인 다운로드' })).toHaveLength(1);
+    expect(screen.queryByText(/다른 PC에 설치하나요/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
+    await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+    fireEvent.click(screen.getByRole('button', { name: '닫기' }));
+
+    // 첫 코드를 받아 발급됨으로 바뀌어도 안내는 그대로 맨 위에 남는다
+    fireEvent.click(screen.getByRole('button', { name: '코드 발급' }));
+    fireEvent.click(await screen.findByRole('button', { name: '확인했어요' }));
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/다른 PC에 설치하나요/)).not.toBeInTheDocument();
+  });
+
+  it('상태를 읽는 동안은 다운로드 자리를 비워 둔다 — 배너가 맨 아래에서 맨 위로 튀지 않는다', () => {
+    stubStreamKeyFetch({ issued: false });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    expect(screen.queryByRole('button', { name: '플러그인 다운로드' })).not.toBeInTheDocument();
   });
 });
