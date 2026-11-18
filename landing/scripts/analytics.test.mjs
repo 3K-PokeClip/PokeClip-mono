@@ -146,6 +146,13 @@ test('꼴이 다른 값(이름·이메일·대문자·길이·앞뒤 덧붙임)�
     assert.deepEqual(page.captures, [], value);
     assert.deepEqual(page.replaced, [`/?${MAIL_TAGS}`], value);
   }
+  // 꼴이 맞아도 메일 캠페인 꼬리표가 없거나 다르면 보내지 않는다 — 8글자 아이디(gamerkim)를 r에 넣은 링크가 섞이지 않게
+  for (const search of ['?r=gamerkim', '?utm_source=email&r=k3f7x2ab', '?utm_campaign=launch_2026_10&r=k3f7x2ab']) {
+    const page = loadPage({ search });
+    assert.deepEqual(page.captures, [], search);
+    assert.equal(page.replaced.length, 1, search);
+    assert.doesNotMatch(page.replaced[0], /[?&]r=/, search);
+  }
   const plain = loadPage({ search: '?utm_source=chzzk&utm_medium=profile' });
   assert.deepEqual(plain.captures, []);
   assert.deepEqual(plain.replaced, []);
