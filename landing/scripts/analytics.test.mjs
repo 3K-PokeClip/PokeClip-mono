@@ -94,6 +94,23 @@ test('홍보 링크 값은 README 표의 값만 두고 나머지는 other — ut
   });
 });
 
+test('메일 홍보 링크 값(README 표)은 그대로 남는다 — 시안 구분은 draft_a·b·c만', () => {
+  const beforeSend = loadBeforeSend();
+  const tags = {
+    utm_source: 'email',
+    utm_medium: 'dm',
+    utm_campaign: '2026_11_streamer_outreach',
+    utm_content: 'draft_b',
+  };
+  const out = beforeSend({
+    event: '$pageview',
+    properties: { ...tags, $session_entry_utm_source: 'email', $session_entry_utm_content: 'draft_d' },
+    $set_once: { $initial_utm_source: 'email', $initial_utm_campaign: '2026_11_streamer_outreach' },
+  });
+  assert.deepEqual(out.properties, { ...tags, $session_entry_utm_source: 'email', $session_entry_utm_content: 'other' });
+  assert.deepEqual(out.$set_once, { $initial_utm_source: 'email', $initial_utm_campaign: '2026_11_streamer_outreach' });
+});
+
 test('세션 첫 진입($session_entry_*)·Meta 식별자($fbc·$fbp)도 같은 규칙이다 — SDK가 모든 이벤트에 싣는다 (PR #382 3차 리뷰)', () => {
   const beforeSend = loadBeforeSend();
   const out = beforeSend({

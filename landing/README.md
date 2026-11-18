@@ -148,10 +148,10 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
 
 | 꼬리표 | 값(영문 소문자 snake_case만) | 뜻 |
 |---|---|---|
-| `utm_source` | `youtube` · `chzzk` · `soop` · `discord` · `kakao` · `x` · `naver` · `instagram` | 어디서 왔나(플랫폼·서비스) |
+| `utm_source` | `youtube` · `chzzk` · `soop` · `discord` · `kakao` · `x` · `naver` · `instagram` · `email`(메일) | 어디서 왔나(플랫폼·서비스) |
 | `utm_medium` | `video_description`(영상 설명) · `profile`(채널·프로필 소개) · `community`(커뮤니티 글) · `post`(SNS 글) · `dm`(1:1 메시지) · `ad`(광고) | 그 안의 어떤 자리인가 |
-| `utm_campaign` | `launch_2026_10`(출시). 새 캠페인은 `<yyyy>_<mm>_<이름>`으로 지어 **이 표와 두 허용 목록에 먼저 더한다** | 어떤 홍보 묶음인가 |
-| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`(새 값은 표와 두 허용 목록에 먼저 더한다) | 같은 자리 안의 구분 |
+| `utm_campaign` | `launch_2026_10`(출시) · `2026_11_streamer_outreach`(스트리머 제안 메일). 새 캠페인은 `<yyyy>_<mm>_<이름>`으로 지어 **이 표와 두 허용 목록에 먼저 더한다** | 어떤 홍보 묶음인가 |
+| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`, 메일 시안을 가를 때 `draft_a`·`draft_b`·`draft_c`(새 값은 표와 두 허용 목록에 먼저 더한다) | 같은 자리 안의 구분 |
 
 ```text
 https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10
@@ -166,6 +166,7 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 | 채널 | 자리 | 링크 | 건 날 | 담당 | 상태 |
 |---|---|---|---|---|---|
 | (예) 치지직 | 채널 소개 | `https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10` | — | — | 예정 |
+| 메일 | 스트리머 제안 메일 본문(시안 A·B·C) | `https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a` (시안에 따라 `draft_b`·`draft_c`) | — | — | 예정 |
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 

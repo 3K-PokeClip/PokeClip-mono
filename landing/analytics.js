@@ -34,10 +34,10 @@
   // 홍보 링크 값은 README 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 other로 바꾼다.
   // 자유 문자열(utm_term)과 광고 클릭 식별자는 지운다 — 대시보드 web/src/lib/analytics/scrub.ts와 같은 규칙이다
   var UTM_ALLOWED = {
-    utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
+    utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram|email)$/,
     utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
-    utm_campaign: /^(launch_2026_10)$/,
-    utm_content: /^(pinned_comment|banner)$/,
+    utm_campaign: /^(launch_2026_10|2026_11_streamer_outreach)$/,
+    utm_content: /^(pinned_comment|banner|draft_a|draft_b|draft_c)$/,
   };
   // 접두 없음(그 페이지)·$initial_(처음 방문)·$session_entry_(그 세션 첫 진입 — SDK가 모든 이벤트에 싣는다) 셋 다 본다.
   // $fbc·$fbp는 SDK가 fbclid·Meta 쿠키로 만드는 식별자다(PR #382 3차 리뷰)
