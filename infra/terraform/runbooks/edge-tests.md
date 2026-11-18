@@ -838,11 +838,18 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
         MISS 라 S3 GET 과 지연이 잠깐 늘 수 있습니다. 캐시 키에 인코딩이
         들어가 새로 생긴 변형을 처음 채우는 것이고 회귀가 아닙니다.
     *   되돌릴 때는 그 PR 의 머지 커밋을 revert 하고 prod/edge apply 를
-        합니다(하한을 켠 뒤면 같은 `-var` · 함수 연결 「제거」 없음 확인).
-        배포는 원래 동작 일곱으로 돌아가지만, 단계 권한(O7f)에
-        `DeleteCachePolicy` 가 없어 `dvr_vod_playlist` 삭제는 거부됩니다.
-        남은 정책은 어느 동작에도 붙지 않아 시청자에게 영향이 없고, 지우려면
-        권한을 더하는 PR 이 따로 필요합니다.
+        합니다. 하한을 켠 뒤면 같은 `-var` 를 넘깁니다. 되돌린 plan 도 칸이
+        거꾸로 밀려, 함수 연결은 4번 칸(되돌린 뒤 `/vod/*`)의 dvr-floor
+        「제거」 하나만 정상입니다. 3번 칸(`/dvr/*`)에도 「제거」 가 보이면
+        `-var` 를 빠뜨린 것이라 apply 하지 않고 멈춥니다.
+    *   단계 권한 사전 판정 목록(O7f)에 `DeleteCachePolicy` 가 없어, 되돌린
+        apply 의 `dvr_vod_playlist` 삭제는 거부될 수 있습니다. 배포 변경이
+        정책 삭제보다 먼저라, 거부돼도 배포는 원래 동작 일곱으로 돌아가
+        시청자 쪽 되돌림은 끝납니다. 이때 apply 는 오류로 끝나고 정책이
+        상태에 남아, 권한을 더하는 PR 로 지우기 전까지 이후 edge plan 마다
+        `delete module.media.aws_cloudfront_cache_policy.dvr_vod_playlist`
+        한 줄이 더해집니다. 다른 절차의 기대 목록과 대조할 때 그 줄을
+        예외로 적고 kty 에게 보고합니다.
     *   T13 의 clip 쿠키로 1KB 넘는 `/dvr/…/index.m3u8` 를
         `-H 'Accept-Encoding: gzip' -o /dev/null -D -` 로 받아
         `content-encoding: gzip` 이 있는지 봅니다. 같은 머리로 받은 조각
@@ -2181,15 +2188,21 @@ apply 가 끝나면(Deployed) 두 가지로 확인합니다. 둘 다 하한 값 
       tee -a "${evidence}/dvr-off.txt"
     ```
 
-    통과 줄은 배포 시점마다 하나입니다.
+    통과 줄은 apply 한 체크아웃의 동작 표로 정합니다. apply 가 끝나면
+    배포의 동작은 체크아웃과 같아지므로, 확인 대상인 배포가 아니라
+    체크아웃에서 기대값을 먼저 읽습니다.
 
-    *   POK-601 의 edge apply 뒤(`/dvr/*.m3u8` · `/dvr/*` 둘):
+    ```shell
+    grep -c '"/dvr/\*\.m3u8"' infra/terraform/modules/cdn_media/main.tf
+    ```
+
+    *   `1`(POK-601 이 든 체크아웃 — `/dvr/*.m3u8` · `/dvr/*` 둘):
         `behaviors=2 dvr_floor=0`.
-    *   그 apply 전(`/dvr/*` 하나): `behaviors=1 dvr_floor=0`.
+    *   `0`(그 전이거나 POK-601 을 되돌린 체크아웃 — `/dvr/*` 하나):
+        `behaviors=1 dvr_floor=0`.
 
-    배포가 어느 시점인지는 `/dvr/*.m3u8` 동작이 있는지로 가립니다. 그
-    시점의 통과 줄과 `behaviors` 가 다르면 비헤이비어를 다 찾지 못한
-    것이라 확인 무효이고 kty 에게 보고합니다.
+    그 통과 줄과 `behaviors` 가 다르면 비헤이비어를 다 찾지 못했거나
+    배포가 체크아웃과 다른 것이라 확인 무효이고 kty 에게 보고합니다.
     `dvr_floor` 가 0 이 아니면 떼어지지 않은 것입니다.
 
 1.  **표지 요청**: 함수가 실제로 요청을 받지 않는지 봅니다. 경로에 `.`
