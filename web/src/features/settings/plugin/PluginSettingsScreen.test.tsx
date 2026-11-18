@@ -1,6 +1,9 @@
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PluginSettingsScreen } from '@/features/settings/plugin/PluginSettingsScreen';
+import {
+  GUIDE_DECIDE_WAIT_MS,
+  PluginSettingsScreen,
+} from '@/features/settings/plugin/PluginSettingsScreen';
 import { PLUGIN_DOWNLOADS } from '@/lib/pluginDownload';
 import { useAuthStore } from '@/stores/auth';
 import { useOnboardingStore } from '@/stores/onboarding';
@@ -67,6 +70,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('PluginSettingsScreen', () => {
@@ -379,5 +383,54 @@ describe('PluginSettingsScreen', () => {
     renderWithProviders(<PluginSettingsScreen />);
 
     expect(screen.queryByRole('button', { name: '플러그인 다운로드' })).not.toBeInTheDocument();
+  });
+
+  it('읽기가 오래 걸리면 배너부터 세우고, 늦게 온 「받은 적 없음」에도 안내로 바꾸지 않는다 (PR #538 리뷰)', async () => {
+    // 가짜 타이머는 렌더 전에 — 시간은 흐르게 두어 findBy*의 대기도 돈다
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answer: (res: Response) => void = () => {};
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
+        return new Promise<Response>((resolve) => (answer = resolve));
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+    expect(screen.queryByRole('button', { name: '플러그인 다운로드' })).not.toBeInTheDocument();
+
+    // 서버가 답하지 않아도 정해진 시간이 지나면 다운로드 창으로 갈 길이 선다
+    await act(async () => {
+      vi.advanceTimersByTime(GUIDE_DECIDE_WAIT_MS);
+    });
+    expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
+
+    await act(async () => answer(jsonResponse(200, { issued: false })));
+    expect(await screen.findByRole('button', { name: '코드 발급' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
+  });
+
+  it('첫 조회가 실패하면 배너로 정하고, 다시 시도로 「받은 적 없음」을 읽어도 안내로 튀지 않는다 (PR #538 리뷰)', async () => {
+    let statusCalls = 0;
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET') {
+        statusCalls += 1;
+        return statusCalls === 1
+          ? jsonResponse(500, { reason: '서버 오류' })
+          : jsonResponse(200, { issued: false });
+      }
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '다시 시도' }));
+
+    // 누른 자리 위로 안내가 끼어들면 코드 카드가 밀린다 — 배너 그대로 둔다
+    expect(await screen.findByRole('button', { name: '코드 발급' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
   });
 });
