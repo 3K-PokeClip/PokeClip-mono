@@ -139,7 +139,7 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
   ```bash
   curl -sL https://cdn.jsdelivr.net/npm/posthog-js@<판>/dist/array.js | openssl dgst -sha384 -binary | openssl base64 -A
   ```
-- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 우리 주소가 아닌 유입 주소는 origin만 남깁니다(방송 채널·영상 주소의 경로에 채널 ID·영상 ID가 실려서). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남는데, 아래 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 `other`로 바꿉니다. `utm_term`과 광고 클릭 식별자(`gclid`·`fbclid` 등)는 지웁니다. 표에 값을 더하면 `analytics.js`와 대시보드 `web/src/lib/analytics/scrub.ts`의 허용 목록도 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
+- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 우리 주소가 아닌 유입 주소는 origin만 남깁니다(방송 채널·영상 주소의 경로에 채널 ID·영상 ID가 실려서). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남는데, 아래 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 `other`로 바꿉니다. `utm_term`과 광고 클릭 식별자(`gclid`·`fbclid` 등)는 지웁니다. 쿼리에서 따로 읽는 값은 안내 메일의 수신 코드 `r` 하나뿐이고, 꼴이 맞을 때만 이벤트 속성으로 보냅니다(아래 「메일 수신 코드」). 표에 값을 더하면 `analytics.js`와 대시보드 `web/src/lib/analytics/scrub.ts`의 허용 목록도 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
 - **설정을 바꾸면 처리방침 2·3·4·6·7·9·13절을 먼저 고칩니다.** 처리방침이 실제 동작과 다르면 위반입니다(아래 「문서 쓰는 원칙」). `scripts/check-legal.mjs`가 그 절들의 PostHog 문장을 검사합니다.
 
 ## 홍보 링크와 UTM (POK-359)
@@ -157,7 +157,7 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
 https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10
 ```
 
-- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 표 밖의 값은 보내기 전에 `other`로 바뀌어(네 칸 모두 모양이 아니라 **표에 적은 값 목록**과 맞춘다), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
+- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다(예외는 아래 「메일 수신 코드」 하나입니다). 표 밖의 값은 보내기 전에 `other`로 바뀌어(네 칸 모두 모양이 아니라 **표에 적은 값 목록**과 맞춘다), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
 - 홍보 링크는 **랜딩**(`https://pokeclip.com/`)을 가리킵니다. 대시보드로 바로 보내면 랜딩 → 시작 버튼 단계가 빠집니다. 랜딩 안의 시작 버튼 링크에는 꼬리표를 붙이지 않습니다(처음 유입을 덮어씁니다).
 - 새 값이 필요하면 이 표부터 고칩니다. 같은 뜻을 다른 철자로 쓰면(`yt`·`youtube`) PostHog에서 따로 셉니다.
 
@@ -166,7 +166,24 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 | 채널 | 자리 | 링크 | 건 날 | 담당 | 상태 |
 |---|---|---|---|---|---|
 | (예) 치지직 | 채널 소개 | `https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10` | — | — | 예정 |
-| 메일 | 스트리머 제안 메일 본문(시안 A·B·C) | `https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a` (시안에 따라 `draft_b`·`draft_c`) | — | — | 예정 |
+| 메일 | 스트리머 제안 메일 본문(시안 A·B·C) | `https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a&r=<수신 코드>` (시안에 따라 `draft_b`·`draft_c`) | — | — | 예정 |
+
+### 메일 수신 코드 (POK-600)
+
+안내 메일의 링크에는 꼬리표 뒤에 **수신 코드** `r`이 하나 더 붙습니다. 어느 메일의 링크가 열렸는지 보려는 것이고, 위 「사람을 알아볼 수 있는 값은 넣지 않는다」의 하나뿐인 예외입니다(2026-11-18 결정).
+
+```text
+https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a&r=k3f7x2ab
+```
+
+- **코드는 이름이 아닙니다.** 영문 소문자와 2~7로 된 8글자이고, 보내는 쪽 도구가 받는 주소와 그 컴퓨터에만 있는 비밀 값으로 만듭니다(HMAC-SHA256의 앞 40비트). 코드만으로는 누구인지 되짚을 수 없고, 코드와 사람의 짝은 보낸 사람의 컴퓨터에만 있습니다. **스트리머 이름·채널명·이메일은 여전히 주소에 넣지 않습니다.**
+- `analytics.js`가 이 꼴(`/^[a-z2-7]{8}$/`)일 때만 읽어 `outreach_link_opened` 이벤트의 `outreach_code` 속성으로 한 번 보냅니다. 꼴이 다르면 버립니다. 주소의 쿼리는 지금처럼 보내기 전에 떼므로 다른 이벤트의 주소 속성에는 실리지 않습니다.
+- 읽은 뒤에는 주소창에서 `r`을 지웁니다. 주소를 복사해 남에게 건네도 그 방문이 같은 코드로 적히지 않습니다. 메일을 통째로 전달한 경우는 막지 못하니, 한 코드의 방문이 꼭 그 사람이라고 단정하지 않습니다.
+- 대시보드(app.pokeclip.com)는 이 값을 읽지 않습니다. 가입까지 이어졌는지는 PostHog가 같은 방문자로 이어 봅니다.
+- 시험 발송의 코드는 `testtest`입니다. 볼 때 뺍니다.
+- 브라우저 추적 금지와 「이용 분석 참여」 끔은 이 이벤트에도 그대로 적용됩니다.
+- PostHog에서는 `outreach_link_opened`를 `outreach_code`로 나눠 봅니다(화면은 아직 만들지 않았습니다).
+- **처리방침 2절이 이 수집을 적습니다.** 꼴·이벤트 이름·하는 일을 바꾸면 처리방침과 `scripts/check-legal.mjs`를 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
