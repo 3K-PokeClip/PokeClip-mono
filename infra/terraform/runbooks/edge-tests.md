@@ -837,6 +837,12 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
     *   apply 직후 목록 gzip 변형의 첫 요청은 엣지 · Origin Shield 에서
         MISS 라 S3 GET 과 지연이 잠깐 늘 수 있습니다. 캐시 키에 인코딩이
         들어가 새로 생긴 변형을 처음 채우는 것이고 회귀가 아닙니다.
+    *   되돌릴 때는 그 PR 의 머지 커밋을 revert 하고 prod/edge apply 를
+        합니다(하한을 켠 뒤면 같은 `-var` · 함수 연결 「제거」 없음 확인).
+        배포는 원래 동작 일곱으로 돌아가지만, 단계 권한(O7f)에
+        `DeleteCachePolicy` 가 없어 `dvr_vod_playlist` 삭제는 거부됩니다.
+        남은 정책은 어느 동작에도 붙지 않아 시청자에게 영향이 없고, 지우려면
+        권한을 더하는 PR 이 따로 필요합니다.
     *   T13 의 clip 쿠키로 1KB 넘는 `/dvr/…/index.m3u8` 를
         `-H 'Accept-Encoding: gzip' -o /dev/null -D -` 로 받아
         `content-encoding: gzip` 이 있는지 봅니다. 같은 머리로 받은 조각
@@ -2142,6 +2148,8 @@ find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pokeclip-dvr.*' | wc -l |
 
 ```shell
 # 기대: update module.media.aws_cloudfront_distribution.this 한 줄
+# (POK-601 머지 뒤 그 edge apply 전이면 create module.media.
+#  aws_cloudfront_cache_policy.dvr_vod_playlist 가 더해진 두 줄)
 edge_plan false dvr-off
 ```
 
@@ -2173,10 +2181,15 @@ apply 가 끝나면(Deployed) 두 가지로 확인합니다. 둘 다 하한 값 
       tee -a "${evidence}/dvr-off.txt"
     ```
 
-    통과 줄은 `behaviors=2 dvr_floor=0` 입니다. `behaviors` 가 2 가 아니면
-    비헤이비어를 다 찾지 못한 것이라 확인 무효이고 kty 에게 보고합니다.
-    단 POK-601 의 edge apply 전 배포에서는 `/dvr` 동작이 `/dvr/*` 하나라
-    `behaviors=1 dvr_floor=0` 이 통과 줄이고, 그때는 그것이 정상입니다.
+    통과 줄은 배포 시점마다 하나입니다.
+
+    *   POK-601 의 edge apply 뒤(`/dvr/*.m3u8` · `/dvr/*` 둘):
+        `behaviors=2 dvr_floor=0`.
+    *   그 apply 전(`/dvr/*` 하나): `behaviors=1 dvr_floor=0`.
+
+    배포가 어느 시점인지는 `/dvr/*.m3u8` 동작이 있는지로 가립니다. 그
+    시점의 통과 줄과 `behaviors` 가 다르면 비헤이비어를 다 찾지 못한
+    것이라 확인 무효이고 kty 에게 보고합니다.
     `dvr_floor` 가 0 이 아니면 떼어지지 않은 것입니다.
 
 1.  **표지 요청**: 함수가 실제로 요청을 받지 않는지 봅니다. 경로에 `.`
