@@ -139,7 +139,7 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
   ```bash
   curl -sL https://cdn.jsdelivr.net/npm/posthog-js@<판>/dist/array.js | openssl dgst -sha384 -binary | openssl base64 -A
   ```
-- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 우리 주소가 아닌 유입 주소는 origin만 남깁니다(방송 채널·영상 주소의 경로에 채널 ID·영상 ID가 실려서). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남는데, 아래 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 `other`로 바꿉니다. `utm_term`과 광고 클릭 식별자(`gclid`·`fbclid` 등)는 지웁니다. 표에 값을 더하면 `analytics.js`와 대시보드 `web/src/lib/analytics/scrub.ts`의 허용 목록도 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
+- 자동 수집·녹화는 끄고, 주소의 쿼리·해시는 보내기 전에 뗍니다(`before_send`). 우리 주소가 아닌 유입 주소는 origin만 남깁니다(방송 채널·영상 주소의 경로에 채널 ID·영상 ID가 실려서). 홍보 링크의 `utm_*`는 SDK가 먼저 따로 뽑아 두므로 남는데, 아래 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 `other`로 바꿉니다. `utm_term`과 광고 클릭 식별자(`gclid`·`fbclid` 등)는 지웁니다. 쿼리에서 따로 읽는 값은 안내 메일의 수신 코드 `r` 하나뿐이고, 꼴이 맞을 때만 이벤트 속성으로 보냅니다(아래 「메일 수신 코드」). 표에 값을 더하면 `analytics.js`와 대시보드 `web/src/lib/analytics/scrub.ts`의 허용 목록도 함께 고칩니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
 - **설정을 바꾸면 처리방침 2·3·4·6·7·9·13절을 먼저 고칩니다.** 처리방침이 실제 동작과 다르면 위반입니다(아래 「문서 쓰는 원칙」). `scripts/check-legal.mjs`가 그 절들의 PostHog 문장을 검사합니다.
 
 ## 홍보 링크와 UTM (POK-359)
@@ -148,16 +148,16 @@ ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔�
 
 | 꼬리표 | 값(영문 소문자 snake_case만) | 뜻 |
 |---|---|---|
-| `utm_source` | `youtube` · `chzzk` · `soop` · `discord` · `kakao` · `x` · `naver` · `instagram` | 어디서 왔나(플랫폼·서비스) |
+| `utm_source` | `youtube` · `chzzk` · `soop` · `discord` · `kakao` · `x` · `naver` · `instagram` · `email`(메일) | 어디서 왔나(플랫폼·서비스) |
 | `utm_medium` | `video_description`(영상 설명) · `profile`(채널·프로필 소개) · `community`(커뮤니티 글) · `post`(SNS 글) · `dm`(1:1 메시지) · `ad`(광고) | 그 안의 어떤 자리인가 |
-| `utm_campaign` | `launch_2026_10`(출시). 새 캠페인은 `<yyyy>_<mm>_<이름>`으로 지어 **이 표와 두 허용 목록에 먼저 더한다** | 어떤 홍보 묶음인가 |
-| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`(새 값은 표와 두 허용 목록에 먼저 더한다) | 같은 자리 안의 구분 |
+| `utm_campaign` | `launch_2026_10`(출시) · `<yyyy>_<mm>_streamer_outreach`(스트리머 제안 메일, 예: `2026_11_streamer_outreach` — 날짜만 바뀌는 꼴이라 **새 달 메일은 표·허용 목록을 고치지 않고 배포 없이 쓴다**). 그 밖의 새 캠페인은 `<yyyy>_<mm>_<이름>`으로 지어 **이 표와 두 허용 목록에 먼저 더한다** | 어떤 홍보 묶음인가 |
+| `utm_content` | 선택. 같은 자리에 링크가 여럿일 때 `pinned_comment`·`banner`, 메일 시안을 가를 때 `draft_a`~`draft_z`(`draft_` 뒤 영문 소문자 한 글자 — 새 시안도 배포 없이 쓴다). 그 밖의 새 값은 표와 두 허용 목록에 먼저 더한다 | 같은 자리 안의 구분 |
 
 ```text
 https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10
 ```
 
-- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다. 표 밖의 값은 보내기 전에 `other`로 바뀌어(네 칸 모두 모양이 아니라 **표에 적은 값 목록**과 맞춘다), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
+- **사람을 알아볼 수 있는 값은 넣지 않습니다** — 스트리머 이름·채널명·이메일·받는 사람 ID 대신 위 고정값만 씁니다(예외는 아래 「메일 수신 코드」 하나입니다). 표 밖의 값은 보내기 전에 `other`로 바뀌어(네 칸 모두 모양이 아니라 **표에 적은 값 목록**과 맞춘다. 예외는 안내 메일의 캠페인·시안 두 꼴뿐이다 — 바뀌는 자리가 날짜 숫자와 글자 한 개라 이름·아이디가 들어갈 틈이 없다), 실수로 넣은 값도 저장되지 않습니다. 새 출처·자리가 필요하면 이 표와 두 허용 목록(`analytics.js`·`scrub.ts`)을 함께 고친 뒤 링크를 돌립니다.
 - 홍보 링크는 **랜딩**(`https://pokeclip.com/`)을 가리킵니다. 대시보드로 바로 보내면 랜딩 → 시작 버튼 단계가 빠집니다. 랜딩 안의 시작 버튼 링크에는 꼬리표를 붙이지 않습니다(처음 유입을 덮어씁니다).
 - 새 값이 필요하면 이 표부터 고칩니다. 같은 뜻을 다른 철자로 쓰면(`yt`·`youtube`) PostHog에서 따로 셉니다.
 
@@ -166,10 +166,34 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 | 채널 | 자리 | 링크 | 건 날 | 담당 | 상태 |
 |---|---|---|---|---|---|
 | (예) 치지직 | 채널 소개 | `https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_2026_10` | — | — | 예정 |
+| 메일 | 스트리머 제안 메일 본문(시안 A·B·C) | `https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a&r=<수신 코드>` (시안에 따라 `draft_b`·`draft_c`) | — | — | 예정 |
+
+### 메일 수신 코드 (POK-600)
+
+안내 메일의 링크에는 꼬리표 뒤에 **수신 코드** `r`이 하나 더 붙고, 메일 끝에는 같은 코드를 실은 **열람 표시 그림**(1×1)이 들어갑니다. 어느 메일이 열렸고 어느 메일의 링크가 눌렸는지 보려는 것이고, 위 「사람을 알아볼 수 있는 값은 넣지 않는다」의 하나뿐인 예외입니다(2026-11-18 결정).
+
+```text
+https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a&r=k3f7x2ab
+```
+
+- **코드는 이름이 아닙니다.** 영문 소문자와 2~7로 된 8글자이고, 보내는 쪽 도구가 받는 주소와 그 컴퓨터에만 있는 비밀 값으로 만듭니다(HMAC-SHA256의 앞 40비트). 코드만으로는 누구인지 되짚을 수 없고, 코드와 사람의 짝은 보낸 사람의 컴퓨터에만 있습니다. **스트리머 이름·채널명·이메일은 여전히 주소에 넣지 않습니다.**
+- `analytics.js`가 이 꼴(`/^[a-z2-7]{8}$/`)이고 **메일 링크 꼬리표가 함께 있을 때만**(`utm_source=email`, `utm_campaign`이 위 표·허용 목록에 있는 값) 읽어 `outreach_link_opened` 이벤트의 `outreach_code` 속성으로 한 번 보냅니다. 꼴이 다르거나 꼬리표가 없으면 버립니다(꼴만 보면 `gamerkim` 같은 8글자 아이디도 통과해서). 새 달 메일(`<yyyy>_<mm>_streamer_outreach`)은 배포 없이 수신 코드도 함께 읽습니다. 이름이 다른 메일 캠페인은 위 표와 두 허용 목록에 더해 배포합니다. 주소의 쿼리는 지금처럼 보내기 전에 떼므로 다른 이벤트의 주소 속성에는 실리지 않습니다.
+- 읽은 뒤에는 주소창에서 `r`을 지웁니다. 주소를 복사해 남에게 건네도 그 방문이 같은 코드로 적히지 않습니다. 메일을 통째로 전달한 경우는 막지 못하니, 한 코드의 방문이 꼭 그 사람이라고 단정하지 않습니다.
+- 대시보드(app.pokeclip.com)는 이 값을 읽지 않습니다. 가입까지 이어졌는지는 PostHog가 같은 방문자로 이어 봅니다.
+- 시험 발송의 코드는 `testtest`입니다. 볼 때 뺍니다.
+- 브라우저 추적 금지와 「이용 분석 참여」 끔은 `outreach_link_opened`에도 그대로 적용됩니다.
+- **열람 표시 그림**은 PostHog의 추적 픽셀 소스(데이터 파이프라인 → 소스 「Outreach email open pixel」, 2026-11-18에 만듦)를 가리킵니다. 받는 사람의 메일 프로그램이 그림을 불러오면 `outreach_email_opened` 이벤트가 적힙니다.
+  - 주소에는 수신 코드(`r`)·시안(`v`, `draft_a` 꼴)·캠페인(`c`)만 싣습니다. 소스의 코드(Hog)가 `r`이 위 꼴일 때만 적고, 꼴이 다르면 그림만 돌려줍니다(이름·이메일을 넣어 불러 봐도 적히지 않는 것을 2026-11-18에 확인).
+  - 속성은 `outreach_code`·`outreach_draft`·`outreach_campaign`뿐입니다. 접속 IP는 적히지 않고(실측: `$ip`가 `127.0.0.1`, 국가 없음), 사람 프로필을 만들지 않습니다(`$process_person_profile: false`).
+  - **SDK를 거치지 않습니다.** `before_send`도, 브라우저 추적 금지·「이용 분석 참여」도 닿지 않습니다. 받는 사람이 막는 방법은 메일 프로그램의 그림 차단뿐입니다.
+  - 정확하지 않습니다. 그림을 막아 둔 메일 프로그램에서는 읽어도 안 적히고, 그림을 미리 받아 두는 메일 앱(Apple Mail 등)에서는 안 읽어도 적힙니다. 답장에 인용된 원문을 우리가 열어도 적힙니다. 사람별 사실이 아니라 참고 값으로 봅니다.
+  - 소스의 코드를 바꾸면(적는 속성·꼴) 이 절을 함께 고칩니다. 소스는 저장소 밖(PostHog 콘솔)에 있어 시험이 지키지 못합니다.
+- PostHog에서는 대시보드 「안내 메일 반응」에서 봅니다(2026-11-18에 만듦, 정의는 아래 「PostHog 화면」 표).
+- **처리방침 2절이 링크로 들어온 방문의 수신 코드 수집을 적습니다.** 꼴·이벤트 이름·하는 일을 바꾸면 처리방침과 `scripts/check-legal.mjs`를 함께 고칩니다. **열람 표시는 처리방침에 아직 적지 않았습니다** — 적을지와 그 방식은 따로 정합니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
-2026-11-11에 콘솔에 만들었고 링크는 Jira POK-478 댓글에 있습니다(대시보드 6개 · 인사이트 18개, 웹 분석은 기본 제공 화면 그대로). 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
+2026-11-11에 콘솔에 만들었고 링크는 Jira POK-478 댓글에 있습니다(대시보드 6개 · 인사이트 18개, 웹 분석은 기본 제공 화면 그대로). 「안내 메일 반응」은 2026-11-18에 더했습니다(인사이트 8개, POK-600). 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
 
 | 화면 | 정의 |
 |---|---|
@@ -180,6 +204,7 @@ https://pokeclip.com/?utm_source=chzzk&utm_medium=profile&utm_campaign=launch_20
 | 기능 이용 | `broadcast_playback_started`(`mode`), `highlight_marked`·`highlight_card_seeked`, `clip_download_requested`, `pending_feature_clicked`(`feature`별 — 준비 중 기능 수요), `setup_step_clicked`(`step`별) |
 | 주간 재방문 | 시작 `login_completed`(사람별 첫 번째만 — first time), 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
 | 출시 대시보드 | 위 화면들 + `onboarding_tour_started`(`entry`) → `onboarding_tour_finished` 결과 분포 + `platform_unlinked`·`editor_invited`·`editor_delegation_ended`(`initiator`) 추이 |
+| 안내 메일 반응 | 메일을 연 사람(`outreach_email_opened`)·링크를 누른 사람(`outreach_link_opened`)·메일에서 온 방문자(`$pageview`, `utm_campaign`이 `<yyyy>_<mm>_streamer_outreach` 꼴 — 새 달 메일도 저절로 들어간다) 수와 날짜별 추이, 시안별 비교(`outreach_draft`·`utm_content`), 메일 방문 → `landing_cta_clicked` → `login_completed` 퍼널(사람 기준·순서대로·전환 기간 14일), 수신 코드별 표(처음 연 시각·처음 누른 시각). 사람 수는 고유 수로 세고 시험 코드 `testtest`는 뺀다. **발송 수는 PostHog에 없다** — 열람률·클릭률의 분모는 발송 명단 시트로 본다. 열람은 참고 값이다(「메일 수신 코드」) |
 
 대시보드 설명에 그대로 적어 둡니다.
 
