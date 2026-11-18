@@ -1,6 +1,9 @@
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PluginSettingsScreen } from '@/features/settings/plugin/PluginSettingsScreen';
+import {
+  GUIDE_DECIDE_WAIT_MS,
+  PluginSettingsScreen,
+} from '@/features/settings/plugin/PluginSettingsScreen';
 import { PLUGIN_DOWNLOADS } from '@/lib/pluginDownload';
 import { useAuthStore } from '@/stores/auth';
 import { useOnboardingStore } from '@/stores/onboarding';
@@ -67,6 +70,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('PluginSettingsScreen', () => {
@@ -79,7 +83,11 @@ describe('PluginSettingsScreen', () => {
     expect(document.body).not.toHaveTextContent(/연결됨|연결 안 됨/);
     expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
+    // 다운로드 자리는 상태를 읽은 뒤에 선다 — 코드를 받은 적 있는 회원은 맨 아래 배너다
+    expect(await screen.findByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: /먼저 OBS 플러그인을 설치/ }),
+    ).not.toBeInTheDocument();
     // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
     expect(
       await screen.findByText(new RegExp(`최초 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
@@ -320,7 +328,7 @@ describe('PluginSettingsScreen', () => {
     stubStreamKeyFetch();
     renderWithProviders(<PluginSettingsScreen />);
 
-    fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
+    fireEvent.click(await screen.findByRole('button', { name: '플러그인 다운로드' }));
 
     const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
     expect(dialog).toBeInTheDocument();
@@ -331,5 +339,98 @@ describe('PluginSettingsScreen', () => {
       PLUGIN_DOWNLOADS.windows.url,
     );
     expect(document.body).not.toHaveTextContent(/설치됨|연결됨/);
+  });
+
+  it('다운로드 창을 열면 연 것만 한 번 센다 — 받기는 창 안 링크를 눌러야 따로 센다', async () => {
+    stubStreamKeyFetch();
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '플러그인 다운로드' }));
+    await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+
+    expect(track.mock.calls).toEqual([['plugin_download_opened', { from: 'banner' }]]);
+  });
+
+  it('코드를 받은 적 없으면 맨 위 설치 안내가 배너를 대신하고, 첫 코드를 받아도 이 화면에선 남는다 (시안 C)', async () => {
+    stubStreamKeyFetch({ issued: false });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    const guide = await screen.findByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' });
+    // 맨 위다 — 코드 카드보다 앞에 온다
+    const codeCard = screen.getByRole('region', { name: '연동 코드' });
+    expect(guide.compareDocumentPosition(codeCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 다운로드 버튼은 안내 안의 하나뿐 — 맨 아래 배너는 없다
+    expect(screen.getAllByRole('button', { name: '플러그인 다운로드' })).toHaveLength(1);
+    expect(screen.queryByText(/다른 PC에 설치하나요/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
+    await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+    expect(track.mock.calls).toEqual([['plugin_download_opened', { from: 'guide' }]]);
+    fireEvent.click(screen.getByRole('button', { name: '닫기' }));
+
+    // 첫 코드를 받아 발급됨으로 바뀌어도 안내는 그대로 맨 위에 남는다
+    fireEvent.click(screen.getByRole('button', { name: '코드 발급' }));
+    fireEvent.click(await screen.findByRole('button', { name: '확인했어요' }));
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/다른 PC에 설치하나요/)).not.toBeInTheDocument();
+  });
+
+  it('상태를 읽는 동안은 다운로드 자리를 비워 둔다 — 배너가 맨 아래에서 맨 위로 튀지 않는다', () => {
+    stubStreamKeyFetch({ issued: false });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    expect(screen.queryByRole('button', { name: '플러그인 다운로드' })).not.toBeInTheDocument();
+  });
+
+  it('읽기가 오래 걸리면 배너부터 세우고, 늦게 온 「받은 적 없음」에도 안내로 바꾸지 않는다 (PR #538 리뷰)', async () => {
+    // 가짜 타이머는 렌더 전에 — 시간은 흐르게 두어 findBy*의 대기도 돈다
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answer: (res: Response) => void = () => {};
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
+        return new Promise<Response>((resolve) => (answer = resolve));
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+    expect(screen.queryByRole('button', { name: '플러그인 다운로드' })).not.toBeInTheDocument();
+
+    // 서버가 답하지 않아도 정해진 시간이 지나면 다운로드 창으로 갈 길이 선다
+    await act(async () => {
+      vi.advanceTimersByTime(GUIDE_DECIDE_WAIT_MS);
+    });
+    expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
+
+    await act(async () => answer(jsonResponse(200, { issued: false })));
+    expect(await screen.findByRole('button', { name: '코드 발급' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
+  });
+
+  it('첫 조회가 실패하면 배너로 정하고, 다시 시도로 「받은 적 없음」을 읽어도 안내로 튀지 않는다 (PR #538 리뷰)', async () => {
+    let statusCalls = 0;
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET') {
+        statusCalls += 1;
+        return statusCalls === 1
+          ? jsonResponse(500, { reason: '서버 오류' })
+          : jsonResponse(200, { issued: false });
+      }
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '다시 시도' }));
+
+    // 누른 자리 위로 안내가 끼어들면 코드 카드가 밀린다 — 배너 그대로 둔다
+    expect(await screen.findByRole('button', { name: '코드 발급' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: '먼저 OBS 플러그인을 설치하세요' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
   });
 });

@@ -118,6 +118,34 @@
   color: var(--pc-color-text-secondary);
 }
 
+/* ---------- 처음 설치 안내 (코드를 받은 적 없는 회원만 맨 위, 2026-11-18 시안 C) ---------- */
+.installGuide {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-accent-subtle);
+}
+
+.installGuideBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.installGuideTitle {
+  margin: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+.installGuideText {
+  margin: calc(3 * var(--pc-u)) 0 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
 /* ---------- 다운로드 창 (POK-379) ---------- */
 
 /* DS 기본 폭 480 — OS 고르기와 설치 세 단계가 한 화면에 들어간다 */
@@ -291,6 +319,12 @@
   display: flex;
   justify-content: flex-end;
   gap: calc(10 * var(--pc-u));
+}
+
+/* 오디오 트랙 카드의 저장 줄 — 위가 입력 칸이라 여백을 직접 준다(설명 → 칸 간격 14와 같게).
+   발급 창은 위 문단의 아래 여백(22)이 간격을 잡으므로 .confirmActions 자체에는 두지 않는다 */
+.trackActions {
+  margin-top: calc(14 * var(--pc-u));
 }
 
 /* ---------- 발급 직후 코드 모달 (디자인 1m ③, POK-103) ---------- */
