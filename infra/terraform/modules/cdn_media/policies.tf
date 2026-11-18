@@ -3,7 +3,8 @@
 # 캐시 정책은 사용자 정의만 쓴다 — 관리형 UseOriginCacheControlHeaders 계열은
 # 쿠키 전부를 키에 넣어 서명 쿠키가 시청자마다 키를 쪼갠다(guard R8). 어느
 # 정책도 쿠키 · 헤더를 키에 넣지 않는다. 원본에 넘길 헤더 · 쿼리는 원본 요청
-# 정책이 정한다.
+# 정책이 정한다. 목록 정책(dvr_vod_playlist)만 정규화한 Accept-Encoding(gzip)
+# 을 키에 넣는다.
 
 # 캐시 끔(관리형 CachingDisabled 와 같은 뜻) — /api/ingest · /playback · 기본.
 resource "aws_cloudfront_cache_policy" "no_cache" {
@@ -88,6 +89,34 @@ resource "aws_cloudfront_cache_policy" "dvr_vod" {
   max_ttl     = var.dvr_vod_ttl.max
 
   parameters_in_cache_key_and_forwarded_to_origin {
+    cookies_config {
+      cookie_behavior = "none"
+    }
+
+    headers_config {
+      header_behavior = "none"
+    }
+
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+  }
+}
+
+# 되감기 · VOD 목록(/dvr/*.m3u8 · /vod/*.m3u8) — dvr_vod 와 TTL 이 같고 gzip
+# 만 허용한다(HLS 저작 규격 10.1). brotli 도 허용하면 CloudFront 가 brotli 를
+# 고른다. 압축은 동작의 compress 와 함께 켜야 일어난다.
+resource "aws_cloudfront_cache_policy" "dvr_vod_playlist" {
+  name        = "${local.name_prefix}-media-dvr-vod-playlist"
+  comment     = "media: /dvr/*.m3u8 and /vod/*.m3u8 gzip from the rewind bucket"
+  min_ttl     = var.dvr_vod_ttl.min
+  default_ttl = var.dvr_vod_ttl.default
+  max_ttl     = var.dvr_vod_ttl.max
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = false
+
     cookies_config {
       cookie_behavior = "none"
     }

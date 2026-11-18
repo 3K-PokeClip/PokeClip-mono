@@ -37,16 +37,26 @@ output "function_names" {
   }
 }
 
-# 배포의 /dvr/* 비헤이비어에서 읽는다 — 호출 루트 시험이 스위치가 전달됐는지
-# 본다(루트 시험은 모듈 안 자원을 주소로 볼 수 없다).
+# 배포의 /dvr 비헤이비어 전부(/dvr/ 로 시작하는 것 — 지금은 /dvr/*.m3u8 ·
+# /dvr/* 둘)에서 읽는다 — 호출 루트 시험이 스위치가 전달됐는지 본다(루트
+# 시험은 모듈 안 자원을 주소로 볼 수 없다). 하나라도 빠지면 거짓이다.
 output "dvr_floor_attached" {
-  description = "/dvr/* 비헤이비어에 dvr-floor 가 viewer-request 로 붙었는가(스위치 dvr_floor_enabled 의 결과)."
-  value = anytrue([
-    for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : anytrue([
+  description = "/dvr 비헤이비어 전부(/dvr/*.m3u8 · /dvr/*)에 dvr-floor 가 viewer-request 로 붙었는가(스위치 dvr_floor_enabled 의 결과). 하나라도 빠지면 false."
+  value = (
+    length(local.dvr_floor_attached_by_path) > 0 &&
+    alltrue(values(local.dvr_floor_attached_by_path))
+  )
+}
+
+locals {
+  # 경로 패턴 → 그 /dvr 비헤이비어에 dvr-floor 가 viewer-request 로 붙었는가.
+  dvr_floor_attached_by_path = {
+    for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior :
+    behavior.path_pattern => anytrue([
       for association in behavior.function_association :
       association.event_type == "viewer-request" && association.function_arn == aws_cloudfront_function.dvr_floor.arn
-    ]) if behavior.path_pattern == "/dvr/*"
-  ])
+    ]) if startswith(behavior.path_pattern, "/dvr/")
+  }
 }
 
 output "dvr_floor_log_markers" {

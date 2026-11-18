@@ -1,9 +1,9 @@
 # media 배포 모듈(설계 3-3 의 cdn_media · 계획 M10 c5)을 mock provider 로
-# 단언한다 — 비헤이비어 표(기본 + 일곱, 우선순위 순) · 정책(캐시 · 원본 요청 ·
+# 단언한다 — 비헤이비어 표(기본 + 아홉, 우선순위 순) · 정책(캐시 · 원본 요청 ·
 # 응답 헤더) · 오리진 둘(VPC origin 내부 ALB · rewind 버킷 OAC) · 함수 셋과
 # KVS · 키 그룹 · 오류 캐싱 · 표준 로그 v2 전달 · 출력. /dvr 하한 함수
 # dvr-floor(POK-525)는 늘 게시하고, 스위치 dvr_floor_enabled 가 참일 때만
-# /dvr/* 에 붙는다.
+# /dvr 비헤이비어 둘(/dvr/*.m3u8 · /dvr/*)에 붙는다.
 # 정책 · 함수 · 키 그룹 · 오리진 id 는 override_resource 로 고정해 비헤이비어가
 # 가리키는 값과 비교한다. 이름 · ARN · 계정 ID(111122223333)는 가짜 값이다.
 
@@ -31,6 +31,12 @@ override_resource {
   target          = aws_cloudfront_cache_policy.dvr_vod
   override_during = plan
   values          = { id = "cp-dvr-vod" }
+}
+
+override_resource {
+  target          = aws_cloudfront_cache_policy.dvr_vod_playlist
+  override_during = plan
+  values          = { id = "cp-dvr-vod-playlist" }
 }
 
 override_resource {
@@ -145,18 +151,20 @@ run "orders_behaviors_with_live_playlist_before_live" {
       "/api/ingest/*",
       "/live/*.m3u8",
       "/live/*",
+      "/dvr/*.m3u8",
       "/dvr/*",
+      "/vod/*.m3u8",
       "/vod/*",
       "/api/streams/*/rewind",
       "/playback/*",
     ]
-    error_message = "비헤이비어 경로 · 순서가 계획 c5 표(/live/*.m3u8 이 /live/* 앞)와 다르다."
+    error_message = "비헤이비어 경로 · 순서가 계획 c5 표(/live/*.m3u8 이 /live/* 앞)와 목록 동작(/dvr/*.m3u8 · /vod/*.m3u8 이 짝 앞)과 다르다."
   }
 
   assert {
     condition = [
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : behavior.target_origin_id
-    ] == ["media-alb", "media-alb", "media-alb", "rewind-s3", "rewind-s3", "media-alb", "media-alb"]
+    ] == ["media-alb", "media-alb", "media-alb", "rewind-s3", "rewind-s3", "rewind-s3", "rewind-s3", "media-alb", "media-alb"]
     error_message = "비헤이비어 원본이 계획 c5 표(/dvr · /vod 만 rewind-s3)와 다르다."
   }
 
@@ -176,7 +184,7 @@ run "requires_signed_cookies_except_ingest_and_rewind_api" {
     condition = [
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior :
       behavior.trusted_key_groups == null ? "" : join(",", behavior.trusted_key_groups)
-    ] == ["", "kg-example", "kg-example", "kg-example", "kg-example", "", "kg-example"]
+    ] == ["", "kg-example", "kg-example", "kg-example", "kg-example", "kg-example", "kg-example", "", "kg-example"]
     error_message = "서명 쿠키(키 그룹)를 요구하는 비헤이비어가 계획 c5 표와 다르다."
   }
 
@@ -201,6 +209,14 @@ run "attaches_live_auth_to_live_and_deny_default_to_default" {
   }
 
   assert {
+    condition = local.dvr_floor_attached_by_path == {
+      "/dvr/*.m3u8" = false
+      "/dvr/*"      = false
+    }
+    error_message = "끔인데 dvr_floor_attached 가 기대는 동작별 맵이 /dvr/*.m3u8 · /dvr/* 둘 다 안 붙음(false)이 아니다."
+  }
+
+  assert {
     condition = [
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : [
         for association in behavior.function_association : "${association.event_type} ${association.function_arn}"
@@ -209,6 +225,8 @@ run "attaches_live_auth_to_live_and_deny_default_to_default" {
       [],
       ["viewer-request arn:aws:cloudfront::111122223333:function/example-live-auth"],
       ["viewer-request arn:aws:cloudfront::111122223333:function/example-live-auth"],
+      [],
+      [],
       [],
       [],
       [],
@@ -226,7 +244,8 @@ run "attaches_live_auth_to_live_and_deny_default_to_default" {
   }
 }
 
-# 스위치를 켜면 /dvr/* 에만 dvr-floor 가 붙고 나머지는 끔과 같다.
+# 스위치를 켜면 /dvr 비헤이비어 둘(/dvr/*.m3u8 · /dvr/*)에만 dvr-floor 가
+# 붙고 나머지는 끔과 같다 — 목록도 조각처럼 경로 조작 표지 검사를 지난다.
 run "attaches_dvr_floor_to_dvr_only_when_enabled" {
   command = plan
 
@@ -244,11 +263,13 @@ run "attaches_dvr_floor_to_dvr_only_when_enabled" {
       ["viewer-request arn:aws:cloudfront::111122223333:function/example-live-auth"],
       ["viewer-request arn:aws:cloudfront::111122223333:function/example-live-auth"],
       ["viewer-request arn:aws:cloudfront::111122223333:function/example-dvr-floor"],
+      ["viewer-request arn:aws:cloudfront::111122223333:function/example-dvr-floor"],
+      [],
       [],
       [],
       [],
     ]
-    error_message = "켬인데 dvr-floor 가 /dvr/* 에만 viewer-request 하나로 붙지 않았거나 다른 비헤이비어가 바뀌었다."
+    error_message = "켬인데 dvr-floor 가 /dvr/*.m3u8 · /dvr/* 에만 viewer-request 하나로 붙지 않았거나 다른 비헤이비어가 바뀌었다."
   }
 
   assert {
@@ -262,6 +283,17 @@ run "attaches_dvr_floor_to_dvr_only_when_enabled" {
   assert {
     condition     = output.dvr_floor_attached == true
     error_message = "켬인데 dvr_floor_attached 출력이 true 가 아니다."
+  }
+
+  # 출력은 /dvr/ 로 시작하는 동작 전부를 보고, 하나라도 빠지면 거짓이다. 두
+  # 동작이 같은 함수 표를 써 한쪽만 붙은 꼴은 만들 수 없으므로(override 는
+  # 구성 값을 덮지 못한다), 출력이 기대는 동작별 맵이 둘을 모두 담는지 본다.
+  assert {
+    condition = local.dvr_floor_attached_by_path == {
+      "/dvr/*.m3u8" = true
+      "/dvr/*"      = true
+    }
+    error_message = "dvr_floor_attached 가 기대는 동작별 맵이 /dvr/*.m3u8 · /dvr/* 둘 다 붙음(true)이 아니다(출력이 /dvr 동작 하나만 본다)."
   }
 
   assert {
@@ -279,15 +311,15 @@ run "uses_policy_per_behavior_table" {
   assert {
     condition = [
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : behavior.cache_policy_id
-    ] == ["cp-no-cache", "cp-live-playlist", "cp-live-segment", "cp-dvr-vod", "cp-dvr-vod", "cp-rewind-api", "cp-no-cache"]
-    error_message = "비헤이비어 캐시 정책이 계획 c5 표와 다르다."
+    ] == ["cp-no-cache", "cp-live-playlist", "cp-live-segment", "cp-dvr-vod-playlist", "cp-dvr-vod", "cp-dvr-vod-playlist", "cp-dvr-vod", "cp-rewind-api", "cp-no-cache"]
+    error_message = "비헤이비어 캐시 정책이 계획 c5 표(/dvr · /vod 목록은 dvr_vod_playlist)와 다르다."
   }
 
   assert {
     condition = [
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior :
       behavior.origin_request_policy_id == null ? "-" : behavior.origin_request_policy_id
-    ] == ["orp-host-authorization", "orp-host-authorization", "orp-host-authorization", "-", "-", "orp-host", "orp-playback"]
+    ] == ["orp-host-authorization", "orp-host-authorization", "orp-host-authorization", "-", "-", "-", "-", "orp-host", "orp-playback"]
     error_message = "비헤이비어 원본 요청 정책이 계획 c5 표(/dvr · /vod 는 없음 — Authorization 미전달)와 다르다."
   }
 
@@ -295,7 +327,7 @@ run "uses_policy_per_behavior_table" {
     condition = [
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior :
       behavior.response_headers_policy_id == null ? "-" : behavior.response_headers_policy_id
-    ] == ["-", "rhp-media-cors", "rhp-media-cors", "rhp-media-cors", "rhp-media-cors", "rhp-rewind-cors", "rhp-media-cors"]
+    ] == ["-", "rhp-media-cors", "rhp-media-cors", "rhp-media-cors", "rhp-media-cors", "rhp-media-cors", "rhp-media-cors", "rhp-rewind-cors", "rhp-media-cors"]
     error_message = "비헤이비어 응답 헤더 정책이 계획 c5 표(/api/ingest 는 없음)와 다르다."
   }
 
@@ -317,6 +349,8 @@ run "allows_post_only_on_ingest" {
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : behavior.allowed_methods
       ] == [
       toset(["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]),
+      toset(["GET", "HEAD", "OPTIONS"]),
+      toset(["GET", "HEAD", "OPTIONS"]),
       toset(["GET", "HEAD", "OPTIONS"]),
       toset(["GET", "HEAD", "OPTIONS"]),
       toset(["GET", "HEAD", "OPTIONS"]),
@@ -368,6 +402,7 @@ run "uses_no_cookie_or_header_in_any_cache_key" {
         aws_cloudfront_cache_policy.live_playlist,
         aws_cloudfront_cache_policy.live_segment,
         aws_cloudfront_cache_policy.dvr_vod,
+        aws_cloudfront_cache_policy.dvr_vod_playlist,
         aws_cloudfront_cache_policy.rewind_api,
       ] :
       policy.parameters_in_cache_key_and_forwarded_to_origin[0].cookies_config[0].cookie_behavior == "none" &&
@@ -382,11 +417,53 @@ run "uses_no_cookie_or_header_in_any_cache_key" {
         aws_cloudfront_cache_policy.no_cache,
         aws_cloudfront_cache_policy.live_segment,
         aws_cloudfront_cache_policy.dvr_vod,
+        aws_cloudfront_cache_policy.dvr_vod_playlist,
         aws_cloudfront_cache_policy.rewind_api,
       ] :
       policy.parameters_in_cache_key_and_forwarded_to_origin[0].query_strings_config[0].query_string_behavior == "none"
     ])
     error_message = "/live/*.m3u8 밖의 캐시 정책이 쿼리를 캐시 키에 넣는다."
+  }
+}
+
+# HLS 저작 규격 10.1 — 재생 목록은 gzip 으로 보낸다. CloudFront 는 동작의
+# Compress 와 캐시 정책의 압축 허용이 둘 다 켜져야 압축한다. 되감기 · VOD
+# 목록 동작(/dvr/*.m3u8 · /vod/*.m3u8)만 켜고 gzip 만 허용한다 — brotli 도
+# 허용하면 CloudFront 가 brotli 를 고른다. 조각 동작은 키가 인코딩마다 갈리지
+# 않게 끈다. /live/*.m3u8 은 켜지 않는다(kty 결정 (가)) — 켜도 원본
+# (MediaMTX)이 2KB 넘는 목록을 길이 없이(chunked) 보내 CloudFront 가 압축하지
+# 못하므로, 원본 압축(nginx)은 후속 POK-602 다.
+run "compresses_dvr_vod_playlists_with_gzip_only" {
+  command = plan
+
+  assert {
+    condition = [
+      for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : behavior.compress
+    ] == [false, false, false, true, false, true, false, false, false]
+    error_message = "Compress 가 되감기 · VOD 목록 동작(/dvr/*.m3u8 · /vod/*.m3u8)에만 켜져 있지 않다."
+  }
+
+  assert {
+    condition = (
+      aws_cloudfront_cache_policy.dvr_vod_playlist.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_gzip == true &&
+      aws_cloudfront_cache_policy.dvr_vod_playlist.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_brotli == false
+    )
+    error_message = "목록 캐시 정책(dvr_vod_playlist)이 gzip 만 허용하지 않는다(gzip 꺼짐이거나 brotli 켜짐)."
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in [
+        aws_cloudfront_cache_policy.no_cache,
+        aws_cloudfront_cache_policy.live_playlist,
+        aws_cloudfront_cache_policy.live_segment,
+        aws_cloudfront_cache_policy.dvr_vod,
+        aws_cloudfront_cache_policy.rewind_api,
+      ] :
+      policy.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_gzip != true &&
+      policy.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_brotli != true
+    ])
+    error_message = "목록 정책 밖 캐시 정책이 압축을 허용한다(조각 · 라이브 목록 캐시 키가 인코딩마다 갈린다)."
   }
 }
 
@@ -436,6 +513,15 @@ run "uses_dvr_vod_ttl_variable" {
     ] == [2, 30, 600]
     error_message = "/dvr · /vod 캐시 정책 TTL 이 입력 dvr_vod_ttl 이 아니다."
   }
+
+  assert {
+    condition = [
+      aws_cloudfront_cache_policy.dvr_vod_playlist.min_ttl,
+      aws_cloudfront_cache_policy.dvr_vod_playlist.default_ttl,
+      aws_cloudfront_cache_policy.dvr_vod_playlist.max_ttl,
+    ] == [2, 30, 600]
+    error_message = "/dvr · /vod 목록 캐시 정책 TTL 이 입력 dvr_vod_ttl 이 아니다."
+  }
 }
 
 run "defaults_dvr_vod_ttl_to_conservative_values" {
@@ -448,6 +534,15 @@ run "defaults_dvr_vod_ttl_to_conservative_values" {
       aws_cloudfront_cache_policy.dvr_vod.max_ttl,
     ] == [0, 1, 86400]
     error_message = "dvr_vod_ttl 기본값이 0/1/86400초(kty 19차)가 아니다."
+  }
+
+  assert {
+    condition = [
+      aws_cloudfront_cache_policy.dvr_vod_playlist.min_ttl,
+      aws_cloudfront_cache_policy.dvr_vod_playlist.default_ttl,
+      aws_cloudfront_cache_policy.dvr_vod_playlist.max_ttl,
+    ] == [0, 1, 86400]
+    error_message = "/dvr · /vod 목록 캐시 정책 TTL 이 dvr_vod_ttl 기본값(0/1/86400초)이 아니다."
   }
 }
 
@@ -871,6 +966,7 @@ run "names_resources_with_prod_prefix" {
         aws_cloudfront_cache_policy.live_playlist.name,
         aws_cloudfront_cache_policy.live_segment.name,
         aws_cloudfront_cache_policy.dvr_vod.name,
+        aws_cloudfront_cache_policy.dvr_vod_playlist.name,
         aws_cloudfront_cache_policy.rewind_api.name,
         aws_cloudfront_origin_request_policy.host_authorization.name,
         aws_cloudfront_origin_request_policy.host.name,

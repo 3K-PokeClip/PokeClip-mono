@@ -901,9 +901,9 @@ IP 속도 제한(WAF 후속)이다.
 /dvr 하한은 회차마다 엣지가 그 아래 seq 의 되감기 조각을 막는 값이다 — 방송
 중 시청자가 1시간 DVR 창 밖 조각을 받지 못하게 한다. 사이드카의 **Writer** 가
 그 값을 원장 표 `stream_edge_bounds`(정본)에 올리고 CloudFront KVS 에 사본을
-쓴다. KVS 를 읽어 막는 몫은 media 배포 `/dvr/*` 의 엣지 함수
-`pokeclip-prod-dvr-floor` 다 — prod/edge 스위치 `dvr_floor_enabled` 가 참일
-때만 붙고, 끔이면 KVS 를 읽는 쪽이 없다
+쓴다. KVS 를 읽어 막는 몫은 media 배포 `/dvr/*.m3u8` · `/dvr/*` 둘의 엣지
+함수 `pokeclip-prod-dvr-floor` 다 — prod/edge 스위치 `dvr_floor_enabled` 가
+참일 때만 붙고, 끔이면 KVS 를 읽는 쪽이 없다
 ([prod/edge README](../infra/terraform/prod/edge/README.md) 「/dvr
 하한(POK-525)」). 켜는 env 는 위 `REWIND_EDGE_BOUNDS_KVS_ARN` 이다.
 
