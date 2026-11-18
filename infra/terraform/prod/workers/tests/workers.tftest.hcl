@@ -2,7 +2,8 @@
 # 단언한다 — 이미지 다이제스트 고정 · 크기 · prod 경로, env · 비밀 · 이그레스 ·
 # 작업 역할 문장이 계약(CONTRACT-runtime.md 「일꾼 작업 역할 대상」)과 정확히
 # 같은지, 상대 SG 인그레스 셋, 런타임 계약 검사(terraform_data.runtime_contract)
-# 가 어긋난 앞 루트 출력에서 plan 을 멈추는지.
+# 가 어긋난 앞 루트 출력에서 plan 을 멈추는지. 자동 조절(scaling.tf — POK-605)의
+# 확장 대상 · 정책 · 경보는 파일 끝 run 들이 본다.
 #
 # 앞 루트 상태는 override_data 로 흉내 낸다. 계정 ID 는 가짜 12자리
 # (111122223333)이고, 런타임 출력은 이 루트가 읽는 키만 둔다. 루트 시험은 하위
@@ -44,6 +45,14 @@ mock_provider "aws" {
   mock_resource "aws_ecs_task_definition" {
     defaults = {
       arn = "arn:aws:ecs:ap-northeast-2:111122223333:task-definition/example:1"
+    }
+  }
+
+  # 경보 동작(alarm_actions)이 ARN 꼴을 검사한다. 정책마다 다른 값은 배선 run
+  # 이 override_resource 로 준다.
+  mock_resource "aws_appautoscaling_policy" {
+    defaults = {
+      arn = "arn:aws:autoscaling:ap-northeast-2:111122223333:scalingPolicy:example:resource/ecs/service/pokeclip-prod/example:policyName/example"
     }
   }
 }
@@ -1136,4 +1145,313 @@ run "rejects_unknown_worker_key" {
   }
 
   expect_failures = [var.workers]
+}
+
+# 자동 조절(scaling.tf — POK-605). 일꾼마다 SQS 깨우기 · 재우기 경보 둘이 확장
+# 대상 하나의 정책 둘을 부른다. 아래 run 들은 계획 「쟁점 2」 값 표를 그대로
+# 단언한다. 경보 식의 큐는 일꾼마다 자기가 받는 큐뿐이어야 한다 — 남의 큐가
+# 섞이면 그 일꾼이 남의 일로 깨어 30분 넘게 돈다.
+
+run "scaling_targets_are_zero_to_one_per_worker_service" {
+  command = plan
+
+  assert {
+    condition = {
+      for key, target in aws_appautoscaling_target.worker :
+      key => [target.service_namespace, target.scalable_dimension, target.resource_id, target.min_capacity, target.max_capacity]
+      } == {
+      render = ["ecs", "ecs:service:DesiredCount", "service/pokeclip-prod/pokeclip-prod-render", 0, 1]
+      upload = ["ecs", "ecs:service:DesiredCount", "service/pokeclip-prod/pokeclip-prod-upload", 0, 1]
+    }
+    error_message = "확장 대상이 render · upload 서비스(service/<클러스터>/pokeclip-prod-<키>)마다 원하는 수 0–1 인 둘이 아니다."
+  }
+}
+
+# 일꾼 → 큐 대응이 지역값 하나(scaling_queue_keys)이고, 키 이름은 작업 역할
+# 대상 키(task_resource_keys)와 같은 큐 ARN 키다.
+run "scaling_queue_keys_map_workers_to_their_queues" {
+  command = plan
+
+  assert {
+    condition = local.scaling_queue_keys == {
+      render = ["render_queue_arn", "thumbnail_queue_arn"]
+      upload = ["upload_queue_arn"]
+    }
+    error_message = "scaling_queue_keys 가 render → render · thumbnail 큐, upload → upload 큐가 아니다."
+  }
+}
+
+# 깨우기는 그 일꾼 큐들의 대기(Visible) 합만 본다(계획 쟁점 2 — 0대에서
+# NotVisible 은 신호가 아니다). FILL 은 최신 1분을 영구히 채워 경보를 걸 수
+# 있어 쓰지 않는다(평가 F-12).
+run "wake_alarm_sums_visible_of_own_queues_only" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key, queues in { render = ["pokeclip-prod-jobs-render", "pokeclip-prod-jobs-thumbnail"], upload = ["pokeclip-prod-jobs-upload"] } :
+      toset([
+        for query in aws_cloudwatch_metric_alarm.queue_wake[key].metric_query :
+        "${query.metric[0].namespace} ${query.metric[0].metric_name} ${jsonencode(query.metric[0].dimensions)} ${query.metric[0].stat} ${query.metric[0].period}"
+        if length(query.metric) > 0 && query.return_data != true
+      ]) == toset([for name in queues : "AWS/SQS ApproximateNumberOfMessagesVisible {\"QueueName\":\"${name}\"} Maximum 60"])
+    ])
+    error_message = "깨우기 경보의 지표가 그 일꾼 큐들의 ApproximateNumberOfMessagesVisible(Maximum · 60초)만이 아니다 — 남의 큐 · NotVisible 이 섞였거나 빠졌다."
+  }
+
+  assert {
+    condition = alltrue([
+      for alarm in values(aws_cloudwatch_metric_alarm.queue_wake) :
+      length([for query in alarm.metric_query : query if query.return_data == true]) == 1 &&
+      alltrue([
+        for query in alarm.metric_query : (
+          sort([for term in split("+", query.expression) : trimspace(term)]) ==
+          sort([for other in alarm.metric_query : other.id if length(other.metric) > 0]) &&
+          length(query.metric) == 0
+        ) if query.return_data == true
+      ])
+    ])
+    error_message = "깨우기 경보의 결과 식이 지표 id 들의 단순 합 하나가 아니다(FILL · 다른 함수 금지)."
+  }
+
+  assert {
+    condition = {
+      for key, alarm in aws_cloudwatch_metric_alarm.queue_wake :
+      key => [alarm.alarm_name, alarm.comparison_operator, alarm.threshold, alarm.evaluation_periods, alarm.datapoints_to_alarm, alarm.treat_missing_data]
+      } == {
+      render = ["pokeclip-prod-render-queue-wake", "GreaterThanThreshold", 0, 1, 1, "notBreaching"]
+      upload = ["pokeclip-prod-upload-queue-wake", "GreaterThanThreshold", 0, 1, 1, "notBreaching"]
+    }
+    error_message = "깨우기 경보가 이름 pokeclip-prod-<키>-queue-wake · GreaterThanThreshold 0 · 1 of 1 · notBreaching 이 아니다."
+  }
+}
+
+# 재우기는 같은 큐들의 대기 + 처리 중(NotVisible) 합이 30분 내내 0 일 때다
+# (평가 F-14). 처리 중인 태스크를 지키는 장치는 이 조건 하나뿐이다(F-11).
+# 결측은 유휴로 센다(breaching — F-12). N-of-N 이어야 깨우기와 동시에 ALARM 이
+# 되지 않는다(F-13).
+run "idle_alarm_sums_visible_and_not_visible_of_own_queues" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key, queues in { render = ["pokeclip-prod-jobs-render", "pokeclip-prod-jobs-thumbnail"], upload = ["pokeclip-prod-jobs-upload"] } :
+      toset([
+        for query in aws_cloudwatch_metric_alarm.queue_idle[key].metric_query :
+        "${query.metric[0].namespace} ${query.metric[0].metric_name} ${jsonencode(query.metric[0].dimensions)} ${query.metric[0].stat} ${query.metric[0].period}"
+        if length(query.metric) > 0 && query.return_data != true
+        ]) == toset(flatten([
+          for name in queues : [
+            for metric in ["ApproximateNumberOfMessagesVisible", "ApproximateNumberOfMessagesNotVisible"] :
+            "AWS/SQS ${metric} {\"QueueName\":\"${name}\"} Maximum 60"
+          ]
+      ]))
+    ])
+    error_message = "재우기 경보의 지표가 그 일꾼 큐들의 Visible · NotVisible(Maximum · 60초)이 아니다 — 남의 큐가 섞였거나 NotVisible 이 빠졌다."
+  }
+
+  assert {
+    condition = alltrue([
+      for alarm in values(aws_cloudwatch_metric_alarm.queue_idle) :
+      length([for query in alarm.metric_query : query if query.return_data == true]) == 1 &&
+      alltrue([
+        for query in alarm.metric_query : (
+          sort([for term in split("+", query.expression) : trimspace(term)]) ==
+          sort([for other in alarm.metric_query : other.id if length(other.metric) > 0]) &&
+          length(query.metric) == 0
+        ) if query.return_data == true
+      ])
+    ])
+    error_message = "재우기 경보의 결과 식이 지표 id 들의 단순 합 하나가 아니다."
+  }
+
+  assert {
+    condition = {
+      for key, alarm in aws_cloudwatch_metric_alarm.queue_idle :
+      key => [alarm.alarm_name, alarm.comparison_operator, alarm.threshold, alarm.evaluation_periods, alarm.datapoints_to_alarm, alarm.treat_missing_data]
+      } == {
+      render = ["pokeclip-prod-render-queue-idle", "LessThanThreshold", 1, 30, 30, "breaching"]
+      upload = ["pokeclip-prod-upload-queue-idle", "LessThanThreshold", 1, 30, 30, "breaching"]
+    }
+    error_message = "재우기 경보가 이름 pokeclip-prod-<키>-queue-idle · LessThanThreshold 1 · 30 of 30 · breaching 이 아니다."
+  }
+}
+
+# 깨우기 = 정확히 1(구간 [0, +∞)), 재우기 = 정확히 0(구간 (-∞, 0] — 데이터
+# 없이 ALARM 이 된 경보의 델타 0 도 덮는다, 평가 M-2). 쿨다운은 기본 300초를
+# 암묵으로 두지 않는다(F-6).
+run "scaling_policies_set_exact_capacity_one_or_zero" {
+  command = plan
+
+  assert {
+    condition = alltrue(flatten([
+      for direction, policies in { wake = aws_appautoscaling_policy.queue_wake, idle = aws_appautoscaling_policy.queue_idle } : [
+        for key, policy in policies :
+        policy.name == "pokeclip-prod-${key}-queue-${direction}" &&
+        policy.policy_type == "StepScaling" &&
+        policy.service_namespace == "ecs" &&
+        policy.scalable_dimension == "ecs:service:DesiredCount" &&
+        policy.resource_id == "service/pokeclip-prod/pokeclip-prod-${key}" &&
+        policy.step_scaling_policy_configuration[0].adjustment_type == "ExactCapacity" &&
+        policy.step_scaling_policy_configuration[0].cooldown == 60 &&
+        policy.step_scaling_policy_configuration[0].metric_aggregation_type == "Maximum"
+      ]
+    ]))
+    error_message = "조절 정책이 pokeclip-prod-<키>-queue-<wake|idle> · StepScaling · 같은 일꾼 서비스 · ExactCapacity · 쿨다운 60 · Maximum 이 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in values(aws_appautoscaling_policy.queue_wake) :
+      length(policy.step_scaling_policy_configuration[0].step_adjustment) == 1 &&
+      alltrue([
+        for step in policy.step_scaling_policy_configuration[0].step_adjustment :
+        step.metric_interval_lower_bound == "0" && step.metric_interval_upper_bound == null && step.scaling_adjustment == 1
+      ])
+    ])
+    error_message = "깨우기 정책의 단계가 하나(lower 0 · upper 없음 · 1)가 아니다."
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in values(aws_appautoscaling_policy.queue_idle) :
+      length(policy.step_scaling_policy_configuration[0].step_adjustment) == 1 &&
+      alltrue([
+        for step in policy.step_scaling_policy_configuration[0].step_adjustment :
+        step.metric_interval_lower_bound == null && step.metric_interval_upper_bound == "0" && step.scaling_adjustment == 0
+      ])
+    ])
+    error_message = "재우기 정책의 단계가 하나(lower 없음 · upper 0 · 0)가 아니다."
+  }
+}
+
+# 경보 동작이 같은 일꾼 · 같은 방향의 정책 하나다. 정책 ARN 이 apply 때 정해져
+# apply 로 돈다. 정책마다 다른 ARN 은 override_resource 로 주는데, 앞 apply
+# run 들이 만든 정책은 다시 만들어지지 않아 덮어쓰기가 먹지 않는다 — 그래서
+# 상태를 따로 둔다(state_key).
+run "scaling_alarms_trigger_own_worker_same_direction_policy" {
+  command   = apply
+  state_key = "scaling_wiring"
+
+  override_resource {
+    target = aws_appautoscaling_policy.queue_wake["render"]
+    values = {
+      arn = "arn:aws:autoscaling:ap-northeast-2:111122223333:scalingPolicy:wake-render:resource/ecs/service/pokeclip-prod/pokeclip-prod-render:policyName/pokeclip-prod-render-queue-wake"
+    }
+  }
+
+  override_resource {
+    target = aws_appautoscaling_policy.queue_wake["upload"]
+    values = {
+      arn = "arn:aws:autoscaling:ap-northeast-2:111122223333:scalingPolicy:wake-upload:resource/ecs/service/pokeclip-prod/pokeclip-prod-upload:policyName/pokeclip-prod-upload-queue-wake"
+    }
+  }
+
+  override_resource {
+    target = aws_appautoscaling_policy.queue_idle["render"]
+    values = {
+      arn = "arn:aws:autoscaling:ap-northeast-2:111122223333:scalingPolicy:idle-render:resource/ecs/service/pokeclip-prod/pokeclip-prod-render:policyName/pokeclip-prod-render-queue-idle"
+    }
+  }
+
+  override_resource {
+    target = aws_appautoscaling_policy.queue_idle["upload"]
+    values = {
+      arn = "arn:aws:autoscaling:ap-northeast-2:111122223333:scalingPolicy:idle-upload:resource/ecs/service/pokeclip-prod/pokeclip-prod-upload:policyName/pokeclip-prod-upload-queue-idle"
+    }
+  }
+
+  assert {
+    condition = length(distinct(concat(
+      [for policy in values(aws_appautoscaling_policy.queue_wake) : policy.arn],
+      [for policy in values(aws_appautoscaling_policy.queue_idle) : policy.arn],
+    ))) == 4
+    error_message = "정책 넷의 ARN 이 서로 달라야 이 run 의 배선 단언이 뜻을 갖는다(mock 값 확인)."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for direction, pair in {
+        wake = [aws_cloudwatch_metric_alarm.queue_wake, aws_appautoscaling_policy.queue_wake]
+        idle = [aws_cloudwatch_metric_alarm.queue_idle, aws_appautoscaling_policy.queue_idle]
+        } : [
+        for key in ["render", "upload"] :
+        tolist(pair[0][key].alarm_actions) == tolist([pair[1][key].arn]) &&
+        try(length(pair[0][key].ok_actions), 0) == 0 &&
+        try(length(pair[0][key].insufficient_data_actions), 0) == 0
+      ]
+    ]))
+    error_message = "경보 동작이 같은 일꾼 · 같은 방향(wake → queue_wake · idle → queue_idle)의 정책 하나가 아니거나 OK · 데이터 부족 동작이 있다."
+  }
+}
+
+# 큐 이름은 상수가 아니라 런타임 출력 app_task_resource_arns 의 큐 ARN 끝
+# 조각이다 — 런타임이 큐 이름을 바꾸면 경보도 따라간다.
+run "scaling_queue_names_come_from_runtime_arn_tail" {
+  command = plan
+
+  override_data {
+    target = data.terraform_remote_state.runtime
+    values = {
+      outputs = {
+        app_env = {
+          render = {
+            RENDER_QUEUE_URL             = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/q-render-b"
+            THUMBNAIL_QUEUE_URL          = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/q-thumbnail-b"
+            RENDER_VISIBILITY_TIMEOUT    = "600s"
+            THUMBNAIL_VISIBILITY_TIMEOUT = "120s"
+          }
+          upload = {
+            UPLOAD_QUEUE_URL          = "https://sqs.ap-northeast-2.amazonaws.com/111122223333/q-upload-b"
+            UPLOAD_VISIBILITY_TIMEOUT = "900s"
+          }
+        }
+        app_secret_arns = {
+          clip = {
+            INTERNAL_API_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"
+          }
+          render = {
+            INTERNAL_API_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"
+          }
+          upload = {
+            INTERNAL_API_TOKEN = "arn:aws:secretsmanager:ap-northeast-2:111122223333:secret:pokeclip/prod/internal-api-token-EfGhIj"
+          }
+        }
+        app_task_resource_arns = {
+          render = {
+            render_queue_arn    = "arn:aws:sqs:ap-northeast-2:111122223333:q-render-b"
+            thumbnail_queue_arn = "arn:aws:sqs:ap-northeast-2:111122223333:q-thumbnail-b"
+            segment_bucket_arn  = "arn:aws:s3:::pokeclip-prod-rewind-example"
+            clips_bucket_arn    = "arn:aws:s3:::pokeclip-prod-clips-example"
+          }
+          upload = {
+            upload_queue_arn = "arn:aws:sqs:ap-northeast-2:111122223333:q-upload-b"
+            clips_bucket_arn = "arn:aws:s3:::pokeclip-prod-clips-example"
+          }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = {
+      for key, alarm in aws_cloudwatch_metric_alarm.queue_idle :
+      key => toset([for query in alarm.metric_query : query.metric[0].dimensions.QueueName if length(query.metric) > 0])
+      } == {
+      render = toset(["q-render-b", "q-thumbnail-b"])
+      upload = toset(["q-upload-b"])
+    }
+    error_message = "재우기 경보의 큐 이름이 런타임 출력 큐 ARN 의 끝 조각이 아니다."
+  }
+
+  assert {
+    condition = {
+      for key, alarm in aws_cloudwatch_metric_alarm.queue_wake :
+      key => toset([for query in alarm.metric_query : query.metric[0].dimensions.QueueName if length(query.metric) > 0])
+      } == {
+      render = toset(["q-render-b", "q-thumbnail-b"])
+      upload = toset(["q-upload-b"])
+    }
+    error_message = "깨우기 경보의 큐 이름이 런타임 출력 큐 ARN 의 끝 조각이 아니다."
+  }
 }
