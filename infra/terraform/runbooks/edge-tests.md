@@ -828,9 +828,10 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
         넘깁니다.
     *   배포 변경 안에서는 목록 동작 둘(`/dvr/*.m3u8` · `/vod/*.m3u8`)이 표
         중간에 끼어, `ordered_cache_behavior` 의 `/dvr/*.m3u8` 자리부터
-        끝까지(0 부터 세어 3–8번)의 `path_pattern` · `trusted_key_groups` ·
-        `cache_policy_id` 가 바뀌거나 새로 생긴 것처럼 보입니다. 칸이 밀린
-        것입니다. 함수 연결은 하한을 켠 뒤면 4번 칸(`/dvr/*`)의 dvr-floor
+        끝까지(0 부터 세어 3–8번) 칸의 속성 여럿이 바뀌거나 새로 생긴 것처럼
+        보입니다. 칸이 밀린 것이라, 바뀐 속성 이름을 세지 말고 칸마다 새
+        동작 표(`modules/cdn_media/main.tf` 의 `ordered_behaviors`)의 같은
+        칸과 대조합니다. 함수 연결은 하한을 켠 뒤면 4번 칸(`/dvr/*`)의 dvr-floor
         「추가」 만 보이고 「제거」 는 없습니다 — `function_association`
         제거가 보이면 apply 하지 않고 멈춥니다(위 `-var` 를 빠뜨린 것).
     *   apply 직후 목록 gzip 변형의 첫 요청은 엣지 · Origin Shield 에서

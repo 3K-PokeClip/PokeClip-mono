@@ -1277,6 +1277,9 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         ```
 
         목록이 위 한 줄과 같을 때만, kty 실행 직전 승인 뒤 apply 합니다.
+        POK-601 이 develop 에 머지된 뒤 그 edge apply 전이면 목록에
+        `create module.media.aws_cloudfront_cache_policy.dvr_vod_playlist` 가
+        한 줄 더 나옵니다 — 그때는 그 두 줄이 기대 목록입니다.
 
         ```shell
         terraform -chdir=infra/terraform/prod/edge apply \
