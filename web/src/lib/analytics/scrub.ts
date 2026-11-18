@@ -73,11 +73,11 @@ export function scrubUrl(value: string): string {
 
 /** landing/README 「홍보 링크와 UTM」 표 — 값을 더하면 그 표와 landing/analytics.js도 함께 고친다 */
 const UTM_ALLOWED: Record<string, RegExp> = {
-  utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram)$/,
+  utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram|email)$/,
   utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
   // 모양(패턴)이 아니라 목록이다 — 패턴이면 채널 ID·핸들 같은 소문자 값이 통과한다(PR #382 리뷰). 새 캠페인·자리는 표부터 더한다
-  utm_campaign: /^(launch_2026_10)$/,
-  utm_content: /^(pinned_comment|banner)$/,
+  utm_campaign: /^(launch_2026_10|2026_11_streamer_outreach)$/,
+  utm_content: /^(pinned_comment|banner|draft_a|draft_b|draft_c)$/,
 };
 /**
  * SDK가 홍보 링크 값을 싣는 자리 셋 — 그 페이지의 값(접두 없음), 처음 방문(`$initial_`, 사람 속성), 그 세션의 첫 진입
