@@ -3,10 +3,11 @@
 # 같은 (동작, 리전)은 한 행. 자원 패턴을 계획이 주지 않으면 *.
 # 출처: POK-408 계획 C3(일꾼 배치 단계 — prod/workers 의 plan · apply) · 설계
 # 6-2. O7d 묶음을 본으로 workers 가 부르는 것만 둔다 — Cloud Map 네임스페이스
-# · 사설 존 생성(CreatePrivateDnsNamespace · route53:*) · CreateServiceLinkedRole
-# · AttachRolePolicy 는 넣지 않는다(platform 이 이미 만들었거나 workers 가
-# 부르지 않음). Cloud Map 네임스페이스 조회 동작은 provider 6.68.0 소스에서
-# 뽑았다(그 덩어리의 주석).
+# · 사설 존 생성(CreatePrivateDnsNamespace · route53:*) · AttachRolePolicy 는
+# 넣지 않는다(platform 이 이미 만들었거나 workers 가 부르지 않음). Cloud Map
+# 네임스페이스 조회 동작은 provider 6.68.0 소스에서 뽑았다(그 덩어리의 주석).
+# CreateServiceLinkedRole 은 일꾼 자동 조절(POK-605)의 서비스 연결 역할
+# 하나에만 둔다(그 덩어리의 주석).
 # 2-3 판정 래퍼 읽기(맨 아래 덩어리): M17b principal-check.sh.
 
 # ECS 태스크 정의 · 서비스(클러스터는 platform 것)
@@ -73,6 +74,56 @@ ec2:CreateTags	ap-northeast-2	*
 # SG 규칙 재조회 — provider 6.68.0 은 SG 규칙을 Read 에서
 # DescribeSecurityGroupRules 로 읽는다(O7d 묶음의 같은 행 주석).
 ec2:DescribeSecurityGroupRules	ap-northeast-2	*
+
+# 일꾼 자동 조절(POK-605 — prod/workers/scaling.tf). 일꾼마다 확장 대상 하나
+# · step 정책 둘 · 경보 둘, 모두 서울이다. provider 6.68.0(v6.68.0 태그)
+# 소스가 부르는 동작이다(대조 2026-11-19).
+# *   확장 대상(internal/service/appautoscaling/target.go): 생성 · 갱신의
+#     RegisterScalableTarget(331행), Read 와 삭제 대기의
+#     DescribeScalableTargets(245행 — 페이지 넘김), 삭제의
+#     DeregisterScalableTarget(216행). 태그는 ARN 태그 속성이라
+#     (service_package_gen.go 64행) Read 가 ListTagsForResource(tags_gen.go
+#     29행)를, 태그를 바꾸는 apply 가 TagResource(112행)를 부른다. 생성
+#     요청의 Tags 가 TagResource 인가를 따로 요구하는지는 AAS 원문
+#     (API_RegisterScalableTarget · 서비스 인가 참조)이 말하지 않아 계획대로
+#     둔다.
+# *   정책(policy.go — 태그 없음): PutScalingPolicy(545행), Read 의
+#     DescribeScalingPolicies(636행 — 페이지 넘김), DeleteScalingPolicy
+#     (596행).
+# *   경보(internal/service/cloudwatch/metric_alarm.go): PutMetricAlarm
+#     (379행), Read 의 DescribeAlarms(545행 — 페이지 넘김), DeleteAlarms
+#     (465행), Read 의 태그 ListTagsForResource(tags_gen.go 30행). 생성
+#     요청에 default_tags 가 실려 TagResource 도 인가한다(API 원문
+#     PutMetricAlarm 「you must be signed on with both the
+#     cloudwatch:PutMetricAlarm and cloudwatch:TagResource permissions」).
+# 태그를 바꾸는 apply 만 부르는 UntagResource 는 이 묶음의 ECS · 로그 그룹
+# 행처럼 넣지 않는다. AAS 안내서(security_iam_id-based-policy-examples 의
+# 「ECS services」)가 호출자에게 요구하는 ecs:DescribeServices(위 ECS
+# 덩어리) · ecs:UpdateService(아래 운영 덩어리)는 그 행을 쓴다.
+# DescribeScalingActivities · DescribeAlarmHistory 는 provider 가 아니라
+# 운영이 부른다 — README 「자동 조절(0 ↔ 1)」 의 읽기 명령과 C3 차가운 큐
+# 관찰(계획 쟁점 4 · Phase C).
+application-autoscaling:RegisterScalableTarget	ap-northeast-2	*
+application-autoscaling:DescribeScalableTargets	ap-northeast-2	*
+application-autoscaling:DeregisterScalableTarget	ap-northeast-2	*
+application-autoscaling:PutScalingPolicy	ap-northeast-2	*
+application-autoscaling:DescribeScalingPolicies	ap-northeast-2	*
+application-autoscaling:DeleteScalingPolicy	ap-northeast-2	*
+application-autoscaling:TagResource	ap-northeast-2	*
+application-autoscaling:ListTagsForResource	ap-northeast-2	*
+application-autoscaling:DescribeScalingActivities	ap-northeast-2	*
+cloudwatch:PutMetricAlarm	ap-northeast-2	*
+cloudwatch:DescribeAlarms	ap-northeast-2	*
+cloudwatch:DeleteAlarms	ap-northeast-2	*
+cloudwatch:TagResource	ap-northeast-2	*
+cloudwatch:ListTagsForResource	ap-northeast-2	*
+cloudwatch:DescribeAlarmHistory	ap-northeast-2	*
+# 서비스 연결 역할 — 계정에 AWSServiceRoleForApplicationAutoScaling_ECSService
+# 가 없으면 첫 RegisterScalableTarget 이 만든다(API 원문 RoleARN 「Application
+# Auto Scaling uses a service-linked role, which it creates if it does not yet
+# exist」). 그때 호출자에게 iam:CreateServiceLinkedRole 이 필요하다. 자원은
+# 그 역할 ARN 하나다 — O7d · O7f 묶음의 aws-service-role/* 보다 좁다.
+iam:CreateServiceLinkedRole	us-east-1	arn:aws:iam::${ACCOUNT}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
 
 # 상태 버킷(backend · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
 s3:ListBucket	ap-northeast-2	*
