@@ -188,12 +188,12 @@ https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_stream
   - **SDK를 거치지 않습니다.** `before_send`도, 브라우저 추적 금지·「이용 분석 참여」도 닿지 않습니다. 받는 사람이 막는 방법은 메일 프로그램의 그림 차단뿐입니다.
   - 정확하지 않습니다. 그림을 막아 둔 메일 프로그램에서는 읽어도 안 적히고, 그림을 미리 받아 두는 메일 앱(Apple Mail 등)에서는 안 읽어도 적힙니다. 답장에 인용된 원문을 우리가 열어도 적힙니다. 사람별 사실이 아니라 참고 값으로 봅니다.
   - 소스의 코드를 바꾸면(적는 속성·꼴) 이 절을 함께 고칩니다. 소스는 저장소 밖(PostHog 콘솔)에 있어 시험이 지키지 못합니다.
-- PostHog에서는 `outreach_link_opened`·`outreach_email_opened`를 `outreach_code`로 나눠 봅니다(화면은 아직 만들지 않았습니다).
+- PostHog에서는 대시보드 「안내 메일 반응」에서 봅니다(2026-11-18에 만듦, 정의는 아래 「PostHog 화면」 표).
 - **처리방침 2절이 링크로 들어온 방문의 수신 코드 수집을 적습니다.** 꼴·이벤트 이름·하는 일을 바꾸면 처리방침과 `scripts/check-legal.mjs`를 함께 고칩니다. **열람 표시는 처리방침에 아직 적지 않았습니다** — 적을지와 그 방식은 따로 정합니다. 정제 회귀 테스트는 `scripts/analytics.test.mjs`입니다.
 
 ### PostHog 화면 (출시 첫날부터 보는 것)
 
-2026-11-11에 콘솔에 만들었고 링크는 Jira POK-478 댓글에 있습니다(대시보드 6개 · 인사이트 18개, 웹 분석은 기본 제공 화면 그대로). 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
+2026-11-11에 콘솔에 만들었고 링크는 Jira POK-478 댓글에 있습니다(대시보드 6개 · 인사이트 18개, 웹 분석은 기본 제공 화면 그대로). 「안내 메일 반응」은 2026-11-18에 더했습니다(인사이트 8개, POK-600). 시간대는 **Asia/Seoul**, 공개 공유 링크는 만들지 않습니다(팀원 권한으로만).
 
 | 화면 | 정의 |
 |---|---|
@@ -204,6 +204,7 @@ https://pokeclip.com/?utm_source=email&utm_medium=dm&utm_campaign=2026_11_stream
 | 기능 이용 | `broadcast_playback_started`(`mode`), `highlight_marked`·`highlight_card_seeked`, `clip_download_requested`, `pending_feature_clicked`(`feature`별 — 준비 중 기능 수요), `setup_step_clicked`(`step`별) |
 | 주간 재방문 | 시작 `login_completed`(사람별 첫 번째만 — first time), 재방문 대시보드 `$pageview`(`$host` = app.pokeclip.com), 주 단위 8주 |
 | 출시 대시보드 | 위 화면들 + `onboarding_tour_started`(`entry`) → `onboarding_tour_finished` 결과 분포 + `platform_unlinked`·`editor_invited`·`editor_delegation_ended`(`initiator`) 추이 |
+| 안내 메일 반응 | 메일을 연 사람(`outreach_email_opened`)·링크를 누른 사람(`outreach_link_opened`)·메일에서 온 방문자(`$pageview`, `utm_campaign` = `2026_11_streamer_outreach`) 수와 날짜별 추이, 시안별 비교(`outreach_draft`·`utm_content`), 메일 방문 → `landing_cta_clicked` → `login_completed` 퍼널(사람 기준·순서대로·전환 기간 14일), 수신 코드별 표(처음 연 시각·처음 누른 시각). 사람 수는 고유 수로 세고 시험 코드 `testtest`는 뺀다. **발송 수는 PostHog에 없다** — 열람률·클릭률의 분모는 발송 명단 시트로 본다. 열람은 참고 값이다(「메일 수신 코드」) |
 
 대시보드 설명에 그대로 적어 둡니다.
 
