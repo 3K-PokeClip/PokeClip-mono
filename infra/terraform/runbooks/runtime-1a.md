@@ -2357,9 +2357,21 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
 
     둘 다 `0` 이 되고, 그 뒤 clip 로그 그룹에 `clip.purge.*` 줄이 새로
     생기지 않는지 봅니다. 도는 중에 끊긴 정리는 다음에 부르면 이어집니다.
-1.  **진행 중 주문**: 먼저 갈래를 정합니다 — 일꾼이 배치돼 받고 있는가
-    (`prod/workers` 의 apply 기록 · 일꾼 서비스 desired count. 보는 명령은
-    「1단-나 ② 8」 의 「일꾼 멈춤」 기록 블록과 같습니다).
+1.  **진행 중 주문**: 먼저 갈래를 정합니다 — 일꾼이 배치돼 주문이 오면
+    받는가. 일꾼은 받는 큐에 따라 0대 ↔ 1대로 자동 조절되므로(POK-605 ·
+    [prod/workers](../prod/workers/README.md) 「자동 조절(0 ↔ 1)」) 실행 수 ·
+    원하는 수가 아니라 확장 대상의 조절 정지 세 값으로 가립니다. 보는 명령은
+    「1단-나 ② 8」 의 「일꾼 멈춤」 기록 블록과 같고, 줄은
+    `<키> <상태> <원하는 수> <세 값>` 입니다(텍스트 출력은 `True` ·
+    `False`). render · upload 가 같은 갈래여야 합니다 — 엇갈리면 멈추고 kty
+    에게 넘깁니다.
+    *   배치: `ACTIVE` 이고 세 값이 모두 `False`(자동 조절이 살아 있음 —
+        0대여도 주문이 보이면 깨어남), 또는 세 값이 모두 `True` 이고
+        원하는 수 1(운영 되돌림 — 1대 상시).
+    *   미배치: 서비스가 없거나(`None` · `INACTIVE`), 세 값이 모두 `True`
+        이고 원하는 수 0(긴급 정지).
+    *   그 밖(일부만 `True` — 기동 확인 중 등 · 확장 대상 없음 `None` ·
+        원하는 수가 0 · 1 밖)이면 멈추고 kty 에게 넘깁니다.
     *   **배치 갈래**: 원 큐 셋의 두 지표
         `ApproximateNumberOfMessages` · `ApproximateNumberOfMessagesNotVisible`
         가 둘 다 0 이 될 때까지 기다립니다(하나만 보면 일꾼이 쥔 메시지를
@@ -2779,7 +2791,11 @@ kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순
 *   ① 종료 3(CHANGED)은 예상됩니다 — 묶음에 `ec2:DescribeSubnets` 행이
     늘었고(런타임 `data "aws_subnet"`), 회전의 일꾼 멈춤 · 확인 · 복원에 쓰는
     ECS 네 행(`ecs:DescribeServices` · `ecs:UpdateService` · `ecs:ListTasks` ·
-    `ecs:DescribeTasks`)도 늘었습니다. ⑤ 보고와 함께 묻고, 답을 들은 뒤
+    `ecs:DescribeTasks`)도 늘었습니다. 일꾼의 자동 조절(POK-605)을 멈추고
+    풀고 읽는 행(`application-autoscaling:RegisterScalableTarget` ·
+    `DescribeScalableTargets` · `DescribeScalingPolicies` ·
+    `cloudwatch:DescribeAlarms`)도 같은 이유로 늘었습니다. ⑤ 보고와 함께
+    묻고, 답을 들은 뒤
     `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다. 종료 1(DENIED) ·
     2(검사 불가)면 2 로 가지 않습니다.
 *   ② 는 1단-가 apply 뒤 기준입니다(4 의 첫 걸음 — 1 의 「apply 전이라
@@ -3062,16 +3078,27 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     메시지는 처분 없이 남아 숨김 시간 뒤 다시 보이고, 되살린 뒤 다시 받을 때
     받은 횟수가 한 번 오릅니다(SQS 는 받을 때마다 셈).
 
-    먼저 두 서비스의 지금 상태와 원하는 수를 기록합니다(읽기). 긴급 정지로
-    이미 0 인 서비스를 복원 때 되살리지 않으려는 기록입니다.
+    먼저 두 서비스의 지금 상태 · 원하는 수와 자동 조절(POK-605 —
+    [prod/workers](../prod/workers/README.md) 「자동 조절(0 ↔ 1)」)의 조절
+    정지 세 값(`DynamicScalingInSuspended` · `DynamicScalingOutSuspended` ·
+    `ScheduledScalingSuspended`)을 기록합니다(읽기). 줄은
+    `<키> <상태> <원하는 수> <세 값>` 이고 텍스트 출력의 참 · 거짓은 `True` ·
+    `False` 입니다. 이미 멈춘 서비스를 복원 때 되살리지 않으려는 기록입니다.
+    일꾼은 0대에서도 주문이 보이면 깨어나므로, 멈춤 판정은 원하는 수가 아니라
+    세 값으로 합니다.
 
     ```shell
     umask 077
     for k in render upload; do
-      printf '%s %s\n' "${k}" "$(aws ecs describe-services \
+      printf '%s %s %s\n' "${k}" "$(aws ecs describe-services \
         --region ap-northeast-2 --cluster pokeclip-prod \
         --services "pokeclip-prod-${k}" \
-        --query 'services[0].[status,desiredCount]' --output text)"
+        --query 'services[0].[status,desiredCount]' --output text)" \
+        "$(aws application-autoscaling describe-scalable-targets \
+        --region ap-northeast-2 --service-namespace ecs \
+        --resource-ids "service/pokeclip-prod/pokeclip-prod-${k}" \
+        --query 'ScalableTargets[0].SuspendedState.[DynamicScalingInSuspended,DynamicScalingOutSuspended,ScheduledScalingSuspended]' \
+        --output text)"
     done | tee "${work}/workers-before.txt"
     ```
 
@@ -3112,28 +3139,53 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     }
     ```
 
-    *   `<키> ACTIVE 1` → `record_tasks <키>` 뒤 0 으로 내립니다(쓰기 —
-        **kty 승인**). 내리기 직전 시각을 키와 함께 남깁니다(복원 때
-        CloudTrail 읽기의 시작 시각).
+    *   `<키> ACTIVE <0 또는 1> False False False` → 자동 조절이 살아
+        있습니다. 유휴(`ACTIVE 0`)여도 멈춥니다 — 회전 중에 주문이 들어와
+        깨어난 일꾼이 옛 값으로 보고하다 401 을 받으면 메시지가 지워집니다.
+        `record_tasks <키>` 뒤 긴급 정지 두 명령(조절 정지 → 원하는 수 0)을
+        냅니다(쓰기 — **kty 승인**). 내리기 직전 시각을 키 · 갈래(`auto`)와
+        함께 남깁니다(복원 때 CloudTrail 읽기의 시작 시각).
 
         ```shell
         stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        printf '%s %s\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
+        printf '%s %s auto\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
+        aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+          --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+          --resource-id "service/pokeclip-prod/pokeclip-prod-<키>" \
+          --min-capacity 0 --max-capacity 1 \
+          --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true \
+          >/dev/null
         aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
           --service "pokeclip-prod-<키>" --desired-count 0 \
           --query service.serviceName --output text
         ```
 
-    *   `<키> ACTIVE 0` → 이미 멈춤(긴급 정지 등)입니다. 원하는 수는
-        그대로 두고 `record_tasks <키>` 만 합니다. 정지 직후면 태스크가
-        아직 내려가는 중일 수 있어(남은 render 가 옛 값으로 보고하다 401 →
-        메시지 삭제) 이 갈래도 아래 확인을 돌립니다.
-    *   `<키> INACTIVE 0` → 서비스가 지워졌습니다(`prod/workers` 를 내린 뒤
-        한동안 이 값입니다). `record_tasks <키>` 를 하고 아래 확인으로 남은
-        태스크가 없는지만 봅니다. 복원 대상이 아닙니다.
-    *   `<키> None` → 서비스 없음(`prod/workers` 를 apply 한 적이 없거나
+    *   `<키> ACTIVE 1 True True True` → 운영 되돌림(자동 조절을 끄고 1대
+        상시 — workers README 「되돌리기 · 내리기」)입니다. 떠 있으므로
+        멈춥니다. 조절은 이미 정지라 `record_tasks <키>` 뒤 원하는 수만 0 으로
+        내립니다(쓰기 — **kty 승인**). 시각은 갈래 `pinned` 로 남깁니다.
+
+        ```shell
+        stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '%s %s pinned\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
+        aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+          --service "pokeclip-prod-<키>" --desired-count 0 \
+          --query service.serviceName --output text
+        ```
+
+    *   `<키> ACTIVE 0 True True True` → 이미 멈춤(긴급 정지 등)입니다.
+        원하는 수 · 세 값은 그대로 두고 `record_tasks <키>` 만 합니다. 정지
+        직후면 태스크가 아직 내려가는 중일 수 있어(남은 render 가 옛 값으로
+        보고하다 401 → 메시지 삭제) 이 갈래도 아래 확인을 돌립니다. 복원
+        대상이 아닙니다.
+    *   `<키> INACTIVE 0 …` → 서비스가 지워졌습니다(`prod/workers` 를 내린
+        뒤 한동안 이 값입니다). `record_tasks <키>` 를 하고 아래 확인으로
+        남은 태스크가 없는지만 봅니다. 복원 대상이 아닙니다.
+    *   `<키> None …` → 서비스 없음(`prod/workers` 를 apply 한 적이 없거나
         지운 지 오래됨)입니다. 기록만 합니다.
-    *   그 밖의 값(`ACTIVE 2` · `DRAINING` 등) → 멈춤 · kty 회부.
+    *   그 밖의 값 → 멈춤 · kty 회부. 세 값 가운데 일부만 `True`(기동 확인
+        중 등) · `ACTIVE` 인데 확장 대상이 없음(`None`) · 원하는 수가 0 · 1
+        밖 · `DRAINING` 등입니다.
 
     확인은 둘입니다(읽기 · 10초 간격 · 각 10분 상한). `wait_zero` 는 원하는
     수 · 실행 수 · 대기 수가 모두 0 이 될 때까지(`ACTIVE` 만) 읽습니다.
@@ -3320,37 +3372,59 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     ```
 
 *   **일꾼 복원**(쓰기 — 실행 직전 **kty 승인**): 앱 서버 키가 모두 완료
-    조건 ① 의 `1 COMPLETED <n> <n>` 이 된 뒤에 합니다. `workers-before.txt`
-    의 기록값으로 되돌립니다 — 이 절차가 내린 것(`<키> ACTIVE 1`)만 1 로
-    올립니다.
+    조건 ① 의 `1 COMPLETED <n> <n>` 이 된 뒤에 합니다. 이 절차가 멈춘 키
+    (`workers-stopped-at.txt` 에 있는 키)만 그 갈래대로 되돌립니다 — `auto`
+    는 조절 정지를 풀고, `pinned` 는 원하는 수를 1 로 올립니다.
 
-    올리기 직전에 그 서비스를 다시 읽습니다(읽기). 올리는 조건은 둘입니다.
+    풀기 · 올리기 직전에 그 서비스를 다시 읽습니다(읽기). 조건은 둘입니다.
 
-    1.  아래 읽기가 `ACTIVE 0` 입니다. 그 밖이면(누가 다시 띄웠거나 서비스가
-        사라짐) 올리지 않고 멈춤 · kty 회부입니다.
+    1.  아래 처음 두 읽기가 `ACTIVE 0` 과 `True True True` 입니다. 그
+        밖이면(누가 다시 띄웠거나 풀었거나 서비스가 사라짐) 건드리지 않고
+        멈춤 · kty 회부입니다.
     1.  멈춘 뒤 그 서비스의 긴급 정지 기록([prod/workers](../prod/workers/README.md)
-        「긴급 정지와 상태 어긋남」 의 어긋남 · 시각 · 사유)이 없습니다.
-        이 절차가 이미 0 으로 내렸으므로, 그사이의 긴급 정지는 원하는 수로는
-        보이지 않습니다 — 기록이 있으면 0 을 유지하고 그 정지의 절차를
-        따릅니다. 보조 신호로 멈춘 시각 뒤 그 서비스의 `UpdateService`
-        호출을 CloudTrail 에서 봅니다(아래 읽기 — `stopped_at` 은 「일꾼
-        멈춤」 이 `workers-stopped-at.txt` 에 남긴 그 키의 시각, 몇 분 늦게
-        보임). ECS
-        서비스 이벤트는 원하는 수 변경 자체를 적지 않고 태스크 시작 · 정지만
-        적어, 원하는 수 변경의 기록은 이쪽입니다. 이 절차가 낸 호출(멈춤 한
-        번) 밖의 호출이 있으면 기록이 없어도 0 을 유지하고 kty 회부입니다.
+        「긴급 정지와 상태 어긋남」 의 정지 · 시각 · 사유)이 없습니다.
+        이 절차가 이미 멈췄으므로, 그사이의 긴급 정지는 원하는 수로도 세
+        값으로도 보이지 않습니다 — 기록이 있으면 멈춘 채 두고 그 정지의
+        절차를 따릅니다. 보조 신호로 멈춘 시각 뒤 그 대상의 호출을
+        CloudTrail 에서 봅니다(아래 읽기 — `stopped_at` 은 「일꾼 멈춤」 이
+        `workers-stopped-at.txt` 에 남긴 그 키의 시각, 몇 분 늦게 보임).
+        `RegisterScalableTarget` 은 조절 정지 세 값을, `UpdateService` 는
+        원하는 수를 바꾸는 호출입니다. 이 절차가 낸 호출 — `auto` 는 둘 다
+        한 번씩, `pinned` 는 `UpdateService` 한 번 — 밖의 호출이 있으면
+        기록이 없어도 멈춘 채 두고 kty 회부입니다.
 
     ```shell
     aws ecs describe-services --region ap-northeast-2 \
       --cluster pokeclip-prod --services "pokeclip-prod-<키>" \
       --query 'services[0].[status,desiredCount]' --output text
+    aws application-autoscaling describe-scalable-targets --region ap-northeast-2 \
+      --service-namespace ecs \
+      --resource-ids "service/pokeclip-prod/pokeclip-prod-<키>" \
+      --query 'ScalableTargets[0].SuspendedState.[DynamicScalingInSuspended,DynamicScalingOutSuspended,ScheduledScalingSuspended]' \
+      --output text
     stopped_at="$(awk '$1 == "<키>" { print $2 }' "${work}/workers-stopped-at.txt")"
-    aws cloudtrail lookup-events --region ap-northeast-2 \
-      --lookup-attributes AttributeKey=EventName,AttributeValue=UpdateService \
-      --start-time "${stopped_at}" \
-      --query "Events[?contains(CloudTrailEvent, 'pokeclip-prod-<키>')].EventTime" \
-      --output text | tr '\t' '\n'
+    for event in RegisterScalableTarget UpdateService; do
+      printf '%s\n' "${event}"
+      aws cloudtrail lookup-events --region ap-northeast-2 \
+        --lookup-attributes "AttributeKey=EventName,AttributeValue=${event}" \
+        --start-time "${stopped_at}" \
+        --query "Events[?contains(CloudTrailEvent, 'pokeclip-prod-<키>')].EventTime" \
+        --output text | tr '\t' '\n'
+    done
     ```
+
+    `auto` 면 조절 정지를 풉니다(min 0 · max 1 함께).
+
+    ```shell
+    aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+      --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+      --resource-id "service/pokeclip-prod/pokeclip-prod-<키>" \
+      --min-capacity 0 --max-capacity 1 \
+      --suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=false,ScheduledScalingSuspended=false \
+      >/dev/null
+    ```
+
+    `pinned` 면 원하는 수를 1 로 올립니다(조절 정지는 그대로).
 
     ```shell
     aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
@@ -3358,13 +3432,40 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       --query service.serviceName --output text
     ```
 
-    *   기록이 `ACTIVE 0` 이던 서비스는 0 을 유지하고 기록합니다(다시
-        띄우는 것은 그 정지의 절차 · 승인 몫).
+    *   기록이 `ACTIVE 0 True True True` 이던 서비스(이미 멈춤)는 멈춘 채
+        두고 기록합니다(다시 띄우는 것은 그 정지의 절차 · 승인 몫).
     *   기록이 `INACTIVE` · `None` 이던 서비스는 할 일이 없습니다(지워졌거나
         없음 — 복원 대상 아님).
-    *   완료: 올린 서비스마다 `wait_zero` 와 같은 읽기
+    *   완료(`auto`): 아래가 모두 맞아야 합니다. 맞지 않으면 kty 회부입니다.
+        *   위 확장 대상 읽기를 다시 돌려 세 값이 `False False False`.
+        *   아래 읽기에서 정책 둘(`pokeclip-prod-<키>-queue-idle` ·
+            `-queue-wake`)과 경보 둘이 그대로 있음.
+        *   푼 뒤 2분 안에 원하는 수가 workers README 「자동 조절(0 ↔ 1)」
+            의 **맞는 원하는 수**. 맞지 않으면 보정은 쓰기(실행 직전 **kty
+            승인**)입니다. 직전에 확장 대상 읽기를 다시 돌려 세 값이
+            `False False False` 일 때만 `update-service --desired-count
+            <맞는 값>` 으로 맞추고 보고합니다. 그 밖이면 맞추지 않고 멈춤 ·
+            kty 회부입니다.
+
+        ```shell
+        aws application-autoscaling describe-scaling-policies --region ap-northeast-2 \
+          --service-namespace ecs \
+          --resource-id "service/pokeclip-prod/pokeclip-prod-<키>" \
+          --query 'ScalingPolicies[].PolicyName' --output text
+        aws cloudwatch describe-alarms --region ap-northeast-2 \
+          --alarm-names "pokeclip-prod-<키>-queue-wake" "pokeclip-prod-<키>-queue-idle" \
+          --query 'MetricAlarms[].[AlarmName,StateValue]' --output text
+        aws ecs describe-services --region ap-northeast-2 --cluster pokeclip-prod \
+          --services "pokeclip-prod-<키>" \
+          --query 'services[0].[desiredCount,runningCount,pendingCount]' \
+          --output text
+        ```
+
+        새 값은 다음에 뜨는 태스크가 읽습니다.
+    *   완료(`pinned`): `wait_zero` 와 같은 읽기
         (`services[0].[desiredCount,runningCount,pendingCount]`)가 `1 1 0`
-        입니다. 새 태스크가 새 값을 읽습니다.
+        이고 세 값이 `True True True` 그대로입니다. 새 태스크가 새 값을
+        읽습니다.
 
 ### 1단-나 ② 9. 응답기 기동 · 교체
 

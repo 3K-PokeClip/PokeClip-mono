@@ -7,9 +7,10 @@
 이 루트는 앞 루트의 출력을 그 모듈에 잇고 계약을 검사합니다.
 
 *   **서비스:** `pokeclip-prod-render`(2 vCPU · 4GiB · 임시 디스크 40GiB) ·
-    `pokeclip-prod-upload`(0.5 vCPU · 1GiB · 기본 디스크). 둘 다 1개 ·
-    자동 확장 없음 · arm64(결정 146). 크기는 kty 확정(2026-11-04)이고 출시 뒤
-    실측으로 조정합니다(`workers`).
+    `pokeclip-prod-upload`(0.5 vCPU · 1GiB · 기본 디스크). 둘 다 arm64(결정
+    146)이고, 받는 큐에 따라 0대 ↔ 1대로 자동 조절됩니다(POK-605 · 아래
+    「자동 조절(0 ↔ 1)」). 크기는 kty 확정(2026-11-04)이고 출시 뒤 실측으로
+    조정합니다(`workers`).
 *   **포트 없음:** 일꾼은 웹 서버가 없어 포트 · 대상 그룹 · 일꾼 SG 인그레스가
     없습니다. render 는 한 프로세스에서 렌더 줄과 사진 줄을 같이 돌립니다.
 *   **주소:** `CLIP_BASE_URL` · upload 의 `AUTH_BASE_URL` 은 Cloud Map 이름
@@ -93,6 +94,73 @@
 듣는 포트가 없고 SG 인그레스도 0개입니다. 서비스 등록은 platform 다섯
 서비스와 같은 모듈 꼴을 지키려고 남겨 둡니다.
 
+## 자동 조절(0 ↔ 1)
+
+render · upload 는 받는 SQS 큐에 따라 0대와 1대 사이를 오갑니다(POK-605 ·
+`scaling.tf`). 일꾼마다 Application Auto Scaling(AAS — ECS 서비스의 원하는
+수를 정책으로 바꾸는 AWS 서비스) 확장 대상 하나(min 0 · max 1)와 step 정책
+둘, 그 정책을 부르는 CloudWatch 경보 둘이 있습니다. render 는 렌더 · 썸네일
+큐를, upload 는 업로드 큐를 봅니다. `<키>` 는 `render` · `upload` 입니다.
+
+| 항목 | 깨우기 | 재우기 |
+|---|---|---|
+| 경보 · 정책 이름 | `pokeclip-prod-<키>-queue-wake` | `pokeclip-prod-<키>-queue-idle` |
+| 보는 값 | 그 일꾼 큐들의 대기(`ApproximateNumberOfMessagesVisible`) 합 | 같은 큐들의 대기 + 처리 중(`ApproximateNumberOfMessagesNotVisible`) 합 |
+| 조건 | 1분 최대값 > 0 이 한 번 | 1분 최대값 < 1 이 30분(30 of 30) 내내 |
+| 지표 결측 | 깨우지 않음(`notBreaching`) | 유휴로 셈(`breaching`) |
+| 동작 | 원하는 수를 정확히 1 | 원하는 수를 정확히 0 |
+
+*   **0대가 정상입니다.** 30분 동안 일이 없으면 0대가 되고, 실행 수 0 은
+    장애가 아닙니다. 주문이 들어오면 깨우기가 1분 단위 지표로 1대를 올리고,
+    그 위에 태스크 기동(이미지 받기 · JVM 기동) 시간이 더해집니다.
+*   **잠든 큐는 늦게 깨어납니다.** 6시간 넘게 메시지도 접근도 없던 큐는 SQS
+    가 지표를 멈추고, 다시 활성화되면 지표가 최대 15분 늦습니다. 그만큼
+    깨우기가 늦습니다. 1대가 받기를 되풀이하는 동안에는 큐가 깨어 있습니다.
+*   **원하는 수의 정본은 ECS · AAS 입니다.** 공용 모듈은 생성 때만 1 을 넣고
+    `desired_count` 를 무시하며, 확장 대상은 조절 정지 상태(`suspended_state`)
+    를 무시합니다(guard R16 이 두 줄을 지킴). 그래서 이 루트의 apply 는 원하는
+    수도 확장 대상이 생긴 뒤의 긴급 정지(새 꼴)도 바꾸지 않습니다.
+*   **맞는 원하는 수.** 경보 상태로 가립니다. 깨우기가 `ALARM` 이면 1,
+    재우기가 `ALARM` 이면 0, 둘 다 `OK` 면 지금 값 그대로(최근 30분 안에 일이
+    있었고 지금 대기가 없음 — 재우기가 30분 뒤 맞춤)입니다. 둘 다 `ALARM`
+    이거나 `INSUFFICIENT_DATA` 가 있으면 kty 에게 넘깁니다. `ALARM` 인 경보는
+    1분마다 정책을 다시 부르므로, 조절 정지를 푼 뒤 2분 안에 이 값이 됩니다.
+    아니면 AAS 호출 실패를 의심하고(아래 활동 읽기) 직접 맞춥니다. 직접
+    맞추기는 쓰기(`update-service --desired-count <맞는 값>` — 실행 직전 kty
+    승인)이고, 바로 앞에 아래 첫 읽기를 다시 돌려 그 일꾼의 세 값이 `False
+    False False` 일 때만 냅니다. 그 밖이면(그사이 누가 정지 등) 맞추지 않고
+    멈춰 kty 에게 넘깁니다 — 정지된 일꾼의 원하는 수를 바꾸면 그 정지를
+    깹니다. 맞춘 뒤 보고합니다.
+
+읽기 셋입니다(승인 불요). 확장 대상의 min · max · 조절 정지 세 값
+(`DynamicScalingInSuspended` · `DynamicScalingOutSuspended` ·
+`ScheduledScalingSuspended` — 텍스트 출력은 `True` · `False`), 경보 넷의
+상태, 최근 조절 활동입니다. 활동 읽기는 `k` 에 `render` 나 `upload` 를 넣고
+돌립니다.
+
+```shell
+aws application-autoscaling describe-scalable-targets --region ap-northeast-2 \
+  --service-namespace ecs \
+  --resource-ids service/pokeclip-prod/pokeclip-prod-render \
+  service/pokeclip-prod/pokeclip-prod-upload \
+  --query 'ScalableTargets[].[ResourceId,MinCapacity,MaxCapacity,SuspendedState.DynamicScalingInSuspended,SuspendedState.DynamicScalingOutSuspended,SuspendedState.ScheduledScalingSuspended]' \
+  --output text
+aws cloudwatch describe-alarms --region ap-northeast-2 \
+  --alarm-names pokeclip-prod-render-queue-wake pokeclip-prod-render-queue-idle \
+  pokeclip-prod-upload-queue-wake pokeclip-prod-upload-queue-idle \
+  --query 'MetricAlarms[].[AlarmName,StateValue]' --output text
+k=render
+aws application-autoscaling describe-scaling-activities --region ap-northeast-2 \
+  --service-namespace ecs --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
+  --max-items 5 \
+  --query 'ScalingActivities[].[StartTime,StatusCode,Description,Cause]' \
+  --output text | sed -E 's/[0-9]{12}/<계정>/g'
+```
+
+활동의 `StatusCode` 가 `Failed` 면 AAS 가 ECS 를 부르지 못한 것입니다(서비스
+연결 역할 `AWSServiceRoleForApplicationAutoScaling_ECSService` · SCP) — kty
+에게 넘깁니다.
+
 ## 값과 적용
 
 `image_digests` 는 기본값이 없습니다. `terraform.tfvars.example` 을
@@ -145,20 +213,74 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     봅니다. kty 가 apply(조건 = 요지 줄 수 · 주소 집합 ·
     plan 파일 sha256)와 긴급 정지 명령 둘의 조건부 실행을 한 번에 승인합니다
     (범위는 아래 「긴급 정지와 상태 어긋남」). 승인 전에 이 plan 파일로
-    「apply 직전 읽기」 의 이그레스 스위치를 봅니다.
+    「apply 직전 읽기」 의 이그레스 스위치(5)와 원하는 수 무변경(6)을
+    봅니다.
 1.  **감시를 먼저 띄웁니다**(아래 「첫 소비 감시」). 띄웠다는 것을 알린 뒤
     kty 가 `terraform apply <plan 파일>` 을 돌립니다. 수신 감시 반복만은
     apply 를 시작한 뒤 띄우고, 기동 신호(`worker_started`)를 기다렸다가
     돕니다(아래 「수신 · 진행 판정」 의 쓰는 예).
-1.  **첫 소비 판정(3분)** · 정지 신호면 긴급 정지.
-1.  **기동 신호 · 관문 ②:** 서비스마다 실행 수 1 · 배포 하나 COMPLETED ·
-    `*.worker_started`(render · thumbnail · upload)를 보고, 이 루트와 platform
-    을 다시 plan 해 둘 다 종료 0 인지 봅니다. 이 루트가 0 이 아니면 ECS 가
-    태스크 정의를 다르게 정규화한 것이고, platform 이 0 이 아니면 이 루트가 단
-    인그레스가 platform 에 드리프트로 보이는 것입니다 — 둘 다 kty 에게 넘깁니다.
-    `worker_started` 만으로는 기동을 판정하지 않습니다 — 아래 「수신 · 진행
-    판정」 의 **로그 판정**(기동 뒤 3분 — 잠정 통과면 다음 걸음으로)과 **지표
-    판정**(기동 뒤 20분 안)을 줄(render · thumbnail · upload)마다 함께 봅니다.
+1.  **첫 소비 판정(3분)** · 정지 신호면 긴급 정지. 태스크가 뜨는 서비스(아래
+    관문 ② 의 롤링 갈래)에만 있습니다.
+1.  **기동 신호 · 관문 ②:** apply 마다 이 루트와 platform 을 다시 plan 해 둘
+    다 종료 0 인지 봅니다. 이 루트가 0 이 아니면 ECS 가 태스크 정의를 다르게
+    정규화한 것이고, platform 이 0 이 아니면 이 루트가 단 인그레스가 platform
+    에 드리프트로 보이는 것입니다 — 둘 다 kty 에게 넘깁니다. 「apply 직전
+    읽기」 7 의 조절 정지 세 값도 다시 읽어 apply 전과 같은지 봅니다(첫 조절
+    apply 는 대상이 새로 생겨 세 값 모두 `False`).
+
+    그 밖의 판정은 apply 단위가 아니라 **서비스마다** 갈립니다. `terraform
+    apply` 를 돌리기 바로 앞에 아래 읽기로 서비스별 실행 수를 적고, 그 수로
+    서비스마다 갈래를 고릅니다. apply 뒤에도 같은 읽기로 판정합니다. 새 계정
+    첫 배치는 apply 앞에 서비스가 없어 앞 실행 수가 비므로 롤링 갈래로 보고,
+    아래 실행 수 대조에서 뺍니다.
+
+    ```
+    aws ecs describe-services --region ap-northeast-2 --cluster pokeclip-prod \
+      --services pokeclip-prod-render pokeclip-prod-upload \
+      --query 'services[].[serviceName,length(deployments),deployments[0].rolloutState,runningCount]' \
+      --output text
+    ```
+
+    apply 뒤 실행 수가 앞과 달라도 그것만으로 kty 에게 넘기지 않습니다. 자동
+    조절이 그사이 깨우거나 재웠을 수 있습니다. 「자동 조절(0 ↔ 1)」 의 활동
+    읽기로 그 서비스의 최근 활동을 봅니다. 활동이 `Successful` 이고 원인
+    (`Cause`)이 그 서비스의 깨우기 · 재우기 경보이며, 원하는 수와 실행 수가
+    그 활동의 값으로 수렴했으면 정상 조절이라 계속합니다. 그 밖(`Failed` ·
+    원인이 다른 것이거나 불명 · 수렴하지 않음)만 kty 에게 넘깁니다. 0대
+    갈래인데 깨우기로 1 이 됐으면 새 이미지가 이미 떴으므로 롤링 갈래의 기동
+    판정으로 봅니다.
+
+    *   **첫 조절 apply**(이미 배치된 계정 · 아래 「plan 요지」 의 create
+        10): 원하는 수 · 태스크 정의가 그대로라 배포가 없고 태스크가 뜨지
+        않습니다. 두 서비스 모두 이 갈래이고, 실행 수 1 · worker_started
+        판정은 적용하지 않습니다. 「자동 조절(0 ↔ 1)」 의 읽기로 확장 대상
+        둘(min 0 · max 1 · 세 값 `False`)과 경보 넷이 생겼는지 봅니다.
+        재우기 경보는 만들어진 뒤 첫 평가에서 생성 전 데이터 점도 읽으므로,
+        apply 앞의 유휴 시간도 30분에 듭니다. 큐가 apply 전에 이미 30분
+        넘게 비어 있었으면 재우기가 apply 뒤 곧 원하는 수를 0 으로 내리는 것이
+        정상입니다(시각은 보장되지 않음). 0대 도달 자체는 완료 실측이
+        봅니다.
+    *   **롤링 갈래**(태스크 정의가 바뀌고 apply 앞 실행 수 1 — 이미지 교체,
+        또는 서비스가 새로 생기는 첫 배치): 그 서비스의 실행 수 1 · 배포 하나
+        COMPLETED · `*.worker_started`(render 는 render · thumbnail 줄,
+        upload 는 upload 줄)를 봅니다. `worker_started` 만으로는 기동을
+        판정하지 않습니다 — 아래 「수신 · 진행 판정」 의 **로그 판정**(기동 뒤
+        3분 — 잠정 통과면 다음 걸음으로)과 **지표 판정**(기동 뒤 20분 안)을
+        그 서비스의 줄마다 함께 봅니다. 배포 COMPLETED 뒤 관측 창 안에
+        재우기가 그 서비스를 0 으로 내리면(위 정상 조절) 실행 수 1 과 기동 뒤
+        지표 판정이 끊깁니다. 그때는 내려가기 전에 기동 로그(`worker_started`
+        와 로그 판정의 수신 정상)가 이미 나왔는지로 판정합니다. 나왔으면
+        통과이고, 나오지 않았으면 그 서비스를 아래 「기동 확인」 으로
+        넘깁니다.
+    *   **0대 갈래**(태스크 정의가 바뀌고 apply 앞 실행 수 0): 원하는 수 0 인
+        배포가 태스크 없이 끝납니다. 위 읽기의 그 서비스 줄이
+        `<서비스> 1 COMPLETED 0`(배포 하나 · 완료 · 실행 수 0)인지 보고, 새
+        이미지의 기동은 그 서비스만 아래 「기동 확인」 이 판정합니다.
+    *   **섞인 예:** 이미지 교체 apply 앞에 render 1 · upload 0 이었으면,
+        render 는 롤링 갈래(감시 · 첫 소비 판정 · 로그 · 지표 판정)이고,
+        upload 는 `pokeclip-prod-upload 1 COMPLETED 0` 을 본 뒤 upload 만
+        「기동 확인」 을 합니다.
+
 1.  **썸네일 대기분 소진 · 시험 잡:** 사진 DLQ 깊이가 「apply 직전 읽기」 ①
     에서 적은 기준 그대로 · `thumbnail.report_rejected kind=card` ·
     `kind=clip` 0 을 세고, 렌더 짧은 컷 하나 · 업로드 비공개 하나(채널은
@@ -170,7 +292,9 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 
 ### plan 요지
 
-첫 apply 의 요지는 **create 29줄**이고 그 밖의 동작은 없습니다.
+일꾼이 없는 계정의 첫 apply 요지는 **create 39줄**이고 그 밖의 동작은
+없습니다 — 아래 일꾼 자원 29줄(POK-408 의 첫 apply 는 이 29줄이었음)과 그
+다음 표의 자동 조절 자원 10줄입니다.
 
 | 주소 | 수 |
 |---|---|
@@ -179,6 +303,16 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 | `aws_vpc_security_group_ingress_rule.clip_from_worker` 둘 · `auth_from_upload` | 3 |
 | `terraform_data.runtime_contract` | 1 |
 
+일꾼이 이미 배치된 계정(지금 prod)에 자동 조절을 더하는 첫 조절
+apply(POK-605)의 요지는 **create 10줄**이고 그 밖의 동작은 없습니다. 두
+서비스는 `no-op` 이고 원하는 수가 그대로입니다(「apply 직전 읽기」 6).
+
+| 주소 | 수 |
+|---|---|
+| `aws_appautoscaling_target.worker` — `render` · `upload` | 2 |
+| `aws_appautoscaling_policy.queue_wake` · `queue_idle` — 일꾼마다 | 4 |
+| `aws_cloudwatch_metric_alarm.queue_wake` · `queue_idle` — 일꾼마다 | 4 |
+
 요지는 [prod 철거 런북](/infra/terraform/runbooks/prod-teardown.md) 의
 `plan_summary` 와 같은 jq 로 뽑습니다. 이 루트 밖의 주소가 한 줄이라도
 나오면 멈춥니다. 런타임 상태가 일꾼 키를 아직 내지 않으면 계약 검사가
@@ -186,7 +320,7 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
 
 ### apply 직전 읽기
 
-다섯 다 읽기라 승인이 필요 없습니다. 하나라도 어긋나면 멈추고 kty 에게
+일곱 다 읽기라 승인이 필요 없습니다. 하나라도 어긋나면 멈추고 kty 에게
 넘깁니다.
 
 1.  사진 · 렌더 · 업로드 큐와 DLQ 셋의 `ApproximateNumberOfMessages` ·
@@ -205,7 +339,7 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
     서비스가 회전 전 값을 들고 있어 일꾼의 보고(clip) · upload 의 연동
     조회(auth resolve — 같은 토큰)가 401 입니다.
 1.  관문 ① 을 머지 체크아웃에서 다시 돌려 종료 0 인지 봅니다.
-1.  **이그레스 스위치:** apply 할 저장 plan 에서 봅니다 — 이 읽기만 다음
+1.  **이그레스 스위치:** apply 할 저장 plan 에서 봅니다 — 이 읽기와 6 만 다음
     걸음 「plan 과 승인 한 묶음」 의 `plan -out` 뒤, 승인 전에 합니다.
     `terraform.tfvars` 줄만 보면 `TF_VAR_render_egress_via_endpoints` ·
     `*.auto.tfvars` · `-var` 로 들어온 `false` 를 놓치므로, plan 이 실제로 쓴
@@ -225,10 +359,51 @@ provider 의 `default_tags`(`TerraformRoot = prod/workers`)는 태그를 받는
           | .index' | sort
     ```
 
+1.  **원하는 수 무변경:** 5 와 같은 저장 plan 에서 두 서비스의 동작과 원하는
+    수 before · after 를 봅니다. 출력은 정확히 두 줄이고, 아래 갈래로
+    가립니다. 어느 갈래에도 들지 않으면 멈춥니다.
+    *   **새 계정 첫 배치:** 두 줄 모두 `create null 1` 이면 정상입니다 —
+        서비스가 처음 생기며 생성 초기값 1 을 받습니다(무시 줄 누락이 아님).
+    *   **이미 배치된 계정:** 동작이 `no-op` · `update` 이고 줄마다 마지막 두
+        값이 같아야 합니다(첫 조절 apply 는 `no-op 1 1`, 0대일 때 이미지
+        교체는 `update 0 0`). 다르면 무시 줄이 빠진 것이라 멈춥니다 —
+        apply 가 일꾼을 되살리거나 내립니다.
+    *   **옛 꼴 정지가 남은 첫 조절 apply**(위 갈래보다 앞섬): 7 의 출력이
+        비었는데(확장 대상이 아직 없음) 원하는 수가 0 인 서비스
+        (`no-op 0 0`)가 있으면 apply 하지 않고 멈춰 kty 에게 넘깁니다. 머지 전 방식의 긴급 정지
+        (`update-service` 0 하나)가 남은 것이고, 이 apply 가 만드는 깨우기
+        경보가 대기가 보이는 대로 그 일꾼을 되살립니다. 원인을 해소하고 다시
+        띄우기 승인을 받은 뒤에 진행합니다.
+
+    ```
+    terraform -chdir=infra/terraform/prod/workers show -json "${plan}" \
+      | jq -r '.resource_changes[]
+          | select(.address | test("^module[.](render|upload)[.]aws_ecs_service[.]this$"))
+          | "\(.address) \(.change.actions | join(",")) \(.change.before.desired_count) \(.change.after.desired_count)"'
+    ```
+
+1.  **조절 정지 상태:** 「자동 조절(0 ↔ 1)」 의 첫 읽기(확장 대상)를 돌려
+    세 값을 기록합니다. apply 는 이 값을 바꾸지 않으므로(`suspended_state`
+    무시) 관문 ② 에서 다시 읽어 같아야 합니다. 첫 조절 apply 전에는 대상이
+    없어 출력이 비는 것이 맞습니다. 세 값이 `True` 인 일꾼(긴급 정지 중)이
+    있으면 그 정지 기록과 함께 kty 에게 알립니다 — apply 해도 정지는
+    유지되지만, 0대일 때 이미지를 바꾸면 「기동 확인」 을 하지 못합니다.
+    출력이 비었는데(첫 조절 apply) 그 일꾼의 긴급 정지 기록(정지 · 시각 ·
+    사유)이 있으면, 6 의 원하는 수와 상관없이 apply 하지 않고 멈춰 kty 에게
+    넘깁니다 — 옛 꼴 정지는 조절 정지가 아니라 이 apply 뒤 깨우기가 풉니다.
+    원인을 해소하고 다시 띄우기 승인을 받은 뒤에 진행합니다.
+
 ### 첫 소비 감시
 
-일꾼은 기동하자마자 쌓인 사진 주문부터 처리합니다. 그래서 감시는 apply 보다
-먼저 붙고, apply 뒤의 plan 둘보다 먼저입니다. 수신 감시 반복만은 시작
+이 절과 「수신 · 진행 판정」 은 태스크가 떠 있는 동안의 절차입니다. 첫 배치 ·
+1대일 때 이미지 교체 · 「기동 확인」 · 긴급 정지 뒤 다시 띄우기처럼 사람이
+태스크를 띄우는 관찰 창에 씁니다. 시작점은 apply 가 아니라 태스크 기동(그
+줄의 첫 `worker_started`)입니다. 태스크가 뜨지 않는 서비스(관문 ② 의 첫
+조절 apply · 0대 갈래)에는 감시할 줄이 없습니다.
+
+일꾼은 기동하자마자 쌓인 사진 주문부터 처리합니다. 그래서 감시는 태스크를
+띄우는 명령(apply · `update-service` · 멈춤 해제)보다 먼저 붙고, apply 뒤의
+plan 둘보다 먼저입니다. 수신 감시 반복만은 시작
 epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤에 시작합니다.
 받기 루프는 기동 신호와 같은 때 돌기 시작하지만 첫 `receive_failed` 는 시도
 넷이 끝난 뒤에 찍히고 — 주된 꼴인 연결 시간 초과면 기동 뒤 약 10초, 읽기 시간
@@ -271,13 +446,12 @@ epoch(그 줄의 첫 `worker_started`)가 있어야 돌므로 기동 신호 뒤�
 *   수신 불능 판정을 2초 쉼으로 되풀이합니다(아래 「수신 · 진행 판정」 의
     `workers_receive_watch` — 로그 그룹마다 하나, 그 그룹의 `worker_started`
     가 보인 뒤부터 시험 · 관찰이 끝날 때까지 · 띄우는 법은 그 절의 쓰는 예).
-*   apply 를 시작하고 120초 안에 기록 파일 하나라도 줄이 0 이거나 따라 읽기
-    프로세스가 끝났으면 **감시 불능**입니다. 정지 신호와 같이 다룹니다. 단
-    120초가 지났는데 그 서비스의 서비스 이벤트(`aws ecs describe-services`)에
-    태스크 시작(「has started 1 tasks」)이 아직 없으면(이미지 받기가 느림)
-    그 서비스의 빈 기록은 감시 불능으로 보지 않고, 시작 이벤트가 나온 뒤
-    120초가 지나도 0 줄이면 감시 불능입니다. 따라 읽기 프로세스가 끝난 것은
-    언제든 감시 불능입니다.
+*   시작점은 태스크 기동입니다. 그 서비스의 서비스 이벤트(`aws ecs
+    describe-services`)에 태스크 시작(「has started 1 tasks」)이 나온 뒤
+    120초가 지나도 그 서비스의 기록 파일이 0 줄이면 **감시 불능**입니다.
+    정지 신호와 같이 다룹니다. 시작 이벤트가 아직 없으면(이미지 받기가
+    느림 · 태스크가 뜨지 않는 apply) 빈 기록은 감시 불능으로 보지 않습니다.
+    따라 읽기 프로세스가 끝난 것은 언제든 감시 불능입니다.
 
 **정지 신호** — 하나라도 나오면 긴급 정지합니다.
 
@@ -1191,15 +1365,34 @@ rm -rf -- "${work:?}"
 
 ### 긴급 정지와 상태 어긋남
 
-render 와 upload 의 두 명령입니다. 정지 대상인 서비스의 명령만 돌립니다.
+render 와 upload 의 블록입니다. 정지 대상인 서비스의 블록만 돌립니다. 블록마다
+두 명령이고 순서가 중요합니다 — 먼저 자동 조절을 멈추고(세 값 `true`) 그다음
+원하는 수를 0 으로 둡니다. 거꾸로 하거나 원하는 수만 0 으로 두면, 큐에 대기가
+보일 때 깨우기가 1분 안에 1 로 되살립니다. 0대여도 돌립니다 — 정지하지 않은
+0대 일꾼은 주문이 들어오면 깨어납니다. min · max 를 함께 넘겨 부분 갱신
+동작에 기대지 않습니다. 첫 명령은 성공하면 아무것도 내지 않습니다(응답의 ARN
+에 계정 ID 가 있어 버림). 첫 명령이 실패해도 둘째 명령은 돌리고 바로 kty
+에게 넘깁니다 — 그때는 대기가 보이면 깨우기가 되살립니다.
 
 ```
+aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+  --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+  --resource-id service/pokeclip-prod/pokeclip-prod-render \
+  --min-capacity 0 --max-capacity 1 \
+  --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true \
+  >/dev/null
 aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
   --service pokeclip-prod-render --desired-count 0 \
   --query service.serviceName --output text
 ```
 
 ```
+aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+  --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+  --resource-id service/pokeclip-prod/pokeclip-prod-upload \
+  --min-capacity 0 --max-capacity 1 \
+  --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true \
+  >/dev/null
 aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
   --service pokeclip-prod-upload --desired-count 0 \
   --query service.serviceName --output text
@@ -1210,24 +1403,125 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     감시 불능 · 운영 중 멈출 조건 하나. 유효 범위는 그 apply 부터 시험 ·
     관찰이 끝날 때까지 한 번의 흐름이고, 시험 · 관찰이 끝나면 승인도
     끝납니다. 그 뒤의 운영 중 정지는 매번 kty 승인입니다.
-*   상태는 `desired_count = 1` 고정이라 정지 뒤 상태와 실물이 어긋납니다.
-    **어긋남 · 시각 · 사유를 기록합니다.** 다음 apply 가 1 로 되돌리므로,
-    정지한 채로 이 루트를 apply 하지 않습니다(plan 에 desired 변경이 보임).
-*   다시 띄우기(`--desired-count 1` 또는 apply)는 위 사전 승인에 들지
-    않습니다. 원인을 고친 뒤 **한 번만**, 매번 kty 승인입니다. 띄우기 직전에
-    DLQ 셋의 깊이를 읽어 정지 조건의 새 기준으로 기록합니다. 받은 횟수는
-    메시지에 남아 있어, 또 정지 신호가 나오면 더 시도하지 않고 kty 에게
-    넘깁니다.
+*   **정지 · 시각 · 사유를 기록합니다.** 확장 대상이 생긴 뒤 위 두 명령으로
+    건 정지(새 꼴)는 이 루트의 apply 가 풀지 않습니다 — 모듈이 원하는 수를,
+    확장 대상이 조절 정지 상태를 무시합니다(guard R16). 정지한 채 apply 할
+    때도 「apply 직전 읽기」 7 의 세 값이 apply 뒤 같은지 봅니다. 확장 대상이
+    없던 때의 옛 꼴 정지(`update-service` 0 하나)는 첫 조절 apply 뒤 깨우기가
+    풉니다 — 그 apply 는 「apply 직전 읽기」 6 · 7 이 막습니다.
+*   **다시 띄우기**(멈춤 해제)는 위 사전 승인에 들지 않습니다. 원인을 고친 뒤
+    **한 번만**, 매번 kty 승인입니다. 띄우기 직전에 DLQ 셋의 깊이를 읽어 정지
+    조건의 새 기준으로 기록합니다. 받은 횟수는 메시지에 남아 있어, 또 정지
+    신호가 나오면 더 시도하지 않고 kty 에게 넘깁니다. 아래 블록은 `k` 에
+    `render` 나 `upload` 를 넣고 돌립니다. 풀면 대기가 보일 때만 깨어납니다 —
+    큐가 비었는데 새 이미지 등을 확인하려면 「기동 확인」 을 합니다. 푼 뒤
+    2분 안에 원하는 수가 「자동 조절(0 ↔ 1)」 의 **맞는 원하는 수** 인지
+    봅니다.
+
+    ```
+    k=render
+    aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+      --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+      --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
+      --min-capacity 0 --max-capacity 1 \
+      --suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=false,ScheduledScalingSuspended=false \
+      >/dev/null
+    ```
+
 *   멈춘 동안 주문은 큐에 남습니다(보관 4일).
+
+### 기동 확인
+
+0대일 때 이미지를 바꾸면 태스크 없이 배포가 끝나, 새 이미지가 첫 실주문까지
+한 번도 돌지 않습니다. 깨진 이미지면 그 주문이 DLQ 로 갑니다. 그래서 0대
+이미지 교체 apply 뒤, 관문 ② 의 0대 갈래인 일꾼만 한 번 띄워 봅니다.
+재우기만 멈추고 1대를 띄운 뒤, 이 절차가 바꾼 값만 되돌립니다. 쓰기(2 · 3 · 6 과 7 의
+보정)는 실행 직전 kty 승인입니다. 블록은 `k` 에 `render` 나 `upload` 를 넣고
+돌립니다.
+
+1.  **기록**(읽기). 조절 정지 세 값과 원하는 수 · 실행 수 · 대기 수를 적습니다.
+
+    ```
+    k=render
+    aws application-autoscaling describe-scalable-targets --region ap-northeast-2 \
+      --service-namespace ecs \
+      --resource-ids "service/pokeclip-prod/pokeclip-prod-${k}" \
+      --query 'ScalableTargets[0].SuspendedState.[DynamicScalingInSuspended,DynamicScalingOutSuspended,ScheduledScalingSuspended]' \
+      --output text
+    aws ecs describe-services --region ap-northeast-2 --cluster pokeclip-prod \
+      --services "pokeclip-prod-${k}" \
+      --query 'services[0].[desiredCount,runningCount,pendingCount]' \
+      --output text
+    ```
+
+    세 값 가운데 하나라도 `True` 면(긴급 정지 등 기존 정지) 기동 확인을 하지
+    않습니다. 그 사실을 보고하고 끝냅니다 — 기존 정지를 풀거나 1대로 올리지
+    않습니다. 세 값이 모두 `False` 일 때만 다음으로 갑니다.
+1.  **재우기만 멈춤**(쓰기). 깨우기 · 예약 조절은 기록값(`false`) 그대로
+    적습니다. 수동으로 1 만 넣으면 `ALARM` 인 재우기 경보가 1분 안에 0 으로
+    덮어씁니다.
+
+    ```
+    aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+      --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+      --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
+      --min-capacity 0 --max-capacity 1 \
+      --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=false,ScheduledScalingSuspended=false \
+      >/dev/null
+    ```
+
+1.  **1대로 올림**(쓰기). 그 전에 「첫 소비 감시」 를 띄웁니다.
+
+    ```
+    aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
+      --service "pokeclip-prod-${k}" --desired-count 1 \
+      --query service.serviceName --output text
+    ```
+
+1.  **기동 판정.** 「수신 · 진행 판정」 의 **로그 판정**(기동 뒤 3분)으로
+    `worker_started` 와 수신 정상을 봅니다.
+1.  **판정이 정지면 긴급 정지하고 끝냅니다.** 로그 판정이 실패 · 판정불가거나
+    「첫 소비 감시」 의 정지 신호가 나오면 「긴급 정지와 상태 어긋남」 의 두
+    명령을 돌리고, 6 · 7 은 하지 않습니다. 긴급 정지는 세 값을 모두 `true` 로
+    두므로 6 이 기록값으로 되돌리면 그 정지가 풀립니다. 정지 기록과 함께 kty
+    에게 넘깁니다.
+1.  **바꾼 값만 되돌림**(쓰기). 직전에 1 의 첫 읽기를 다시 돌립니다. 출력이
+    정확히 `True False False`(재우기만 이 절차가 멈춤 · 나머지 둘은 1 의
+    기록값)일 때만 재우기를 풉니다. 그 밖이면(예: 그사이 누가 긴급 정지해
+    `True True True`) 풀지 않고 멈춰 kty 에게 넘깁니다.
+
+    ```
+    aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+      --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+      --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
+      --min-capacity 0 --max-capacity 1 \
+      --suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=false,ScheduledScalingSuspended=false \
+      >/dev/null
+    ```
+
+1.  **맞는 원하는 수**(읽기 — 맞지 않을 때의 보정은 쓰기). 푼 뒤 2분 안에
+    원하는 수가 「자동 조절(0 ↔ 1)」 의 **맞는 원하는 수** 인지 봅니다. 큐가
+    빈 지 30분이 넘었으면 재우기가 0 으로 내립니다. 맞지 않으면 보정 직전에
+    1 의 첫 읽기를 다시 돌려 세 값이 `False False False` 일 때만
+    `update-service --desired-count <맞는 값>` 으로 직접 맞추고(실행 직전 kty
+    승인) 보고합니다. 그 밖이면(그사이 누가 정지 등) 맞추지 않고 멈춰 kty
+    에게 넘깁니다.
 
 ### 되돌리기 · 내리기
 
 *   **이미지 교체:** `terraform.tfvars` 다이제스트를 바꿔 plan · apply 합니다.
-    롤링 동안 두 벌이 같은 큐를 읽지만 렌더 · 업로드는 겹쳐도 안전하게
-    짜여 있습니다(배포 비율은 모듈 기본 — 공백보다 겹침).
+    1대일 때는 롤링 동안 두 벌이 같은 큐를 읽지만 렌더 · 업로드는 겹쳐도
+    안전하게 짜여 있습니다(배포 비율은 모듈 기본 — 공백보다 겹침). 배포가
+    끝날 때까지 자동 조절은 원하는 수를 줄이지 않습니다. 0대일 때는 태스크
+    없이 배포가 끝나므로 apply 뒤 위 「기동 확인」 을 합니다.
+*   **자동 조절 끄기**(운영 되돌림 — 코드 없이 · kty 승인): 「긴급 정지와
+    상태 어긋남」 의 첫 명령으로 세 값을 `true` 로 두고
+    `update-service --desired-count 1` 을 냅니다. 예전처럼 1대가 늘
+    뜹니다. 다시 켜는 것은 위 멈춤 해제입니다.
 *   **일꾼만 내리기:** [prod 철거 런북](/infra/terraform/runbooks/prod-teardown.md)
     「0a. prod/workers 먼저 내리기」 를 따릅니다. 요지는 모두 delete 이고 이
-    루트 주소만 나옵니다. platform 은 건드리지 않고, 주문은 큐에 남습니다.
+    루트 주소만 나옵니다(자동 조절 자원 열 포함). platform 은 건드리지 않고,
+    주문은 큐에 남습니다.
 *   **revert 전에 내립니다** — 되돌리면 이 루트의 코드가 사라져 destroy 할
     구성이 없어집니다. PR 은 머지 커밋이라 `git revert -m 1 <머지 커밋>` 으로
     되돌립니다. `modules/ecs_service` 의 포트 없는 꼴을 되돌리는 것도
@@ -1241,14 +1535,29 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     읽기」 는 저장 plan 의 이 값이 `true` 인지 봅니다. 값이 `false` 면 계약
     검사 7 · 8 을 보지 않아(`main.tf` 의 두 검사가 `true` 일 때만 봄) DNS 가
     꺼진 동안에도 plan 이 돕니다. 엔드포인트가 다시 켜지고 network 의 확인을 지난
-    뒤 `-var` 없이(기본 true) plan · apply 해 되돌립니다. apply 는 원하는 수 1
-    을 되살리므로, 긴급 정지 중이었으면 다시 띄우기 승인을 함께 받습니다.
+    뒤 `-var` 없이(기본 true) plan · apply 해 되돌립니다. apply 는 원하는
+    수와 조절 정지 상태를 바꾸지 않습니다 — 긴급 정지 중이었으면 정지된 채
+    남고, 다시 띄우기는 따로 승인받습니다.
 *   토큰을 회전할 때는 일꾼을 멈춘 채 회전합니다
     ([runtime-1a 런북](/infra/terraform/runbooks/runtime-1a.md)) — clip 의
     롤링이 옛 값 · 새 값 태스크를 겹쳐 두기 때문입니다.
 
 ## 알려진 한계
 
+*   **깨우기 지연:** 예열이 없어(kty 결정 2026-11-19) 방송 시작 직후의
+    라이브 사진 · 첫 렌더 · 첫 업로드는 깨우기(1분 지표 · 잠든 큐는 최대
+    15분)와 태스크 기동만큼 늦습니다.
+*   **network 되돌리기의 교정:** private DNS 는 VPC 전역이라 render 가
+    0대여도 다른 서비스의 엔드포인트 트래픽은 남습니다. network 되돌리기의
+    「교정」([prod/network](/infra/terraform/prod/network/README.md) 1단계 2 ·
+    2단계 2)이 render 경로 트래픽이 없어 판정불가가 되는지는 확인하지
+    못했습니다. 판정불가면 network README 의 처방(몇 분 뒤 다시 · clip
+    재기동)을 먼저 따릅니다. 그래도 render 를 깨워야 하면 kty 에게 넘깁니다
+    — 그 render 는 network 1단계 1 에서 긴급 정지돼 있어 「기동 확인」 이
+    돌지 않고(1 의 기존 정지 갈래), 깨우려면 그 정지를 풀어야 합니다.
+*   **2-3 판정 밖:** AAS 확장 대상 · 조절 정책 · 경보는 2-3 판정 대상에
+    넣지 않았습니다. dev 주체가 경보를 지우면 일꾼이 다시 깨지 않는 가용성
+    위험이 있습니다. 이번에는 기록만 합니다.
 *   실행 · 작업 역할의 신뢰 정책은 혼동된 대리인 조건으로 `aws:SourceAccount`
     하나만 둡니다(모듈 공통). `aws:SourceArn`(이 클러스터의 ECS 자원)으로 더
     좁히는 것은 platform 다섯 서비스의 역할도 함께 바뀌는 모듈 변경이라
@@ -1324,7 +1633,19 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     `false` 는 엔드포인트 출력이 없거나 DNS 가 꺼져도 plan 이 돌고 render
     이그레스가 엔드포인트 앞의 값.
 
-자원 수(create 29)는 `terraform test` 가 셀 수 없어 위 「plan 요지」 가 셉니다.
+*   자동 조절(`scaling.tf` — POK-605): 확장 대상 둘(min 0 · max 1 ·
+    `ecs:service:DesiredCount` · 일꾼마다 자기 서비스) · 일꾼 → 큐 대응 ·
+    깨우기 경보 식이 자기 큐의 Visible 합뿐(NotVisible · FILL 없음 · 1 of 1 ·
+    `notBreaching`) · 재우기 경보 식이 같은 큐의 Visible + NotVisible(30 of
+    30 · `breaching`) · 정책(ExactCapacity 1 · 0, 구간 경계, 쿨다운 60) ·
+    경보 동작이 같은 일꾼 · 같은 방향의 정책 · 큐 이름이 런타임 ARN 끝 조각.
+
+자원 수(새 계정 첫 apply create 39 · 첫 조절 apply create 10)는 `terraform test` 가 셀 수 없어 위
+「plan 요지」 가 셉니다. 모듈의 `desired_count` 무시와 확장 대상의
+`suspended_state` 무시는 mock 이 볼 수 없어 guard R16
+(`bash infra/terraform/scripts/guard.sh`)이 봅니다. 철거 런북의 삭제 허용
+정규식은 `bash infra/terraform/scripts/test/prod_teardown_workers_allow_test.sh`
+가 봅니다.
 
 「수신 · 진행 판정」 의 셸 블록은
 `bash infra/terraform/scripts/test/workers_watch_runbook_test.sh` 가 README
