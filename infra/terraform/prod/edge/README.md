@@ -27,6 +27,10 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
     함수 셋(live-auth · deny-default · /dvr 하한 dvr-floor) · 키 그룹 · VPC
     origin(내부 ALB) · rewind 버킷 오리진(OAC)을 포함합니다. dvr-floor 는
     스위치가 켜졌을 때만 `/dvr/*` 에 붙습니다(아래 「/dvr 하한(POK-525)」).
+    재생 목록(`.m3u8`)은 gzip · brotli 로 압축해 보냅니다(POK-601 — HLS
+    저작 규격 10.1). `/live/*.m3u8` · `/dvr/*` · `/vod/*` 동작의 Compress 와
+    그 캐시 정책의 압축 허용을 함께 켰고, 조각 유형은 압축 대상이 아니라
+    바이트가 그대로입니다.
 *   **표준 로그 로그 그룹**(`pokeclip-prod-media-access` · us-east-1): media
     배포의 표준 로그(v2)를 JSON 으로 받습니다. 보존은 `log_retention_days`
     (기본 7)입니다.

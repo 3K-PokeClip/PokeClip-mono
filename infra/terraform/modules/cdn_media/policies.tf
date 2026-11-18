@@ -38,6 +38,10 @@ resource "aws_cloudfront_cache_policy" "live_playlist" {
   max_ttl     = 1
 
   parameters_in_cache_key_and_forwarded_to_origin {
+    # 목록 압축(HLS 저작 규격 10.1) — 동작의 compress 와 함께 켜야 한다.
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
     cookies_config {
       cookie_behavior = "none"
     }
@@ -88,6 +92,10 @@ resource "aws_cloudfront_cache_policy" "dvr_vod" {
   max_ttl     = var.dvr_vod_ttl.max
 
   parameters_in_cache_key_and_forwarded_to_origin {
+    # 목록 압축(HLS 저작 규격 10.1) — 동작의 compress 와 함께 켜야 한다.
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
     cookies_config {
       cookie_behavior = "none"
     }

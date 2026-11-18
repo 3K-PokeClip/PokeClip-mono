@@ -390,6 +390,44 @@ run "uses_no_cookie_or_header_in_any_cache_key" {
   }
 }
 
+# HLS 저작 규격 10.1 — 재생 목록은 gzip 으로 보낸다. CloudFront 는 동작의
+# Compress 와 캐시 정책의 gzip · brotli 허용이 둘 다 켜져야 압축한다.
+run "compresses_playlist_behaviors_only" {
+  command = plan
+
+  assert {
+    condition = [
+      for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : behavior.compress
+    ] == [false, true, false, true, true, false, false]
+    error_message = "Compress 가 목록을 내는 동작(/live/*.m3u8 · /dvr/* · /vod/*)에만 켜져 있지 않다."
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in [
+        aws_cloudfront_cache_policy.live_playlist,
+        aws_cloudfront_cache_policy.dvr_vod,
+      ] :
+      policy.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_gzip == true &&
+      policy.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_brotli == true
+    ])
+    error_message = "목록 캐시 정책(live_playlist · dvr_vod)이 gzip · brotli 를 허용하지 않는다."
+  }
+
+  assert {
+    condition = alltrue([
+      for policy in [
+        aws_cloudfront_cache_policy.no_cache,
+        aws_cloudfront_cache_policy.live_segment,
+        aws_cloudfront_cache_policy.rewind_api,
+      ] :
+      policy.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_gzip != true &&
+      policy.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_brotli != true
+    ])
+    error_message = "목록 밖 캐시 정책이 압축본을 따로 캐시한다(조각 캐시가 인코딩마다 갈린다)."
+  }
+}
+
 run "sets_ttls_for_segments_rewind_api_and_disabled" {
   command = plan
 

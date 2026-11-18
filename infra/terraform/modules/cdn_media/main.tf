@@ -22,9 +22,15 @@ locals {
   # 우선순위 순서(앞이 먼저). /live/*.m3u8 은 /live/* 보다 앞이어야 한다 — 한
   # 캐시 정책의 최대 TTL 은 원본 Cache-Control 에도 상한이라 두 TTL 을 한
   # 비헤이비어로 만족할 수 없다(설계 4-4).
+  #
+  # compress — 재생 목록(.m3u8)을 내는 동작만 켠다(HLS 저작 규격 10.1: 목록은
+  # gzip). 그 동작의 캐시 정책도 gzip · brotli 를 허용해야 CloudFront 가
+  # 압축한다. /dvr · /vod 는 조각과 목록이 한 동작이라 조각 캐시도 인코딩마다
+  # 갈리지만, 조각 유형은 압축 대상이 아니라 바이트는 같다.
   ordered_behaviors = [
     {
       path_pattern               = "/api/ingest/*"
+      compress                   = false
       origin_id                  = local.media_alb_origin_id
       allowed_methods            = local.all_methods
       trusted_key_groups         = null
@@ -35,6 +41,7 @@ locals {
     },
     {
       path_pattern               = "/live/*.m3u8"
+      compress                   = true
       origin_id                  = local.media_alb_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
@@ -45,6 +52,7 @@ locals {
     },
     {
       path_pattern               = "/live/*"
+      compress                   = false
       origin_id                  = local.media_alb_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
@@ -57,6 +65,7 @@ locals {
     # 정책 없음.
     {
       path_pattern               = "/dvr/*"
+      compress                   = true
       origin_id                  = local.rewind_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
@@ -67,6 +76,7 @@ locals {
     },
     {
       path_pattern               = "/vod/*"
+      compress                   = true
       origin_id                  = local.rewind_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
@@ -77,6 +87,7 @@ locals {
     },
     {
       path_pattern               = "/api/streams/*/rewind"
+      compress                   = false
       origin_id                  = local.media_alb_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = null
@@ -87,6 +98,7 @@ locals {
     },
     {
       path_pattern               = "/playback/*"
+      compress                   = false
       origin_id                  = local.media_alb_origin_id
       allowed_methods            = local.read_methods
       trusted_key_groups         = local.key_group_ids
@@ -172,6 +184,7 @@ resource "aws_cloudfront_distribution" "this" {
       cache_policy_id            = behavior.value.cache_policy_id
       origin_request_policy_id   = behavior.value.origin_request_policy_id
       response_headers_policy_id = behavior.value.response_headers_policy_id
+      compress                   = behavior.value.compress
 
       dynamic "function_association" {
         for_each = behavior.value.functions
