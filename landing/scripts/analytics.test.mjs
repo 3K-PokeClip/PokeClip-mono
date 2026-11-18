@@ -16,19 +16,30 @@ function loadBeforeSend(hostname = 'pokeclip.com') {
 }
 
 function loadConfig(hostname = 'pokeclip.com') {
+  return loadPage({ hostname })?.config ?? null;
+}
+
+// 주소(search·hash)까지 정해 페이지를 연다. SDK가 받은 capture 호출과 주소창을 고친 값도 돌려준다
+function loadPage({ hostname = 'pokeclip.com', pathname = '/', search = '', hash = '' } = {}) {
   const scripts = [];
+  const captures = [];
+  const replaced = [];
   let config = null;
   const window = {
     posthog: {
       init: (_key, options) => {
         config = options;
       },
+      // 속성 객체는 vm 안에서 만들어져 원형이 다르다 — 비교할 수 있게 이쪽 객체로 옮겨 담는다
+      capture: (name, properties) => captures.push([name, { ...properties }]),
     },
   };
   const context = {
     window,
-    location: { hostname },
+    location: { hostname, pathname, search, hash },
+    history: { state: null, replaceState: (_state, _title, url) => replaced.push(url) },
     URL,
+    URLSearchParams,
     document: {
       createElement: () => ({}),
       head: { appendChild: (script) => scripts.push(script) },
@@ -38,7 +49,7 @@ function loadConfig(hostname = 'pokeclip.com') {
   vm.runInNewContext(SOURCE, context);
   if (scripts.length === 0) return null;
   scripts[0].onload();
-  return config;
+  return { config, captures, replaced };
 }
 
 test('운영 주소가 아니면 SDK를 내려받지 않는다', () => {
@@ -109,6 +120,34 @@ test('메일 홍보 링크 값(README 표)은 그대로 남는다 — 시안 구
   });
   assert.deepEqual(out.properties, { ...tags, $session_entry_utm_source: 'email', $session_entry_utm_content: 'other' });
   assert.deepEqual(out.$set_once, { $initial_utm_source: 'email', $initial_utm_campaign: '2026_11_streamer_outreach' });
+});
+
+const MAIL_TAGS = 'utm_source=email&utm_medium=dm&utm_campaign=2026_11_streamer_outreach&utm_content=draft_a';
+
+test('안내 메일 링크의 수신 코드(?r=)는 꼴이 맞을 때만 outreach_link_opened로 한 번 보낸다', () => {
+  const page = loadPage({ search: `?${MAIL_TAGS}&r=k3f7x2ab`, hash: '#pricing' });
+  assert.deepEqual(page.captures, [['outreach_link_opened', { outreach_code: 'k3f7x2ab' }]]);
+  // 주소창에서는 r만 지운다 — 홍보 링크 꼬리표와 해시는 그대로다
+  assert.deepEqual(page.replaced, [`/?${MAIL_TAGS}#pricing`]);
+
+  // 그 이벤트가 정제를 거쳐도 코드는 남고, 주소 속성에는 실리지 않는다
+  const out = page.config.before_send({
+    event: 'outreach_link_opened',
+    properties: { outreach_code: 'k3f7x2ab', $current_url: `https://pokeclip.com/?${MAIL_TAGS}&r=k3f7x2ab` },
+  });
+  assert.deepEqual(out.properties, { outreach_code: 'k3f7x2ab', $current_url: 'https://pokeclip.com/' });
+});
+
+test('꼴이 다른 값(이름·이메일·대문자·길이)은 보내지 않고 주소창에서만 지운다 — 코드가 없으면 아무것도 하지 않는다', () => {
+  for (const value of ['%EA%B9%9C%EC%93%B0', 'someone%40example.com', 'K3F7X2AB', 'k3f7x2a', 'k3f7x2ab1', 'k3f9x2ab', '']) {
+    const page = loadPage({ search: `?utm_source=email&r=${value}` });
+    assert.deepEqual(page.captures, [], value);
+    assert.deepEqual(page.replaced, ['/?utm_source=email'], value);
+  }
+  const plain = loadPage({ search: '?utm_source=chzzk&utm_medium=profile' });
+  assert.deepEqual(plain.captures, []);
+  assert.deepEqual(plain.replaced, []);
+  assert.deepEqual(loadPage({ search: '?r=k3f7x2ab' }).replaced, ['/']);
 });
 
 test('세션 첫 진입($session_entry_*)·Meta 식별자($fbc·$fbp)도 같은 규칙이다 — SDK가 모든 이벤트에 싣는다 (PR #382 3차 리뷰)', () => {

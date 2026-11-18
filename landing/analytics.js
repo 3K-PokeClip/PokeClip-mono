@@ -15,6 +15,27 @@
   if (!KEY) return;
   if (location.hostname !== 'pokeclip.com' && location.hostname !== 'www.pokeclip.com') return;
 
+  // 안내 메일 링크의 수신 코드(?r=) — README 「메일 수신 코드」, 처리방침 2절.
+  // 보내는 쪽 도구가 만든 8글자(영문 소문자와 2~7)이고 이름·이메일이 아니다. 이 꼴이 아니면 버린다 — 주소에 든 다른 값이
+  // 실려 나가지 않게 한다. 아래 before_send가 주소의 쿼리를 떼므로 여기서 따로 읽어 둔다.
+  // 읽은 뒤에는 주소창에서 지운다 — 주소를 복사해 남에게 건네도 그 방문이 같은 코드로 적히지 않는다(utm_* 는 그대로 둔다)
+  var OUTREACH_CODE = /^[a-z2-7]{8}$/;
+  var outreachCode = null;
+  try {
+    var params = new URLSearchParams(location.search);
+    var given = params.get('r');
+    if (given !== null) {
+      if (OUTREACH_CODE.test(given)) outreachCode = given;
+      params.delete('r');
+      var rest = params.toString();
+      if (typeof history !== 'undefined' && history.replaceState) {
+        history.replaceState(history.state, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+      }
+    }
+  } catch (e) {
+    // 주소를 읽지 못하면 코드 없이 간다
+  }
+
   // 주소의 쿼리·해시를 뗀다 — 홍보 링크의 utm_* 는 SDK가 먼저 따로 뽑아 두므로 남는다.
   // 우리 주소가 아닌 곳(유입 경로)은 origin만 남긴다 — 방송 채널·영상 주소는 경로에 채널 ID·영상 ID가 실린다(처리방침 13절)
   function scrubUrl(value) {
@@ -113,6 +134,10 @@
       advanced_disable_flags: true,
       before_send: beforeSend,
     });
+    // 안내 메일 링크로 들어온 방문 — 어느 메일의 링크가 열렸는지만 적는다(코드가 누구인지는 보낸 쪽 컴퓨터만 안다)
+    if (outreachCode && typeof window.posthog.capture === 'function') {
+      window.posthog.capture('outreach_link_opened', { outreach_code: outreachCode });
+    }
   };
   document.head.appendChild(script);
 
