@@ -30,7 +30,10 @@ prod 의 CloudFront 엣지를 만드는 루트입니다(설계 3-1 의 ⑩ · �
     하한(POK-525)」). 되감기 · VOD 목록(`/dvr/*.m3u8` · `/vod/*.m3u8`)은
     gzip 으로 압축해 보냅니다(POK-601 — HLS 저작 규격 10.1). 1KB 미만이거나
     길이 머리(`Content-Length`)가 없는 응답은 압축되지 않습니다. 라이브
-    목록은 원본이 길이 없이 보내 압축되지 않고, 원본 압축은 후속입니다.
+    목록은 POK-601 이 `/live/*.m3u8` 동작의 압축을 켜지 않아 압축되지
+    않습니다(kty 결정 (가)). 켜도 원본 MediaMTX 가 2KB 넘는 목록을 길이
+    없이 보내 CloudFront 가 압축하지 못하므로, 원본 압축(nginx)은 후속
+    POK-602 입니다.
 *   **표준 로그 로그 그룹**(`pokeclip-prod-media-access` · us-east-1): media
     배포의 표준 로그(v2)를 JSON 으로 받습니다. 보존은 `log_retention_days`
     (기본 7)입니다.

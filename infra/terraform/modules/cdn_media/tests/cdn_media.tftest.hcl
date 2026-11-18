@@ -209,6 +209,14 @@ run "attaches_live_auth_to_live_and_deny_default_to_default" {
   }
 
   assert {
+    condition = local.dvr_floor_attached_by_path == {
+      "/dvr/*.m3u8" = false
+      "/dvr/*"      = false
+    }
+    error_message = "끔인데 dvr_floor_attached 가 기대는 동작별 맵이 /dvr/*.m3u8 · /dvr/* 둘 다 안 붙음(false)이 아니다."
+  }
+
+  assert {
     condition = [
       for behavior in aws_cloudfront_distribution.this.ordered_cache_behavior : [
         for association in behavior.function_association : "${association.event_type} ${association.function_arn}"
@@ -275,6 +283,17 @@ run "attaches_dvr_floor_to_dvr_only_when_enabled" {
   assert {
     condition     = output.dvr_floor_attached == true
     error_message = "켬인데 dvr_floor_attached 출력이 true 가 아니다."
+  }
+
+  # 출력은 /dvr/ 로 시작하는 동작 전부를 보고, 하나라도 빠지면 거짓이다. 두
+  # 동작이 같은 함수 표를 써 한쪽만 붙은 꼴은 만들 수 없으므로(override 는
+  # 구성 값을 덮지 못한다), 출력이 기대는 동작별 맵이 둘을 모두 담는지 본다.
+  assert {
+    condition = local.dvr_floor_attached_by_path == {
+      "/dvr/*.m3u8" = true
+      "/dvr/*"      = true
+    }
+    error_message = "dvr_floor_attached 가 기대는 동작별 맵이 /dvr/*.m3u8 · /dvr/* 둘 다 붙음(true)이 아니다(출력이 /dvr 동작 하나만 본다)."
   }
 
   assert {
@@ -411,7 +430,9 @@ run "uses_no_cookie_or_header_in_any_cache_key" {
 # Compress 와 캐시 정책의 압축 허용이 둘 다 켜져야 압축한다. 되감기 · VOD
 # 목록 동작(/dvr/*.m3u8 · /vod/*.m3u8)만 켜고 gzip 만 허용한다 — brotli 도
 # 허용하면 CloudFront 가 brotli 를 고른다. 조각 동작은 키가 인코딩마다 갈리지
-# 않게, /live/*.m3u8 은 원본이 길이 없이(chunked) 보내 압축되지 않아 끈다.
+# 않게 끈다. /live/*.m3u8 은 켜지 않는다(kty 결정 (가)) — 켜도 원본
+# (MediaMTX)이 2KB 넘는 목록을 길이 없이(chunked) 보내 CloudFront 가 압축하지
+# 못하므로, 원본 압축(nginx)은 후속 POK-602 다.
 run "compresses_dvr_vod_playlists_with_gzip_only" {
   command = plan
 
