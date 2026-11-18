@@ -337,6 +337,16 @@ describe('PluginSettingsScreen', () => {
     expect(document.body).not.toHaveTextContent(/설치됨|연결됨/);
   });
 
+  it('다운로드 창을 열면 연 것만 한 번 센다 — 받기는 창 안 링크를 눌러야 따로 센다', async () => {
+    stubStreamKeyFetch();
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '플러그인 다운로드' }));
+    await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+
+    expect(track.mock.calls).toEqual([['plugin_download_opened', { from: 'banner' }]]);
+  });
+
   it('코드를 받은 적 없으면 맨 위 설치 안내가 배너를 대신하고, 첫 코드를 받아도 이 화면에선 남는다 (시안 C)', async () => {
     stubStreamKeyFetch({ issued: false });
     renderWithProviders(<PluginSettingsScreen />);
@@ -351,6 +361,7 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
     await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+    expect(track.mock.calls).toEqual([['plugin_download_opened', { from: 'guide' }]]);
     fireEvent.click(screen.getByRole('button', { name: '닫기' }));
 
     // 첫 코드를 받아 발급됨으로 바뀌어도 안내는 그대로 맨 위에 남는다

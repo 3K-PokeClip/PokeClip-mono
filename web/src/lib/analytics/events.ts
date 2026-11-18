@@ -90,6 +90,12 @@ export interface AnalyticsEvents {
   /** 편집자 초대(기한 연장 재초대 포함) */
   editor_invited: Record<string, never>;
   /**
+   * 플러그인 다운로드 창을 엶. 창을 연 뒤 받기까지 갔는지는 짝 이벤트 `plugin_download_clicked`로 본다 —
+   * 코드만 받고 설치 파일은 안 받은 새 회원이 창까지는 열었는지 가르려고 둔다
+   */
+  /** guide=코드를 받은 적 없는 회원의 맨 위 설치 안내, banner=맨 아래 배너 */
+  plugin_download_opened: { from: 'guide' | 'banner' };
+  /**
    * 플러그인 설치 파일 링크를 누름 — 받은 수가 아니다. 다운로드는 브라우저가 맡아 막혔는지 웹은 모르므로,
    * 「성공한 뒤에만」 규칙의 예외로 누른 순간을 센다(POK-379). 판 번호는 자유 문자열이라 싣지 않는다
    */

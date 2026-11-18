@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { track } from '@/lib/analytics';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { AudioTrackNamesCard } from './AudioTrackNamesCard';
 import { DownloadBanner } from './DownloadBanner';
@@ -33,7 +34,11 @@ export function PluginSettingsScreen() {
   // 상태를 못 읽으면(error) 정하지 않고 배너를 둔다 — 미발급으로 오인시키지 않는 코드 카드와 같은 규칙.
   const [showGuide, setShowGuide] = useState<boolean | null>(null);
   if (showGuide === null && !loading && !error) setShowGuide(!code.issued);
-  const openDownload = () => setDownloadOpen(true);
+  // 창을 연 것도 센다 — 받기 링크(plugin_download_clicked)까지 안 간 사람이 창은 봤는지 가른다
+  const openDownload = (from: 'guide' | 'banner') => {
+    setDownloadOpen(true);
+    track('plugin_download_opened', { from });
+  };
 
   return (
     <div>
@@ -42,7 +47,7 @@ export function PluginSettingsScreen() {
         description="OBS 플러그인이 방송 송출과 하이라이트 감지 신호를 PokeClip 서버로 보냅니다"
       />
       <div className={styles.stack}>
-        {showGuide === true && <InstallGuideCard onOpen={openDownload} />}
+        {showGuide === true && <InstallGuideCard onOpen={() => openDownload('guide')} />}
         <PairingCodeCard
           code={code}
           loading={loading}
@@ -54,7 +59,7 @@ export function PluginSettingsScreen() {
         />
         <AudioTrackNamesCard />
         {/* 읽는 동안은 비워 둔다 — 배너를 먼저 그렸다가 안내로 바꾸면 맨 아래에서 맨 위로 튄다 */}
-        {!loading && showGuide !== true && <DownloadBanner onOpen={openDownload} />}
+        {!loading && showGuide !== true && <DownloadBanner onOpen={() => openDownload('banner')} />}
       </div>
       <IssuedCodeDialog
         issued={justIssued}
