@@ -105,7 +105,7 @@ test('홍보 링크 값은 README 표의 값만 두고 나머지는 other — ut
   });
 });
 
-test('메일 홍보 링크 값(README 표)은 그대로 남는다 — 시안 구분은 draft_a·b·c만', () => {
+test('메일 홍보 링크 값(README 표)은 그대로 남는다 — 시안 구분은 draft_ 뒤 영문 한 글자만', () => {
   const beforeSend = loadBeforeSend();
   const tags = {
     utm_source: 'email',
@@ -115,7 +115,7 @@ test('메일 홍보 링크 값(README 표)은 그대로 남는다 — 시안 구
   };
   const out = beforeSend({
     event: '$pageview',
-    properties: { ...tags, $session_entry_utm_source: 'email', $session_entry_utm_content: 'draft_d' },
+    properties: { ...tags, $session_entry_utm_source: 'email', $session_entry_utm_content: 'draft_ab' },
     $set_once: { $initial_utm_source: 'email', $initial_utm_campaign: '2026_11_streamer_outreach' },
   });
   assert.deepEqual(out.properties, { ...tags, $session_entry_utm_source: 'email', $session_entry_utm_content: 'other' });
@@ -152,7 +152,7 @@ test('꼴이 다른 값(이름·이메일·대문자·길이·앞뒤 덧붙임)�
     '?r=gamerkim',
     '?utm_source=email&r=k3f7x2ab',
     '?utm_source=chzzk&utm_campaign=2026_11_streamer_outreach&r=k3f7x2ab',
-    '?utm_source=email&utm_campaign=2026_12_streamer_outreach&r=k3f7x2ab',
+    '?utm_source=email&utm_campaign=2026_12_partner_outreach&r=k3f7x2ab',
   ];
   for (const search of notMail) {
     const page = loadPage({ search });
@@ -198,10 +198,31 @@ test('null 이벤트는 null로 돌려준다', () => {
   assert.equal(loadBeforeSend()(null), null);
 });
 
-test('새 메일 캠페인은 UTM 허용 목록에 더하기만 하면 수신 코드도 읽는다', () => {
-  const search = '?utm_source=email&utm_medium=dm&utm_campaign=2026_12_streamer_outreach&utm_content=draft_a&r=k3f7x2ab';
-  const source = SOURCE.replace('|2026_11_streamer_outreach)$/', '|2026_11_streamer_outreach|2026_12_streamer_outreach)$/');
-  assert.notEqual(source, SOURCE, '허용 목록의 캠페인 줄을 찾지 못함');
-  assert.deepEqual(loadPage({ search }).captures, []); // 지금 목록에는 없다
-  assert.deepEqual(loadPage({ search, source }).captures, [['outreach_link_opened', { outreach_code: 'k3f7x2ab' }]]);
+test('새 달 안내 메일(<연도>_<월>_streamer_outreach)과 새 시안(draft_d 등)은 배포 없이 받는다 — 꼴이 다르면 other', () => {
+  const beforeSend = loadBeforeSend();
+  for (const campaign of ['2026_12_streamer_outreach', '2027_01_streamer_outreach']) {
+    const search = `?utm_source=email&utm_medium=dm&utm_campaign=${campaign}&utm_content=draft_d&r=k3f7x2ab`;
+    assert.deepEqual(loadPage({ search }).captures, [['outreach_link_opened', { outreach_code: 'k3f7x2ab' }]], campaign);
+    const out = beforeSend({ event: '$pageview', properties: { utm_campaign: campaign, utm_content: 'draft_d' } });
+    assert.deepEqual(out.properties, { utm_campaign: campaign, utm_content: 'draft_d' }, campaign);
+  }
+  // 날짜·글자 자리 밖으로 벗어난 값은 모두 other — 이름·아이디가 붙은 꼴도 막힌다
+  const badCampaigns = [
+    '2026_13_streamer_outreach',
+    '2026_1_streamer_outreach',
+    '2026_12_streamer_outreach_kim',
+    'kim_2026_12_streamer_outreach',
+    'gamerkim_12_streamer_outreach',
+    '2026_12_partner_outreach',
+  ];
+  for (const campaign of badCampaigns) {
+    const out = beforeSend({ event: '$pageview', properties: { utm_campaign: campaign } });
+    assert.deepEqual(out.properties, { utm_campaign: 'other' }, campaign);
+    const search = `?utm_source=email&utm_campaign=${campaign}&r=k3f7x2ab`;
+    assert.deepEqual(loadPage({ search }).captures, [], campaign);
+  }
+  for (const content of ['draft_ab', 'draft_1', 'draft_', 'draft_kim']) {
+    const out = beforeSend({ event: '$pageview', properties: { utm_content: content } });
+    assert.deepEqual(out.properties, { utm_content: 'other' }, content);
+  }
 });
