@@ -138,11 +138,13 @@ test('안내 메일 링크의 수신 코드(?r=)는 꼴이 맞을 때만 outreac
   assert.deepEqual(out.properties, { outreach_code: 'k3f7x2ab', $current_url: 'https://pokeclip.com/' });
 });
 
-test('꼴이 다른 값(이름·이메일·대문자·길이)은 보내지 않고 주소창에서만 지운다 — 코드가 없으면 아무것도 하지 않는다', () => {
-  for (const value of ['%EA%B9%9C%EC%93%B0', 'someone%40example.com', 'K3F7X2AB', 'k3f7x2a', 'k3f7x2ab1', 'k3f9x2ab', '']) {
-    const page = loadPage({ search: `?utm_source=email&r=${value}` });
+test('꼴이 다른 값(이름·이메일·대문자·길이·앞뒤 덧붙임)은 보내지 않고 주소창에서만 지운다 — 코드가 없으면 아무것도 하지 않는다', () => {
+  // 메일 꼬리표를 다 갖춘 링크에서 r 값만 바꾼다 — 꼴 검사만 시험한다. 앞에 글자가 붙은 값은 정규식의 ^를, 뒤에 붙은 값은 $를 지킨다
+  const values = ['%EA%B9%9C%EC%93%B0', 'someone%40example.com', 'K3F7X2AB', 'k3f7x2a', 'k3f7x2ab1', 'k3f9x2ab', '', 'xk3f7x2ab', 'a%40b.k3f7x2ab'];
+  for (const value of values) {
+    const page = loadPage({ search: `?${MAIL_TAGS}&r=${value}` });
     assert.deepEqual(page.captures, [], value);
-    assert.deepEqual(page.replaced, ['/?utm_source=email'], value);
+    assert.deepEqual(page.replaced, [`/?${MAIL_TAGS}`], value);
   }
   const plain = loadPage({ search: '?utm_source=chzzk&utm_medium=profile' });
   assert.deepEqual(plain.captures, []);
