@@ -10,9 +10,9 @@ function deadlineIn(minutes: number) {
   return Date.now() + minutes * 60 * 1000;
 }
 
-/** 띄워 둘 코드 — 발급한 순간엔 연결한 적이 없었다(pairedBefore 없음) */
+/** 띄워 둘 코드 — 지금 발급했다(issuedAt은 서버 시각이지만 이 창은 쓰지 않는다) */
 function codeUntil(deadline: number) {
-  return { code: 'KQ4M-7X2P', deadline, pairedBefore: undefined };
+  return { code: 'KQ4M-7X2P', deadline, issuedAt: Date.now() };
 }
 
 describe('IssuedCodeDialog', () => {

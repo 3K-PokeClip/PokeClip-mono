@@ -1,4 +1,4 @@
-import type { QueryClient } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PAIRING_CODE_TTL_MS } from '@/api/streamKeys';
@@ -67,7 +67,7 @@ function stubStreamKeyFetch({
     return jsonResponse(404);
   });
   return Object.assign(spy, {
-    pairNow(at = '2026-08-04T05:00:00Z') {
+    pairNow(at = new Date().toISOString()) {
       lastPairedAt = at;
     },
   });
@@ -245,14 +245,14 @@ describe('PluginSettingsScreen', () => {
       expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(0);
 
       const restarted = screen.getByRole('button', { name: '다시 켰어요' });
-      expect(restarted).toHaveAttribute('aria-pressed', 'false');
+      expect(restarted).not.toHaveAttribute('aria-pressed');
       fireEvent.click(restarted);
 
       expect(screen.getByRole('button', { name: '코드 받기' })).toBeEnabled();
       expect(card).not.toHaveTextContent('2번을 마치면 받을 수 있어요');
       // 잘못 눌렀으면 되돌린다 — 3번이 도로 잠긴다
       const undo = screen.getByRole('button', { name: '아직이에요' });
-      expect(undo).toHaveAttribute('aria-pressed', 'true');
+      expect(undo).not.toHaveAttribute('aria-pressed');
       fireEvent.click(undo);
       expect(screen.getByRole('button', { name: '코드 받기' })).toBeDisabled();
     });
@@ -317,7 +317,7 @@ describe('PluginSettingsScreen', () => {
       expect(screen.queryByText('코드가 만료됐어요')).not.toBeInTheDocument();
     });
 
-    it('코드를 받아도 연결됐다고 말하지 않는다 — 닫으면 원문은 사라지고 순서 카드가 새로 받으라고 한다 (ADR-019)', async () => {
+    it('코드를 받아도 연결됐다고 말하지 않는다 — 닫으면 원문은 사라지고, 순서 카드는 받은 코드를 넣으라고 한다 (ADR-019)', async () => {
       stubStreamKeyFetch({ issued: false });
       const { container } = renderWithProviders(<PluginSettingsScreen />);
 
@@ -331,8 +331,12 @@ describe('PluginSettingsScreen', () => {
       // 닫으면 원문은 어디에도 다시 나오지 않는다
       expect(screen.queryByText('KQ4M-7X2P')).not.toBeInTheDocument();
       expect(container.textContent).not.toContain('KQ4M-7X2P');
-      // 넣지 않았으니 여전히 순서 카드다 — 닫은 코드는 다시 볼 수 없으니 새로 받으라고 한다
-      expect(await screen.findByText(/전에 받은 코드는 다시 볼 수 없어요/)).toBeInTheDocument();
+      // 넣지 않았으니 여전히 순서 카드다. 코드는 아직 살아 있다 — 새로 받으라고 하지 않고 넣으면 알려 준다고 한다
+      // (「새로 받아 주세요」는 막 OBS에 넣으려는 사람에게 실패처럼 읽혔다, PR #539 리뷰)
+      expect(
+        await screen.findByText('받은 코드를 OBS의 PokeClip 창에 넣으면 여기서 바로 알려 드려요'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/새로 받아 주세요/)).not.toBeInTheDocument();
       expect(document.body).not.toHaveTextContent(/연결됨|연결했어요|연결됐어요/);
     });
 
@@ -359,7 +363,11 @@ describe('PluginSettingsScreen', () => {
       expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
 
-      expect(await screen.findByText(/전에 받은 코드는 다시 볼 수 없어요/)).toBeInTheDocument();
+      // 순서 카드 그대로다 — 받은 적 없는 회원의 「아래 순서대로 하면 연결돼요」로 돌아가지 않는다
+      expect(
+        await screen.findByText('받은 코드를 OBS의 PokeClip 창에 넣으면 여기서 바로 알려 드려요'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('아래 순서대로 하면 연결돼요')).not.toBeInTheDocument();
       // 읽어 둔 상태가 있으니 재조회 실패에 오류 화면으로 갈아끼우지도 않는다 (리뷰 #73)
       expect(screen.queryByText(/연동 코드 상태를 불러오지 못했어요/)).not.toBeInTheDocument();
     });
@@ -595,7 +603,62 @@ describe('PluginSettingsScreen', () => {
       ).toBeInTheDocument();
     });
 
-    it('창을 닫으면 더 묻지 않는다', async () => {
+    it('창을 닫아도 코드가 살아 있는 동안 지켜보다가, OBS에 넣으면 카드가 바뀐다 — 운영 staleTime(60초)에서도 (PR #539 리뷰)', async () => {
+      // 주 버튼 「확인했어요」로 창부터 닫고 OBS에 넣는 흐름이다. 감시를 창에 묶었을 때는 창을 닫는 순간 멈췄고,
+      // 운영 staleTime 60초 탓에 돌아와도 다시 읽지 않아 화면이 연결을 못 봤다 — 기본 테스트 클라이언트(staleTime 0)로는 안 드러난다
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const spy = stubStreamKeyFetch({ issued: false });
+      const client = new QueryClient({
+        defaultOptions: { queries: { staleTime: 60_000, retry: false } },
+      });
+      const { queryClient } = renderWithProviders(<PluginSettingsScreen />, client);
+
+      await issueFromSteps();
+      fireEvent.click(await screen.findByRole('button', { name: '확인했어요' }));
+      await passTime(queryClient, 0);
+      const asked = statusCalls(spy);
+
+      // 아직 안 넣었다 — 창이 없어도 계속 묻는다
+      await passTime(queryClient);
+      expect(statusCalls(spy)).toBeGreaterThan(asked);
+
+      spy.pairNow();
+      await passTime(queryClient);
+
+      expect(await screen.findByText('OBS 플러그인을 연결했어요')).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'OBS 플러그인 연결' })).not.toBeInTheDocument();
+      expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+      // 창을 닫은 뒤에 본 연결이다
+      expect(track.mock.calls).toContainEqual(['plugin_paired', { seen: 'later' }]);
+
+      // 연결을 봤으면 더 묻지 않는다
+      const afterPaired = statusCalls(spy);
+      await passTime(queryClient, PAIRING_WATCH_MS * 3);
+      expect(statusCalls(spy)).toBe(afterPaired);
+    });
+
+    it('창을 닫은 뒤 코드가 만료되면 더 묻지 않고, 순서 카드가 새로 받으라고 한다', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const spy = stubStreamKeyFetch({ issued: false });
+      const { queryClient } = renderWithProviders(<PluginSettingsScreen />);
+
+      await issueFromSteps();
+      fireEvent.click(await screen.findByRole('button', { name: '확인했어요' }));
+      expect(
+        await screen.findByText('받은 코드를 OBS의 PokeClip 창에 넣으면 여기서 바로 알려 드려요'),
+      ).toBeInTheDocument();
+
+      await passTime(queryClient, PAIRING_CODE_TTL_MS + PAIRING_WATCH_MS);
+      expect(await screen.findByText(/전에 받은 코드는 다시 볼 수 없어요/)).toBeInTheDocument();
+      const asked = statusCalls(spy);
+
+      await passTime(queryClient, PAIRING_WATCH_MS * 3);
+      expect(statusCalls(spy)).toBe(asked);
+    });
+
+    it('창을 닫고 OBS에 넣은 뒤 화면이 알아채기 전에 새 코드를 받아도, 새 코드가 쓰이기 전에는 연결됐다고 하지 않는다 (PR #539 리뷰)', async () => {
+      // 발급 순간의 기준을 캐시에서 읽던 때는 캐시(미연결)가 낡아, 새 코드를 받자마자 재조회가 앞 코드의 연결을 가져와
+      // 새 코드 창이 「연결됐어요」로 바뀌고 코드가 사라졌다. 이제 서버 시각끼리 견준다(발급 응답 expiresAt − TTL)
       vi.useFakeTimers({ shouldAdvanceTime: true });
       const spy = stubStreamKeyFetch({ issued: false });
       const { queryClient } = renderWithProviders(<PluginSettingsScreen />);
@@ -603,10 +666,43 @@ describe('PluginSettingsScreen', () => {
       await issueFromSteps();
       fireEvent.click(await screen.findByRole('button', { name: '확인했어요' }));
       await passTime(queryClient, 0);
-      const asked = statusCalls(spy);
 
-      await passTime(queryClient, PAIRING_WATCH_MS * 3);
-      expect(statusCalls(spy)).toBe(asked);
+      // 앞 코드가 OBS에 들어갔다 — 화면이 다음 주기에 읽기 전에 새 코드를 받는다
+      spy.pairNow(new Date(Date.now() - 1).toISOString());
+      fireEvent.click(screen.getByRole('button', { name: '코드 받기' }));
+      expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+      await passTime(queryClient);
+
+      // 회원은 앞 코드로 연결됐지만 새 코드는 아직 쓰이지 않았다 — 창은 코드를 그대로 보인다
+      expect(screen.getByText('KQ4M-7X2P')).toBeInTheDocument();
+      expect(
+        screen.queryByRole('heading', { name: '플러그인이 연결됐어요' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('연결을 보고 창을 닫으면 초점이 바뀐 카드 제목으로 간다 — 창을 연 버튼이 사라졌다 (PR #539 리뷰)', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const spy = stubStreamKeyFetch({ issued: false });
+      const { queryClient } = renderWithProviders(<PluginSettingsScreen />);
+
+      fireEvent.click(await screen.findByRole('button', { name: '다시 켰어요' }));
+      const trigger = screen.getByRole('button', { name: '코드 받기' });
+      trigger.focus();
+      fireEvent.click(trigger);
+      expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+
+      spy.pairNow();
+      await passTime(queryClient);
+      expect(
+        await screen.findByRole('heading', { name: '플러그인이 연결됐어요' }),
+      ).toBeInTheDocument();
+      // 순서 카드가 연동 코드 카드로 바뀌어 「코드 받기」가 문서에서 빠졌다
+      expect(trigger).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '확인' }));
+
+      // body로 떨어지지 않는다 — 문서 처음부터 다시 탭하지 않게
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: '연동 코드' }));
     });
 
     it('코드가 만료되면 창이 떠 있어도 더 묻지 않는다 — 죽은 코드는 쓰일 수 없다', async () => {

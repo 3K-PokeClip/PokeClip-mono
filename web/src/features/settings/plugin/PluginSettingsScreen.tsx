@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { AudioTrackNamesCard } from './AudioTrackNamesCard';
@@ -40,9 +40,25 @@ export function PluginSettingsScreen() {
     busy,
     justIssued,
     justPaired,
+    codeWaiting,
     clearJustIssued,
     issue,
   } = useStreamKeyState();
+  // 창을 닫았는데 초점이 갈 곳이 없으면(창을 연 버튼이 사라짐) 맨 위 카드 제목으로 옮긴다 — 연결을 본 순간 순서 카드가
+  // 연동 코드 카드로 바뀌어 「코드 받기」가 문서에서 빠지고, FocusScope는 문서에 남은 요소에만 초점을 돌려준다
+  // (PR #539 리뷰: 키보드·스크린리더 사용자가 문서 처음부터 다시 탭해야 했다). 창이 내려간 뒤(되돌리기 시도 뒤)에 본다
+  const topCardTitleRef = useRef<HTMLHeadingElement>(null);
+  const [dialogClosed, setDialogClosed] = useState(0);
+  useEffect(() => {
+    if (dialogClosed === 0) return;
+    if (document.activeElement === null || document.activeElement === document.body) {
+      topCardTitleRef.current?.focus();
+    }
+  }, [dialogClosed]);
+  const closeIssuedDialog = () => {
+    clearJustIssued();
+    setDialogClosed((n) => n + 1);
+  };
   const detectedOs = useDetectedOs();
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [slow, setSlow] = useState(false);
@@ -74,13 +90,16 @@ export function PluginSettingsScreen() {
       <div className={styles.stack}>
         {showSteps ? (
           <ConnectStepsCard
+            titleRef={topCardTitleRef}
             codeIssued={code.issued}
+            codeWaiting={codeWaiting}
             busy={busy}
             onDownload={() => openDownload('guide')}
             onIssue={issue}
           />
         ) : (
           <PairingCodeCard
+            titleRef={topCardTitleRef}
             pairedAt={code.pairedAt}
             loading={loading}
             error={error}
@@ -97,7 +116,7 @@ export function PluginSettingsScreen() {
         issued={justIssued}
         paired={justPaired}
         busy={busy}
-        onClose={clearJustIssued}
+        onClose={closeIssuedDialog}
         onIssueNew={issue}
       />
       <PluginDownloadDialog

@@ -47,11 +47,23 @@ export interface DisplayedPairingCode {
    */
   deadline: number;
   /**
-   * 발급한 순간의 연결 시각(서버 ISO 그대로, 없으면 undefined). 이 값에서 **바뀌어야** 이 코드로 방금 연결한 것이다 —
-   * 다른 PC를 더 붙이려고 코드를 다시 받는 회원은 이미 값이 있어서, 「있다」만 보면 창이 뜨자마자 연결됐다고 한다.
-   * 시각끼리 견주지 않는 이유는 deadline과 같다: 서버·클라 시계가 어긋날 수 있다.
+   * 이 코드를 발급한 **서버** 시각(epoch ms) = 발급 응답 expiresAt − TTL. 서버의 연결 시각(lastPairedAt)이 이 뒤면
+   * 이 코드(또는 그 뒤에 넣은 코드)로 연결한 것이다 — 둘 다 서버 시계라 클라 시계와 캐시 상태에 흔들리지 않는다.
+   * 「있다」만 보면 이미 연결한 회원이 다른 PC용 코드를 받자마자 연결됐다고 하고, 발급 순간의 값을 캐시에서 읽으면
+   * 캐시가 낡았을 때 새 코드가 쓰이기도 전에 「연결됐어요」가 뜬다(PR #539 리뷰).
    */
-  pairedBefore: string | undefined;
+  issuedAt: number;
+}
+
+/** 지켜보는 코드 — 창과 따로 산다. 창을 닫아도 코드가 살아 있는 동안은 연결을 기다린다(PR #539 리뷰) */
+interface WatchedCode {
+  issuedAt: number;
+  deadline: number;
+}
+
+/** 서버가 준 연결 시각이 이 코드의 발급 뒤인가 */
+function pairedSince(lastPairedAt: string | undefined, issuedAt: number): boolean {
+  return lastPairedAt !== undefined && Date.parse(lastPairedAt) >= issuedAt;
 }
 
 export interface StreamKeyState {
@@ -72,6 +84,11 @@ export interface StreamKeyState {
    * 그 뒤의 연결 사실은 code.pairedAt이 말한다.
    */
   justPaired: boolean;
+  /**
+   * 받은 코드가 아직 살아 있고 쓰이기를 기다리는 중이다 — 창을 닫았어도. 연결 순서 카드가 「새로 받아 주세요」 대신
+   * 「받은 코드를 넣으면 알려 드려요」라고 하게 한다(PR #539 리뷰: 막 OBS에 넣으려는 사람에게 실패처럼 읽혔다).
+   */
+  codeWaiting: boolean;
   /** 모달을 닫는 지점 — 이 뒤로 원문은 다시 볼 수 없다. */
   clearJustIssued: () => void;
   /** 새 일회용 코드 발급 — 첫 발급·재발급·만료 후 재발급 전부 이 한 경로다. */
@@ -82,14 +99,24 @@ export function useStreamKeyState(): StreamKeyState {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [justIssued, setJustIssued] = useState<DisplayedPairingCode | null>(null);
+  const [watching, setWatching] = useState<WatchedCode | null>(null);
+  // 코드가 죽으면 지켜보기를 거둔다 — 순서 카드 문구도 이때 「새로 받아 주세요」로 돌아간다
+  useEffect(() => {
+    if (watching === null) return;
+    const id = window.setTimeout(
+      () => setWatching(null),
+      Math.max(0, watching.deadline - Date.now()),
+    );
+    return () => window.clearTimeout(id);
+  }, [watching]);
   const status = useQuery({
     ...streamKeyStatusQueryOptions,
-    // 코드 창이 떠 있고 코드가 살아 있는 동안만 다시 읽는다(POK-608). 연결을 봤거나 만료됐거나 창을 닫으면 멈춘다 —
-    // 읽을 때마다 다시 계산되므로 마지막 한 번을 읽은 뒤에 선다
+    // 받은 코드가 살아 있는 동안 다시 읽는다(POK-608) — 창을 닫아도. 창의 주 버튼이 「확인했어요」라 코드를 복사하고
+    // 창부터 닫는 흐름이 자연스러운데, 창에 묶었을 때는 전역 staleTime(60초) 탓에 돌아와도 연결을 못 봤다(PR #539 리뷰).
+    // 연결을 봤거나 만료되면 멈춘다 — 읽을 때마다 다시 계산되므로 마지막 한 번을 읽은 뒤에 선다
     refetchInterval: (query) => {
-      if (justIssued === null || Date.now() >= justIssued.deadline) return false;
-      const pairedAt = query.state.data?.lastPairedAt;
-      return pairedAt !== undefined && pairedAt !== justIssued.pairedBefore
+      if (watching === null || Date.now() >= watching.deadline) return false;
+      return pairedSince(query.state.data?.lastPairedAt, watching.issuedAt)
         ? false
         : PAIRING_WATCH_MS;
     },
@@ -98,16 +125,13 @@ export function useStreamKeyState(): StreamKeyState {
   const mutation = useSessionMutation({
     mutationFn: issuePairingCode,
     onSuccess: (issued) => {
-      const before = queryClient.getQueryData<StreamKeyStatus>(
-        streamKeyStatusQueryOptions.queryKey,
-      );
       // 마감은 서버 expiresAt이 아니라 "수신 순간 + TTL"로 앵커한다 — 클라 시계가
       // 서버와 어긋나 있어도 카운트다운은 같은 시계끼리 비교하게 된다. (리뷰 #74)
-      setJustIssued({
-        code: issued.code,
-        deadline: Date.now() + PAIRING_CODE_TTL_MS,
-        pairedBefore: before?.lastPairedAt,
-      });
+      // 연결 판정은 거꾸로 서버 시각끼리 견준다 — 발급 시각도 서버 값(expiresAt − TTL)으로 둔다(DisplayedPairingCode.issuedAt)
+      const deadline = Date.now() + PAIRING_CODE_TTL_MS;
+      const issuedAt = Date.parse(issued.expiresAt) - PAIRING_CODE_TTL_MS;
+      setJustIssued({ code: issued.code, deadline, issuedAt });
+      setWatching({ issuedAt, deadline });
       // 발급 성공 = 키 존재 확정(서버 ensureKey). 재조회가 끝나기 전이나 실패한 채로
       // 모달을 닫아도(justIssued가 비워져도) 「코드를 받은 적 없음」으로 되돌아가지 않게
       // 캐시를 먼저 낙관 갱신한다. 키가 이미 있었으면 createdAt(최초 발급일)은 그대로
@@ -161,11 +185,11 @@ export function useStreamKeyState(): StreamKeyState {
   // 연결 순서를 본다(ConnectStepsCard)
   const lastPairedAt = status.data?.lastPairedAt;
   const pairedAt = lastPairedAt ? new Date(lastPairedAt).toLocaleDateString('ko-KR') : undefined;
-  // 띄워 둔 코드가 쓰였나 — 발급한 순간과 연결 시각이 달라졌을 때만이다(DisplayedPairingCode.pairedBefore)
-  const justPaired =
-    justIssued !== null && lastPairedAt !== undefined && lastPairedAt !== justIssued.pairedBefore;
+  // 띄워 둔 코드가 쓰였나 — 서버의 연결 시각이 그 코드의 발급 뒤일 때만이다(DisplayedPairingCode.issuedAt)
+  const justPaired = justIssued !== null && pairedSince(lastPairedAt, justIssued.issuedAt);
+  const codeWaiting = watching !== null && !pairedSince(lastPairedAt, watching.issuedAt);
 
-  // 읽은 연결 사실을 둘러보기 체크·분석 이벤트로 올린다. 코드 창에서 본 연결과 나중에 돌아와 본 연결을 가른다
+  // 읽은 연결 사실을 둘러보기 체크·분석 이벤트로 올린다. 코드 창이 떠 있을 때 본 연결과 창을 닫은 뒤에 본 연결을 가른다
   const statusData = status.data;
   useEffect(() => {
     if (statusData !== undefined)
@@ -187,6 +211,7 @@ export function useStreamKeyState(): StreamKeyState {
     busy: mutation.isPending,
     justIssued,
     justPaired,
+    codeWaiting,
     clearJustIssued,
     issue,
   };

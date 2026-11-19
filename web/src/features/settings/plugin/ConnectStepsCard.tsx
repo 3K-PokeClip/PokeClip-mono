@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type Ref } from 'react';
 import { Check, Download } from 'lucide-react';
 import { Button } from '@/ui';
 import styles from './PluginSettingsScreen.module.css';
@@ -18,12 +18,22 @@ import styles from './PluginSettingsScreen.module.css';
 // 진한 버튼은 지금 할 일 하나에만 둔다: 처음엔 설치, 다시 켰다고 하면 코드.
 export function ConnectStepsCard({
   codeIssued,
+  codeWaiting,
   busy,
+  titleRef,
   onDownload,
   onIssue,
 }: {
   /** 코드를 받은 적이 있다(연결은 안 됐다) — 그 코드는 다시 볼 수 없으니 새로 받으라고 말한다. */
   codeIssued: boolean;
+  /**
+   * 방금 받은 코드가 아직 살아 있다(창을 닫았어도) — 새로 받으라고 하지 않고, 넣으면 여기서 알려 준다고 말한다.
+   * 화면은 그 코드가 쓰이기를 지켜보고 있다(useStreamKeyState). 코드를 복사하고 창부터 닫은 사람에게 「새로 받아
+   * 주세요」는 실패처럼 읽혔다(PR #539 리뷰).
+   */
+  codeWaiting: boolean;
+  /** 창을 닫았는데 초점이 갈 곳이 없을 때 화면이 이 제목으로 초점을 옮긴다(PluginSettingsScreen) */
+  titleRef?: Ref<HTMLHeadingElement>;
   /** 발급 진행 중 — 이중 클릭 방지. */
   busy?: boolean;
   onDownload: () => void;
@@ -35,13 +45,15 @@ export function ConnectStepsCard({
   // role="list"는 겹쳐 보여도 지우지 않는다 — list-style: none인 목록은 Safari가 목록 의미를 벗긴다(PluginDownloadPanel과 같다)
   return (
     <section className={styles.card} aria-labelledby="connect-steps-title">
-      <h2 className={styles.cardTitle} id="connect-steps-title">
+      <h2 className={styles.cardTitle} id="connect-steps-title" ref={titleRef} tabIndex={-1}>
         OBS 플러그인 연결
       </h2>
       <p className={styles.connectLead}>
-        {codeIssued
-          ? '전에 받은 코드는 다시 볼 수 없어요. 아래 순서대로 새로 받아 주세요'
-          : '아래 순서대로 하면 연결돼요'}
+        {codeWaiting
+          ? '받은 코드를 OBS의 PokeClip 창에 넣으면 여기서 바로 알려 드려요'
+          : codeIssued
+            ? '전에 받은 코드는 다시 볼 수 없어요. 아래 순서대로 새로 받아 주세요'
+            : '아래 순서대로 하면 연결돼요'}
       </p>
       <ol role="list" className={styles.connectSteps}>
         <li className={styles.connectStep}>
@@ -75,12 +87,12 @@ export function ConnectStepsCard({
               PokeClip 창이 저절로 떠요. 안 보이면 OBS 메뉴 「독 › PokeClip」
             </p>
           </div>
-          {/* 눌린 상태를 aria-pressed로 알린다 — 다시 누르면 3번이 도로 잠긴다 */}
+          {/* 상태는 라벨이 말한다(「다시 켰어요」 → 누르면 「아직이에요」로 되돌리기) — 다시 누르면 3번이 도로 잠긴다.
+              aria-pressed를 같이 달면 「아직이에요, 눌림」처럼 상태를 두 번, 엇갈리게 읽는다(PR #539 리뷰) */}
           <Button
             variant="soft"
             size="sm"
             className={styles.connectStepAction}
-            aria-pressed={restarted}
             onClick={() => setRestarted((v) => !v)}
           >
             {restarted ? '아직이에요' : '다시 켰어요'}

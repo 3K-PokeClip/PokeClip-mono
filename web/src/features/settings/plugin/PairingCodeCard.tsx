@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import { Check } from 'lucide-react';
 import { Button, Skeleton } from '@/ui';
 import styles from './PluginSettingsScreen.module.css';
@@ -9,6 +10,7 @@ import styles from './PluginSettingsScreen.module.css';
 // 재발급은 새 코드만 찍는다(rotate 없음) — 방송 키는 그대로라 이미 붙은 OBS는 끊기지 않는다.
 export function PairingCodeCard({
   pairedAt,
+  titleRef,
   loading,
   error,
   retrying,
@@ -18,6 +20,11 @@ export function PairingCodeCard({
 }: {
   /** 플러그인에 코드를 넣은 마지막 날(표시용) — 읽는 중·못 읽음이면 없다. */
   pairedAt?: string;
+  /**
+   * 창을 닫았는데 초점이 갈 곳이 없을 때 화면이 이 제목으로 초점을 옮긴다(PluginSettingsScreen) — 연결을 본 순간 순서
+   * 카드가 이 카드로 바뀌어, 창을 연 「코드 받기」 버튼이 문서에서 사라진다(PR #539 리뷰)
+   */
+  titleRef?: Ref<HTMLHeadingElement>;
   /** 상태 조회 전 — 연결했는지 아직 모른다. */
   loading?: boolean;
   /** 상태를 한 번도 못 읽음 — 「연결 전」으로 오인시키면 안 된다 (리뷰 #73). */
@@ -31,7 +38,7 @@ export function PairingCodeCard({
 }) {
   return (
     <section className={styles.card} aria-labelledby="pairing-code-title">
-      <h2 className={styles.cardTitle} id="pairing-code-title">
+      <h2 className={styles.cardTitle} id="pairing-code-title" ref={titleRef} tabIndex={-1}>
         연동 코드
       </h2>
       <p className={styles.codeCardDesc}>
