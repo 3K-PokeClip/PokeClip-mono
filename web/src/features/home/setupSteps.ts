@@ -40,7 +40,9 @@ export function setupSteps(links: HomeLinks): SetupStep[] {
     },
     {
       id: 'plugin',
-      title: 'OBS 플러그인 연결',
+      // 환영 창·둘러보기와 같은 이름(「OBS 플러그인 설치」)이다 — 「연결」이라 적었을 때는 같은 단계가 화면마다 다르게 불렸고
+      // 한 줄 안에서도 제목(연결)과 버튼(설치하기)이 달랐다. 끝났다는 말은 doneNote(「연결 완료」)가 한다
+      title: 'OBS 플러그인 설치',
       // 설치가 먼저다 — 「코드 받기」였을 때 새 회원이 플러그인 없이 10분짜리 코드부터 받고 떠났다(POK-609).
       // 코드를 받은 적이 있으면 남은 일(OBS에 넣기)만 말한다
       desc: codeOnly
@@ -50,7 +52,7 @@ export function setupSteps(links: HomeLinks): SetupStep[] {
       // 완료는 서버의 연결 시각으로만 센다(POK-608). 코드 발급은 연결이 아니다: 키는 첫 발급 때 생긴다
       done: links.pluginPaired === true,
       unknown: links.pluginPaired === null,
-      // 버튼 폭이 104u로 고정이라(.trackAction) 줄 제목(OBS 플러그인 연결)에 기대 짧게 쓴다 — 연결 상태 카드와 같은 말
+      // 버튼 폭이 104u로 고정이라(.trackAction) 줄 제목(OBS 플러그인 설치)에 기대 짧게 쓴다 — 연결 상태 카드와 같은 말
       action: { label: codeOnly ? '연결하기' : '설치하기', href: '/settings/plugin' },
     },
     {
