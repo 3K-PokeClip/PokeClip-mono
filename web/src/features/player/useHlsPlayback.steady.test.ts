@@ -48,7 +48,7 @@ const LIVE_EDGE_S = 38;
 
 /** 영상 0초부터 4초 조각 열 개(PDT0 부터) */
 function details(): Details {
-  const fragments = [...Array(10).keys()].map((i) => ({
+  const fragments = Array.from({ length: 10 }, (_, i) => ({
     start: i * 4,
     duration: 4,
     programDateTime: PDT0 + i * 4_000,
