@@ -2,7 +2,7 @@ import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { openSession, type SessionEvent } from './rewindSwitch';
 import { sessionView } from './sessionView';
-import type { PlaybackHooks } from './useHlsPlayback';
+import type { PlaybackHooks, useHlsPlayback } from './useHlsPlayback';
 import type { PlaybackSession } from './usePlaybackSession';
 import { useLiveRewindPlayback } from './useLiveRewindPlayback';
 
@@ -13,7 +13,7 @@ import { useLiveRewindPlayback } from './useLiveRewindPlayback';
 const player = vi.hoisted(() => ({ hooks: null as PlaybackHooks | null }));
 
 /** 실재생 훅의 인자 — 흉내가 고리(hooks) 자리를 타입으로 집는다 */
-type HlsPlaybackArgs = Parameters<typeof import('./useHlsPlayback').useHlsPlayback>;
+type HlsPlaybackArgs = Parameters<typeof useHlsPlayback>;
 
 vi.mock('./useHlsPlayback', () => ({
   useHlsPlayback: (...[, , , , , , , hooks]: HlsPlaybackArgs) => {

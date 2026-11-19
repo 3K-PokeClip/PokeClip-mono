@@ -31,7 +31,9 @@ class FakeHls {
   }
   trigger(event: string, data: { details: Details }) {
     this.latestLevelDetails = data.details;
-    for (const h of this.handlers.get(event) ?? []) h(event, data);
+    for (const h of this.handlers.get(event) ?? []) {
+      h(event, data);
+    }
   }
   attachMedia() {}
   loadSource() {}

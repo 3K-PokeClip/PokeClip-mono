@@ -45,10 +45,7 @@ function behind(excessS: number, over: Partial<LiveCatchupSample> = {}): LiveCat
   };
 }
 
-/**
- * 「지연 − 목표」 가 부동소수점으로도 정확히 excessS 인 표본 — 목표 1.25 에 0.1 을 더하고 빼면 0.10000000000000009 가 되어
- * 경계를 못 잰다. 목표 0 이면 뺄셈이 정확하다
- */
+/** 목표 0 이라 지연이 곧 「지연 − 목표」 인 표본 — 지연 자체가 초과 문턱 숫자와 같아진다 */
 function exactlyBehind(excessS: number): LiveCatchupSample {
   return behind(excessS, { latencyS: excessS, targetLatencyS: 0 });
 }
@@ -133,6 +130,14 @@ describe('catchupStep — 배속', () => {
     // 끈 뒤 0.5초 밑의 초과로는 다시 켜지 않는다
     expect(actions.slice(7)).toEqual([NONE, NONE]);
     expect(rateChanges(start, actions)).toBe(2);
+  });
+
+  it('T3 실제 목표 1.25 · 지연 1.35(초과 0.1)면 그 표본에서 끈다 — 뺄셈 오차로 한 표본 늦지 않는다', () => {
+    // 부동소수점으로 1.35 − 1.25 = 0.10000000000000009 다
+    expect(
+      catchupStep(catchingUp('full', 1.1), behind(0.1, { latencyS: 1.35 }), LIVE_CATCHUP_POLICY)
+        .action,
+    ).toEqual({ kind: 'rate', rate: 1 });
   });
 
   it('T3 1.05 로 켠 배속도 초과가 1초를 넘게 자라도 1.1 로 바꾸지 않는다', () => {
@@ -310,14 +315,19 @@ describe('catchupStep — 목록 정체', () => {
     expect(actions[6]).toEqual({ kind: 'rate', rate: 1.1 });
   });
 
-  it('간헐 정체(정체 ↔ 짧은 회복 반복)에서 배속을 흔들지 않는다', () => {
-    const start = initialCatchupState('full');
-    const ages = Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? 9 : 1));
-    const { actions } = run(
-      start,
-      ages.map((ageS) => behind(1.5, { list: { ageS, targetDurationS: TD } })),
-    );
-    expect(rateChanges(start, actions)).toBe(0);
+  it('정체 뒤 전진 한 번에 이어 재생이 멎어 다음 표본이 TD 넘게 늦으면 풀리지 않고, 다음 전진의 두 표본째에 풀린다', () => {
+    // hls.js 의 age 는 전진 때 0 에서 시계대로 오른다 — 표본마다 (지금 − 마지막 전진) 초
+    const at = (nowMs: number, advancedAtMs: number) =>
+      behind(1.5, { nowMs, list: { ageS: (nowMs - advancedAtMs) / 1000, targetDurationS: TD } });
+    const { actions } = run(initialCatchupState('full'), [
+      at(0, -9_000),
+      at(250, -250),
+      // 재생이 4초 넘게 멎어 timeupdate 가 끊겼다 — age 4.75 ≥ TD 라 연속이 끊긴다
+      at(4_500, -250),
+      at(4_750, 4_750),
+      at(5_000, 4_750),
+    ]);
+    expect(actions).toEqual([NONE, NONE, NONE, NONE, { kind: 'rate', rate: 1.1 }]);
   });
 
   it('띄엄띄엄 자라는 목록(9초마다 한 번)에서 배속 변경은 한 주기에 켬 · 끔 둘을 넘지 않는다', () => {
@@ -343,18 +353,25 @@ describe('catchupStep — 넘김 확인', () => {
     }
   });
 
-  it('확인 중 넘긴 위치 근처(지연 7)는 점프 0', () => {
-    // 넘긴 위치 24 · 되감기 끝 28 · 현재 25 · 라이브 끝 32 · 목표 7.25
-    const sample = behind(0, {
+  it('확인 중 넘긴 위치 근처(지연 7)에서 목표에 닿아도 full 로 오르지 않아, 이어 10초 넘게 밀려도 점프 0', () => {
+    // 넘긴 위치 24 · 되감기 끝 28 · 현재 25 · 라이브 끝 32 · 목표 7.25 — 지연 7 은 목표 안쪽이다(계획 R3 반례)
+    const near = behind(0, {
       latencyS: 7,
       targetLatencyS: 7.25,
       currentTimeS: 25,
       liveSyncPositionS: 32 - 7.25,
       handoffConfirming: true,
     });
-    expect(catchupStep(initialCatchupState('rate'), sample, LIVE_CATCHUP_POLICY).action).toEqual(
-      NONE,
-    );
+    // 확인이 끝나지 않은 채 4초 멎어 라이브 끝이 36 으로 자랐다 — 지연 11 · 동기 위치는 3.75초 앞
+    const stalled = {
+      ...near,
+      nowMs: 4_000,
+      latencyS: 11,
+      liveSyncPositionS: 36 - 7.25,
+    };
+    const { actions, state } = run(initialCatchupState('rate'), [near, stalled]);
+    expect(actions).toEqual([NONE, { kind: 'rate', rate: 1.1 }]);
+    expect(state.mode).toBe('rate');
   });
 
   it('확인이 끝난 표본에서 rate 는 full 로 오르고, 그 표본부터 건너뛴다', () => {
@@ -541,10 +558,10 @@ function fakeVideo(initial: Partial<MediaState> = {}) {
   return { video, state, writes };
 }
 
-/** 지연 − 목표 = excessS 인 재생기 쪽 값 */
+/** 재생 위치 AT 에서 「지연 − 목표 = excessS」 인 재생기 쪽 값 */
 function reading(excessS: number, over: Partial<LiveCatchupReading> = {}): LiveCatchupReading {
   return {
-    latencyS: TARGET + excessS,
+    liveEdgeS: AT + TARGET + excessS,
     targetLatencyS: TARGET,
     liveSyncPositionS: AT + excessS,
     list: { ageS: 0.5, targetDurationS: TD },
@@ -621,6 +638,18 @@ describe('watchLiveCatchup', () => {
     expect(writes.currentTime).toBe(1);
   });
 
+  it('건 배속이 영상에서 사건 없이 1 로 풀리면(recoverMediaError 의 미디어 load) 다음 표본에서 다시 건다', () => {
+    const { tick, watch, state } = setup();
+    watch.arm('full');
+    tick();
+    expect(state.playbackRate).toBe(1.1);
+
+    // 쓰기 기록을 남기지 않고 바꾼다 — 미디어 load 는 ratechange 없이 기본 배속으로 되돌린다(실측 (다))
+    state.playbackRate = 1;
+    tick();
+    expect(state.playbackRate).toBe(1.1);
+  });
+
   it('멈춘 영상 · 시크 중인 영상에서는 판정하지 않는다', () => {
     const { tick, watch, state } = setup({ paused: true });
     watch.arm('full');
@@ -654,6 +683,50 @@ describe('watchLiveCatchup', () => {
     watch.arm('full');
     tick();
     expect(state.playbackRate).toBe(1.1);
+  });
+
+  it('켜진 중 다시 arm 하면 걸어 둔 배속을 잇는다 — 새로 잡았다면 초과 0.8 에서 1.05 로 다시 건다', () => {
+    const { tick, watch, state, writes, current } = setup();
+    watch.arm('full');
+    tick();
+    expect(state.playbackRate).toBe(1.1);
+    const rateWrites = writes.playbackRate;
+
+    watch.arm('rate');
+    current.reading = reading(0.8);
+    tick();
+    expect(state.playbackRate).toBe(1.1);
+    expect(writes.playbackRate).toBe(rateWrites);
+  });
+
+  it('켜진 중 다시 arm 하면 점프 시각을 잇는다 — 점프 1초 뒤 다시 켜도 쿨다운 8초 안이라 건너뛰지 않는다', () => {
+    const { tick, watch, state, writes, current, clock } = setup();
+    watch.arm('full');
+    current.reading = reading(12);
+    tick();
+    expect(writes.currentTime).toBe(1);
+
+    clock.ms = 1_000;
+    watch.arm('full');
+    current.reading = reading(12, {
+      liveEdgeS: state.currentTime + TARGET + 12,
+      liveSyncPositionS: state.currentTime + 12,
+    });
+    tick();
+    expect(writes.currentTime).toBe(1);
+  });
+
+  it('켜진 중 다시 arm 하면 정체 판정을 잇는다 — 회복 표본 하나로는 풀리지 않는다', () => {
+    const { tick, watch, state, current } = setup();
+    watch.arm('full');
+    current.reading = reading(1.5, { list: { ageS: 9, targetDurationS: TD } });
+    tick();
+    expect(state.playbackRate).toBe(1);
+
+    watch.arm('full');
+    current.reading = reading(1.5, { list: { ageS: 0.25, targetDurationS: TD } });
+    tick();
+    expect(state.playbackRate).toBe(1);
   });
 
   it('arm(off) 은 disarm 과 같다', () => {
@@ -692,7 +765,10 @@ describe('watchLiveCatchup', () => {
 
     clock.ms = 1_000;
     state.buffered = [[0, state.currentTime + 3]];
-    current.reading = reading(1.5, { liveSyncPositionS: state.currentTime + 1.5 });
+    current.reading = reading(1.5, {
+      liveEdgeS: state.currentTime + TARGET + 1.5,
+      liveSyncPositionS: state.currentTime + 1.5,
+    });
     tick();
     expect(state.playbackRate).toBe(1.1);
   });
@@ -716,17 +792,16 @@ describe('readHlsCatchup — 재생기 값을 판정할 수 없으면 목록을 
     details: Record<string, unknown> = {},
   ): CatchupHls {
     return {
-      latency: 3,
       targetLatency: 1.25,
       liveSyncPosition: 30,
-      latestLevelDetails: { live: true, age: 0.5, targetduration: TD, ...details },
+      latestLevelDetails: { live: true, edge: 30.5, age: 0.5, targetduration: TD, ...details },
       ...over,
     } as unknown as CatchupHls;
   }
 
-  it('정상 값은 그대로 · 넘김 확인 여부를 싣는다', () => {
+  it('정상 값은 그대로(라이브 끝은 목록 끝 + age) · 넘김 확인 여부를 싣는다', () => {
     expect(readHlsCatchup(hlsLike(), true)).toEqual({
-      latencyS: 3,
+      liveEdgeS: 31,
       targetLatencyS: 1.25,
       liveSyncPositionS: 30,
       list: { ageS: 0.5, targetDurationS: TD },
@@ -739,7 +814,7 @@ describe('readHlsCatchup — 재생기 값을 판정할 수 없으면 목록을 
     ['목록이 없다', hlsLike({ latestLevelDetails: null })],
     ['목록이 끝났다(ENDLIST)', hlsLike({}, { live: false })],
     ['목표를 아직 모른다(null)', hlsLike({ targetLatency: null })],
-    ['지연이 수가 아니다', hlsLike({ latency: undefined })],
+    ['목록 끝이 수가 아니다', hlsLike({}, { edge: undefined })],
     ['age 가 수가 아니다', hlsLike({}, { age: Number.NaN })],
     ['TD 가 수가 아니다', hlsLike({}, { targetduration: undefined })],
   ] as const)('%s', (...[, hls]) => {

@@ -4,9 +4,9 @@ import type { PlaybackSource } from './rewindSwitch';
 import { useHlsPlayback, type PlaybackHooks } from './useHlsPlayback';
 
 // 라이브 재생기가 「라이브 보는 중」 에만 따라잡는다(POK-583 c2 — H1–H10). 켜고 끄는 것은 사람 명령 자리(세션 seekToMs ·
-// 비세션 시크 · LIVE · 사람 pause)와 재생기가 설 때(MANIFEST_PARSED)다. hls.js 는 따라잡기가 읽는 값(latency ·
-// targetLatency · liveSyncPosition · latestLevelDetails)만 흉내 내고, <video> 는 재생 위치 · 배속 쓰기를 센다. 영상
-// 0–32초 · 4초 조각 8개 · 라이브 동기 위치 30초 = 라이브 끝. 목표 1.5초.
+// 비세션 시크 · LIVE · 사람 pause)와 재생기가 설 때(MANIFEST_PARSED)다. hls.js 는 따라잡기가 읽는 값(targetLatency ·
+// liveSyncPosition · latestLevelDetails — 지연은 앱이 목록 끝 + age − 재생 위치로 잰다)만 흉내 내고, <video> 는 재생 위치 ·
+// 배속 쓰기를 센다. 영상 0–32초 · 4초 조각 8개 · 라이브 동기 위치 30초 = 라이브 끝. 목표 1.5초.
 
 interface Details {
   fragments: Array<{ start: number; duration: number; programDateTime: number }>;
@@ -14,11 +14,14 @@ interface Details {
   targetduration: number;
   live: boolean;
   age: number;
+  /** 목록 끝(초) — 라이브 끝 추정은 edge + age 다(hls.js 1.7.3 estimateLiveEdge) */
+  edge: number;
 }
 
 interface FakeHlsLike {
   latestLevelDetails: Details | null;
   liveSyncPosition: number | null;
+  /** hls.js 가 자기 timeupdate 에서만 다시 재는 지연 캐시 — 앱은 읽지 않는다(낡은 값을 넣어 그것을 잰다) */
   latency: number;
   targetLatency: number | null;
   trigger: (event: string, data: unknown) => void;
@@ -54,7 +57,9 @@ vi.mock('hls.js', () => {
     }
     off() {}
     trigger(event: string, data: unknown) {
-      for (const h of this.handlers.get(event) ?? []) h(event, data);
+      for (const h of this.handlers.get(event) ?? []) {
+        h(event, data);
+      }
     }
     attachMedia() {}
     loadSource() {}
@@ -79,7 +84,7 @@ function details(): Details {
     duration: 4,
     programDateTime: PDT0 + i * 4_000,
   }));
-  return { fragments, fragmentStart: 0, targetduration: 4, live: true, age: 0.5 };
+  return { fragments, fragmentStart: 0, targetduration: 4, live: true, age: 0.5, edge: 32 };
 }
 
 const LIVE: PlaybackSource = {
@@ -149,7 +154,7 @@ async function mount(source: PlaybackSource, hooks: PlaybackHooks = {}, atS = 20
     hls.latestLevelDetails = details();
     hls.liveSyncPosition = EDGE_S;
     hls.targetLatency = TARGET_S;
-    hls.latency = EDGE_S - atS;
+    setLatency(EDGE_S - atS);
     act(() => hls.trigger('hlsManifestParsed', {}));
   }
   media.timeWrites.length = 0;
@@ -157,13 +162,18 @@ async function mount(source: PlaybackSource, hooks: PlaybackHooks = {}, atS = 20
   return { el, view };
 }
 
-/** 지연을 바꾼다(hls.latency) */
+/** 지금 재생 위치에서 지연(목록 끝 + age − 재생 위치)이 seconds 가 되게 목록 끝을 옮긴다 */
 function setLatency(seconds: number) {
-  lastHls().latency = seconds;
+  const hls = lastHls();
+  const list = hls.latestLevelDetails;
+  if (list === null) throw new Error('목록이 없다');
+  hls.latestLevelDetails = { ...list, edge: media.time + seconds - list.age };
 }
 
 function timeupdate(el: HTMLVideoElement, times = 1) {
-  for (let i = 0; i < times; i++) act(() => el.dispatchEvent(new Event('timeupdate')));
+  for (let i = 0; i < times; i++) {
+    act(() => el.dispatchEvent(new Event('timeupdate')));
+  }
 }
 
 /** 사람이 멈춘다(pause 사건) */
@@ -482,6 +492,43 @@ describe('H10 오른쪽 끝 3초 안 시크 = 「실시간으로」(Q2 (가) · 
     setLatency(TARGET_S + 1.5);
     timeupdate(el);
     expect(media.rate).toBe(behindS < 3 ? 1.1 : 1);
+  });
+});
+
+describe('사람 시크 · LIVE 직후 첫 표본은 그 자리의 지연으로 판정한다(hls.latency 캐시를 읽지 않는다)', () => {
+  /**
+   * 10초 되감아 둔 뒤 사람 명령을 낸다. hls.js 는 지연(hls.latency)을 자기 timeupdate 에서만 다시 재는데, 그 리스너는 앱
+   * 따라잡기보다 늦게 붙어 명령 직후 첫 표본은 시크 전 값을 읽는다 — 흉내도 latency 를 시크 전 값(11.3초)에 묶어 둔다
+   */
+  async function rewound(session: boolean) {
+    const mounted = await mount(LIVE, session ? sessionHooks() : {}, EDGE_S);
+    act(() => {
+      if (session) mounted.view.result.current.seekToMs(EDGE_MS - 10_000);
+      else mounted.view.result.current.seekBy(10);
+    });
+    lastHls().latency = 11.3;
+    return mounted;
+  }
+
+  it.each([
+    ['세션 LIVE(seekToLiveEdge)', true],
+    ['세션 밖 「실시간으로」(returnToLive)', false],
+  ] as const)('%s — 배속 0 · 점프 0', async (...[, session]) => {
+    const { el, view } = await rewound(session);
+    act(() => {
+      if (session) view.result.current.seekToLiveEdge();
+      else view.result.current.returnToLive();
+    });
+    timeupdate(el);
+    expect(rateRaised()).toBe(false);
+    expect(media.timeWrites).toEqual([EDGE_S - 10, EDGE_S]);
+  });
+
+  it('세션 seekToMs 끝 2.5초 앞(끝 3초 안 → 켬) — 두 번째 점프 0', async () => {
+    const { el, view } = await rewound(true);
+    act(() => view.result.current.seekToMs(EDGE_MS - 2_500));
+    timeupdate(el);
+    expect(media.timeWrites).toEqual([EDGE_S - 10, EDGE_S - 2.5]);
   });
 });
 

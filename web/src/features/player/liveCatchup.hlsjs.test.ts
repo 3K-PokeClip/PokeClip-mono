@@ -11,8 +11,8 @@ import { readHlsCatchup } from './liveCatchup';
 
 // 앱 따라잡기(liveCatchup.ts)가 기대는 진짜 hls.js 1.7.3(dist)의 동작을 고정한다(POK-583 c2). J1: 라이브 설정
 // (maxLiveSyncPlaybackRate: 1)에서 hls.js 의 지연 제어기는 앱이 건 배속을 덮지 않는다(latency-controller onTimeupdate 의
-// 「maxLiveSyncPlaybackRate === 1 이면 돌아감」). J2: 앱이 읽는 값(latency · targetLatency · liveSyncPosition ·
-// latestLevelDetails.age · targetduration)의 뜻. jsdom 에는 MediaSource 가 없어 영상 노드를 재생기 전체에 붙이지 않고, 지연
+// 「maxLiveSyncPlaybackRate === 1 이면 돌아감」). J2: 앱이 읽는 값(targetLatency · liveSyncPosition ·
+// latestLevelDetails.edge · age · targetduration)의 뜻 — 앱이 잰 지연이 hls.latency 와 같은 식인지도 본다. jsdom 에는 MediaSource 가 없어 영상 노드를 재생기 전체에 붙이지 않고, 지연
 // 제어기에만 그 MEDIA_ATTACHED 처리기로 붙인다 — 제어기는 그 노드의 timeupdate 를 듣는다(hlsLiveStart.hlsjs.test.ts 와 같은 틀).
 
 const VIDEO_URL = 'https://m/live/k/video1_stream.m3u8';
@@ -60,7 +60,9 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
-  for (const hls of players.splice(0)) hls.destroy();
+  for (const hls of players.splice(0)) {
+    hls.destroy();
+  }
   vi.useRealTimers();
 });
 
@@ -117,7 +119,9 @@ function attachToLatencyController(hls: Hls, currentTime: number): HTMLVideoElem
 async function run(reloads: number) {
   await vi.advanceTimersByTimeAsync(0);
   await vi.advanceTimersByTimeAsync(0);
-  for (let i = 0; i < reloads; i++) await vi.advanceTimersByTimeAsync(TD * 1000);
+  for (let i = 0; i < reloads; i++) {
+    await vi.advanceTimersByTimeAsync(TD * 1000);
+  }
 }
 
 describe('J1 hls.js 는 앱이 건 배속을 덮지 않는다(maxLiveSyncPlaybackRate: 1)', () => {
@@ -158,7 +162,9 @@ describe('J2 앱이 읽는 hls.js 값의 뜻(readHlsCatchup)', () => {
     expect(reading.targetLatencyS).toBe(PART_HOLD_BACK);
     expect(reading.list?.targetDurationS).toBe(TD);
     expect(reading.list?.ageS).toBeCloseTo(1, 1);
-    expect(reading.latencyS).toBeCloseTo(details.edge + details.age - 10, 1);
+    // 라이브 끝 − 재생 위치가 hls.js 가 자기 timeupdate 에서 잰 지연(latency-controller computeLatency)과 같다
+    expect(reading.liveEdgeS).toBe(details.edge + details.age);
+    expect(reading.liveEdgeS - 10).toBe(hls.latency);
     expect(reading.liveSyncPositionS).toBe(details.edge - PART_TARGET);
     expect(reading.handoffConfirming).toBe(false);
   });

@@ -254,6 +254,9 @@ export function useHlsPlayback(
   // 끝에 있는가 — 보이는 숫자(steadySeconds)가 아니라 반올림 전 시차로 정한다. 시크바 손잡이 · LIVE 단추가 이 값 하나를 쓴다
   // (POK-583 계획 D5 · R8): 숫자로 정하면 실제로 3초 넘게 밀렸는데도 숫자가 2에 머무는 동안 끝으로 보였다
   const [atEdge, setAtEdge] = useState(true);
+  // 사람 시크 · LIVE · 소스 교체 뒤 첫 그리기는 보이는 숫자를 실제 시차의 반올림으로 다시 잡는다(POK-583 c3 #1). steadySeconds
+  // 만 쓰면 1초 안쪽 시크에서 옛 숫자가 남았다(10초를 보이다 9초로 옮겨도 10). 그 뒤 그리기는 다시 steadySeconds 다
+  const resetShownBehindRef = useRef(true);
   // 매니페스트 로드 전엔 되감을 곳이 없다 — 0이면 시크바가 엣지에 붙는다 (POK-32)
   const [windowSeconds, setWindowSeconds] = useState(0);
   const [uptimeSeconds, setUptime] = useState(options.initialUptimeSeconds ?? 0);
@@ -395,6 +398,7 @@ export function useHlsPlayback(
       }
       const range = dvrRange(video.seekable);
       if (!range) return;
+      resetShownBehindRef.current = true;
       // 되감기 기준점은 엣지와 같은 지점이어야 한다 — range.end 기준으로 시크하고
       // liveEdgePosition 기준으로 시차를 재면 둘이 그 차이만큼 어긋난다.
       const sync = hlsRef.current?.liveSyncPosition ?? null;
@@ -508,6 +512,7 @@ export function useHlsPlayback(
         target = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
       }
       video.currentTime = target;
+      resetShownBehindRef.current = true;
       // 세션의 「안에서 시크」 는 사람의 시크다. 세션이 같은 호출 안에서 부르므로 이 축이 요청 때의 라이브 끝이다(POK-583 계획 D6)
       followSeek(axis !== null && isAtEdge((axis.edgeMs - atMs) / 1000));
       if (video.paused) {
@@ -546,6 +551,7 @@ export function useHlsPlayback(
     if (range) {
       video.currentTime = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
     }
+    resetShownBehindRef.current = true;
     pausedAtMsRef.current = null;
     catchupRef.current?.arm('full');
     video.play().catch(() => {});
@@ -698,6 +704,7 @@ export function useHlsPlayback(
     // 같은 값이라 no-op. 새 소스의 자동재생이 거부되면 playing=false로 남아 재생 버튼이 노출된다.
     setPlaying(false);
     setBehind(0);
+    resetShownBehindRef.current = true;
     setAtEdge(true);
     // 이전 스트림의 창 폭이 새 스트림 시크바에 남으면 안 된다
     setWindowSeconds(0);
@@ -784,13 +791,19 @@ export function useHlsPlayback(
       setVolumeState(sound.volume);
       hooksRef.current.onSoundChange?.(sound);
     };
+    // 보이는 시차를 고친다 — 갱신 함수가 순수하게 남게 다시 잡을지는 밖에서 읽는다(resetShownBehindRef)
+    const showBehind = (rawMs: number) => {
+      const reset = resetShownBehindRef.current;
+      resetShownBehindRef.current = false;
+      setBehind((prev) => (reset ? Math.round(rawMs / 1000) : steadySeconds(prev, rawMs)));
+    };
     // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 라이브의 멈춘 자리(5.3.1절)도 여기서
     // 본다
     const paintSession = () => {
       const axis = readAxis();
       if (axis === null) return;
       setWindowSeconds(axis.windowSeconds);
-      setBehind((prev) => steadySeconds(prev, axis.behindMs));
+      showBehind(axis.behindMs);
       setAtEdge(isAtEdge(axis.behindMs / 1000));
       // 라이브는 되감기가 준비됐을 때만 멈춘 채 갈아 끼운다. 준비 전이면 재개 때 자른다(onPlay) — 창이 밀릴 때마다 알리지
       // 않게. 되감기의 멈춘 자리는 LEVEL_UPDATED 가 지킨다(keepRewindFloor)
@@ -841,7 +854,7 @@ export function useHlsPlayback(
       setWindowSeconds(Math.round(rewindWindowSeconds(range, sync)));
       const behind = behindFromCurrentTime(range, video.currentTime, sync);
       const behindMs = behindMsFromCurrentTime(range, video.currentTime, sync);
-      setBehind((prev) => steadySeconds(prev, behindMs));
+      showBehind(behindMs);
       setAtEdge(isAtEdge(behindMs / 1000));
       // 재생 위치에 영상이 없으면(첫 조각이 붙기 전, 옮긴 자리를 받는 중, 미디어 오류 복구로 다시 붙는 중) 자리를 바꾸지 않는다:
       // 그때의 재생 위치(첫 조각 전엔 0초)는 보고 있는 화면이 아니라, 라이브를 여는 순간 1시간 되감은 것처럼 채팅이 따라갔다

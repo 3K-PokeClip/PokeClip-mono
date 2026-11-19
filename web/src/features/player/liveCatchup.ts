@@ -12,7 +12,7 @@ import type { PlaybackSource } from './rewindSwitch';
 
 /**
  * 따라잡기 모드. off = 아무것도 안 함 · rate = 배속만(되감기 → 라이브 자동 넘김 뒤 — 점프는 계약3 7-3 넘김 확인을 깬다) ·
- * full = 배속과 점프
+ * full = 배속과 점프. rate 는 넘김 확인이 끝난 첫 표본(handoffConfirming 거짓)에서 catchupStep 이 스스로 full 로 올린다
  */
 export type LiveCatchupMode = 'off' | 'rate' | 'full';
 
@@ -33,7 +33,7 @@ export const LIVE_CATCHUP_POLICY: LiveCatchupPolicy = { kind: 'rateAndJump', rat
 
 /**
  * WebKit(Safari · iOS 의 모든 브라우저) 정책 — 배속을 바꾸는 순간 멎으므로(WebKit 163433 · 로컬 headless WebKit 실측 전환
- * 40/40 이 266–335ms) 배속 없이 10초 넘게 밀릴 때만 점프한다(Q1 (다)). 점프 조건 · 쿨다운은 같다
+ * 1.05 · 1.1 각 40/40 · 265–335ms) 배속 없이 10초 넘게 밀릴 때만 점프한다(Q1 (다)). 점프 조건 · 쿨다운은 같다
  */
 export const WEBKIT_LIVE_CATCHUP_POLICY: LiveCatchupPolicy = { kind: 'jumpOnly' };
 
@@ -43,6 +43,11 @@ const SLOW_RATE = 1.05;
 const FAST_RATE = 1.1;
 /** 켠 배속은 「지연 − 목표」 가 이 초 이하가 되면 끈다(켜는 문턱과 벌려 둔 히스테리시스) */
 const RATE_OFF_EXCESS_S = 0.1;
+/**
+ * 「지연 − 목표」 를 µs 로 반올림해 문턱과 견준다 — 1.35 − 1.25 = 0.10000000000000009 같은 뺄셈 오차로 끄는 경계를 한 표본
+ * 늦게 넘지 않게
+ */
+const EXCESS_ROUND_PER_S = 1_000_000;
 /** 앞 버퍼가 이 초보다 짧으면 배속을 켜지 않고, 켜 있으면 끈다 — 배속이 버퍼를 깎아 끊김을 부르지 않게 */
 const MIN_BUFFER_AHEAD_S = 1;
 /** 지연이 이 초를 넘으면 full 은 건너뛴다 */
@@ -53,7 +58,11 @@ const JUMP_MIN_FORWARD_S = 1;
 const JUMP_COOLDOWN_MS = 8_000;
 /** 목록이 목표 조각 길이(TD)의 이 배수를 넘게 자라지 않으면 정체로 본다 — 정체 중의 지연 증가는 따라잡을 것이 아니다 */
 const LIVE_CATCHUP_STALE_TD_MULTIPLE = 2;
-/** 정체에서 풀리려면 age < TD 인 표본이 이만큼 연속이어야 한다 — 띄엄띄엄 자라는 목록에서 배속을 흔들지 않게 */
+/**
+ * 정체에서 풀리려면 age < TD 인 표본이 이만큼 연속이어야 한다 — 전진 한 번 뒤 재생이 멎어 다음 표본이 TD 넘게 늦게 오는 꼴만
+ * 거른다. hls.js 의 age 는 전진 때 0 에서 다시 오르므로 띄엄띄엄 자라는 목록에서는 전진마다 두 표본 뒤 풀린다 — 그 송출의
+ * 배속 켬 · 끔 흔들림(실측 Chromium 40초 5회)은 막지 못한다 — POK-583 에서 규칙을 그대로 두기로 했다
+ */
 const FRESH_SAMPLES_TO_RECOVER = 2;
 
 /** 지금 라이브 목록(hls.latestLevelDetails)에서 읽은 값 */
@@ -66,8 +75,13 @@ export interface LiveListSample {
 
 /** 재생기(hls.js) 쪽에서 읽어 결합기에 넘기는 값 */
 export interface LiveCatchupReading {
-  /** 라이브 끝에서 지금 자리까지의 지연(초) — hls.latency */
-  readonly latencyS: number;
+  /**
+   * 라이브 끝 추정 위치(초, 영상 시간축) — details.edge + details.age. hls.js 1.7.3 지연 제어기의 estimateLiveEdge 와 같은
+   * 식이고, 결합기가 표본마다 이 값 − currentTime 으로 지연을 잰다. hls.latency 를 읽지 않는 까닭: 그 값은 hls.js 가 자기
+   * timeupdate 에서만 다시 재는 캐시인데 그 리스너가 결합기보다 늦게 붙어, 사람 시크 · LIVE 직후 첫 표본이 시크 전 지연을
+   * 읽는다
+   */
+  readonly liveEdgeS: number;
   /** 목표 지연(초) — hls.targetLatency(PART-HOLD-BACK 에 끊김마다 가산) */
   readonly targetLatencyS: number;
   /** 라이브 동기 위치(초) — hls.liveSyncPosition. 모르면 null */
@@ -79,8 +93,10 @@ export interface LiveCatchupReading {
 }
 
 /** 판정 하나의 입력 — 재생기 값에 영상 노드 값과 시각을 더한 것 */
-export interface LiveCatchupSample extends LiveCatchupReading {
+export interface LiveCatchupSample extends Omit<LiveCatchupReading, 'liveEdgeS'> {
   readonly nowMs: number;
+  /** 라이브 끝에서 지금 자리까지의 지연(초) — 라이브 끝 추정 위치 − currentTimeS */
+  readonly latencyS: number;
   readonly currentTimeS: number;
   /** 지금 자리를 담은 buffered 구간의 남은 길이(초) */
   readonly bufferAheadS: number;
@@ -169,7 +185,8 @@ function stepRate(
   policy: LiveCatchupPolicy,
 ): LiveCatchupStep {
   if (policy.kind === 'jumpOnly') return resetRate(state);
-  const excess = sample.latencyS - sample.targetLatencyS;
+  const excess =
+    Math.round((sample.latencyS - sample.targetLatencyS) * EXCESS_ROUND_PER_S) / EXCESS_ROUND_PER_S;
   const bufferShort = sample.bufferAheadS < MIN_BUFFER_AHEAD_S;
   if (state.rate !== 1) {
     return excess <= RATE_OFF_EXCESS_S || bufferShort ? resetRate(state) : { state, action: NONE };
@@ -224,10 +241,7 @@ export function liveCatchupPolicy(nav: Pick<Navigator, 'userAgent'>): LiveCatchu
 }
 
 /** 따라잡기가 읽는 hls.js 재생기의 몫(hls.js 1.7.3 getter) */
-export type CatchupHls = Pick<
-  Hls,
-  'latency' | 'targetLatency' | 'liveSyncPosition' | 'latestLevelDetails'
->;
+export type CatchupHls = Pick<Hls, 'targetLatency' | 'liveSyncPosition' | 'latestLevelDetails'>;
 
 /** 유한한 수면 그 값, 아니면 null — 재생기 값은 아직 못 잰 동안 null · 0 · 없음으로 온다 */
 function finiteOrNull(value: number | null | undefined): number | null {
@@ -235,7 +249,7 @@ function finiteOrNull(value: number | null | undefined): number | null {
 }
 
 /**
- * hls.js 재생기에서 따라잡기 값을 읽는다. 재생기가 없거나(내렸다) · 목록이 없거나 끝났거나(ENDLIST) · 지연 · 목표 · age ·
+ * hls.js 재생기에서 따라잡기 값을 읽는다. 재생기가 없거나(내렸다) · 목록이 없거나 끝났거나(ENDLIST) · 목록 끝 · 목표 · age ·
  * TD 가 수가 아니면 목록을 null 로 낸다 — 그 표본은 판정하지 않고 배속 중이면 1 로 되돌린다(catchupStep)
  */
 export function readHlsCatchup(
@@ -243,19 +257,19 @@ export function readHlsCatchup(
   handoffConfirming: boolean,
 ): LiveCatchupReading {
   const details = hls?.latestLevelDetails ?? null;
-  const latencyS = finiteOrNull(hls?.latency);
+  const edgeS = finiteOrNull(details?.edge);
   const targetLatencyS = finiteOrNull(hls?.targetLatency);
   const ageS = finiteOrNull(details?.age);
   const targetDurationS = finiteOrNull(details?.targetduration);
   const judged =
     details !== null &&
     details.live &&
-    latencyS !== null &&
+    edgeS !== null &&
     targetLatencyS !== null &&
     ageS !== null &&
     targetDurationS !== null;
   return {
-    latencyS: latencyS ?? 0,
+    liveEdgeS: judged ? edgeS + ageS : 0,
     targetLatencyS: targetLatencyS ?? 0,
     liveSyncPositionS: finiteOrNull(hls?.liveSyncPosition),
     list: judged ? { ageS, targetDurationS } : null,
@@ -278,7 +292,7 @@ export interface LiveCatchupWatch {
 
 /** watchLiveCatchup 에 넘기는 재생기 쪽 값 · 정책 · 시계 */
 export interface LiveCatchupWatchOptions {
-  /** 켜 있는 동안 timeupdate 마다 부른다 — 재생기의 지연 · 목표 · 동기 위치 · 목록 · 넘김 확인 여부 */
+  /** 켜 있는 동안 timeupdate 마다 부른다 — 재생기의 라이브 끝 추정 위치 · 목표 · 동기 위치 · 목록 · 넘김 확인 여부 */
   read: () => LiveCatchupReading;
   policy: LiveCatchupPolicy;
   /** 시계(ms) — 시험이 바꿔 끼운다 */
@@ -291,6 +305,14 @@ function bufferAheadAt(buffered: TimeRanges, time: number): number {
     if (buffered.start(i) <= time && time < buffered.end(i)) return buffered.end(i) - time;
   }
   return 0;
+}
+
+/**
+ * 우리가 건 배속이 영상에서 풀렸으면 상태도 1 로 맞춘다 — 미디어 load(recoverMediaError)는 ratechange 없이 기본 배속으로
+ * 되돌린다. 맞추지 않으면 걸려 있다고 믿고 다시 걸지 않아 따라잡기가 멎는다
+ */
+function syncRate(state: LiveCatchupState, playbackRate: number): LiveCatchupState {
+  return state.rate !== 1 && playbackRate !== state.rate ? { ...state, rate: 1 } : state;
 }
 
 /**
@@ -316,15 +338,18 @@ export function watchLiveCatchup(
 
   const onTimeUpdate = () => {
     if (disposed || state.mode === 'off') return;
+    const { liveEdgeS, ...reading } = opts.read();
+    const currentTimeS = video.currentTime;
     const sample: LiveCatchupSample = {
-      ...opts.read(),
+      ...reading,
       nowMs: now(),
-      currentTimeS: video.currentTime,
-      bufferAheadS: bufferAheadAt(video.buffered, video.currentTime),
+      latencyS: liveEdgeS - currentTimeS,
+      currentTimeS,
+      bufferAheadS: bufferAheadAt(video.buffered, currentTimeS),
       paused: video.paused,
       seeking: video.seeking,
     };
-    const step = catchupStep(state, sample, opts.policy);
+    const step = catchupStep(syncRate(state, video.playbackRate), sample, opts.policy);
     state = step.state;
     apply(step.action);
   };
