@@ -457,7 +457,9 @@ setup_case() {
   for op in ${4//,/ }; do
     case "${op}" in
       ecs) touch "${r}/ecs.describe-services.fail" ;;
-      aas) touch "${r}/application-autoscaling.describe-scalable-targets.fail" ;;
+      aas)
+        touch "${r}/application-autoscaling.describe-scalable-targets.fail"
+        ;;
       reg) touch "${r}/application-autoscaling.register-scalable-target.fail" ;;
       upd) touch "${r}/ecs.update-service.fail" ;;
     esac

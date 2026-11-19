@@ -1168,7 +1168,8 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
 1.  render 가 엔드포인트 이그레스이면 실행 수와 무관하게(0대여도) 먼저 긴급
     정지합니다(workers README 「긴급 정지와 상태 어긋남」 — 확장 대상이
     있으면 두 명령(자동 조절 정지(세 값 true) 뒤 원하는 수 0), 없으면 그
-    절의 옛 꼴(원하는 수 0 하나)과 kty 회부). 그다음 기록한 태스크가 모두
+    절의 옛 꼴(원하는 수 0 하나)과 kty 회부). 정지할 셸에는 workers README
+    「일꾼 쓰기 함수」 블록을 먼저 붙여 넣어 둡니다. 그다음 기록한 태스크가 모두
     `STOPPED` 인지 봅니다(runtime-1a 의 `wait_stopped` 와 같은 확인). render
     이그레스엔 NAT 길이 없어 DNS 를 끄면 AWS 에 닿지 못합니다. render 는 큐에
     주문이 보이면 0대에서 1대로 깨어나므로(POK-605), 0대라고 건너뛰면 DNS 를
