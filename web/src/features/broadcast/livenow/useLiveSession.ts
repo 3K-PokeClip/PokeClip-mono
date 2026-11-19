@@ -284,6 +284,14 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
   useEffect(() => {
     publishLiveData({ playbackHold: holding ? liveStreamId : null });
   }, [holding, liveStreamId]);
+  // 끝남 대기의 재접속 대기 동안 명부가 아직 ended 가 아니면 방송 시계에 빨리 다시 읽어 달라고 한다 — ended 면 덮개 문구가 곧바로
+  // 바뀐다(POK-612). 화면을 떠나거나 조건이 풀리면 거둔다
+  const rosterFastPoll = session?.view.resumeWaiting === true && broadcastStatus !== 'ended';
+  useEffect(() => {
+    if (!rosterFastPoll) return;
+    publishLiveData({ rosterFastPollFor: liveStreamId });
+    return () => publishLiveData({ rosterFastPollFor: null });
+  }, [rosterFastPoll, liveStreamId]);
 
   const pastOnly = openedFor !== accessKey && broadcastStatus === 'ended';
 

@@ -23,6 +23,7 @@ import {
 } from '@/features/broadcast/livenow/liveDataStore';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import type { SessionEvent, Transition } from '@/features/player/rewindSwitch';
+import { RESUME_WAIT_MS } from '@/features/player/sessionShared';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -574,6 +575,13 @@ const server = vi.hoisted(() => ({
   /** 라이브 방송이 끝났다: 「방송 중」 목록에서 빠지고 지난 목록에 끝난 줄로 온다 */
   liveEnded: false,
   /**
+   * 정상 종료(4D) 직후 재송출: 앞 방송(STREAM_ID)은 끝난 줄로 지난 목록에 온다. 「방송 중」 목록의 새 방송은 liveStream2 로
+   * 세운다(POK-612)
+   */
+  relaunched: false,
+  /** 방송 목록 걷기(방송 번호를 고르는 limit=1 이 아닌 질의)를 받은 시각과 상태 — 방송 시계의 명부 읽기를 센다(POK-612) */
+  rosterRequests: [] as { at: number; state: string | null }[],
+  /**
    * 방송 번호로 명부를 찾는 질의의 답을 이 약속이 풀릴 때까지 붙든다: 명부보다 다른 답이 먼저 오는 순서를 잰다. 방송 번호를
    * 고르는 질의(limit=1)는 붙들지 않는다
    */
@@ -804,8 +812,13 @@ function listResponse(u: URL): Response {
   };
   if (u.searchParams.get('state') === 'past') {
     const endedLive = { ...row, status: 'ended', endedAt: new Date(Date.now()).toISOString() };
+    const endedFirst = { ...endedLive, streamId: STREAM_ID, relation: server.relation };
     return jsonResponse(200, {
-      broadcasts: server.liveEnded ? [endedLive, vod] : [vod],
+      broadcasts: server.liveEnded
+        ? [endedLive, vod]
+        : server.relaunched
+          ? [endedFirst, vod]
+          : [vod],
       nextCursor: null,
     });
   }
@@ -882,6 +895,8 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     return body === null ? jsonResponse(404, { error: 'not_found' }) : jsonResponse(200, body);
   }
   if (path === '/api/clip/broadcasts') {
+    if (u.searchParams.get('limit') !== '1')
+      server.rosterRequests.push({ at: Date.now(), state: u.searchParams.get('state') });
     const gate = u.searchParams.get('limit') === '1' ? server.pickGate : server.listGate;
     return gate ? gate.then(() => listResponse(u)) : listResponse(u);
   }
@@ -1120,6 +1135,8 @@ beforeEach(() => {
   server.infoLastNull = false;
   server.infoFail = false;
   server.liveEnded = false;
+  server.relaunched = false;
+  server.rosterRequests = [];
   server.listGate = null;
   server.pickGate = null;
   server.infoNoSinceGate = null;
@@ -6816,6 +6833,82 @@ describe('LiveScreen: 재생 세션(POK-200 M5 · 설계 5.5절)', () => {
     expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
     expect(screen.getByText('다시보기를 확인하고 있어요')).toBeInTheDocument();
     expect(playbackFetches()).toBe(0);
+  });
+
+  // 끝남 대기의 명부 빠른 재조회(POK-612) — 정상 종료(4D)면 명부는 정지 뒤 수십 초 안에 ended 다. 덮개 문구가 그 답을 30초
+  // 주기까지 기다리지 않는다. 국면 · 판정은 그대로다(판정은 회차별 조회로만 — 계약3 7-3)
+  describe('끝남 대기의 명부 빠른 재조회(POK-612)', () => {
+    /** 방송 시계의 원래 주기 · 끝남 대기 주기 */
+    const ROSTER_POLL_MS = 30_000;
+    const FAST_POLL_MS = 5_000;
+    /** 방송 시계가 명부를 읽은 시각들 — 한 번 읽기는 「방송 중」 목록부터 걷는다(없으면 지난 목록까지) */
+    const rosterReads = () =>
+      server.rosterRequests.filter((r) => r.state === 'live').map((r) => r.at);
+
+    it('R6 명부가 ended 로 답하면 6초 안에 「다시보기 준비 중」 이다 · 덮개가 바뀌어도 재생기를 다시 싣지 않는다 · 녹화를 묻지 않는다', async () => {
+      await endingAtEnd();
+      // RED 가 가짜 시계 배치에 기대지 않게: 원래 30초 주기(화면이 선 첫 읽기부터)의 다음 틱은 아래 6초 창 밖이다
+      const sinceFirstRead = (Date.now() - rosterReads()[0]!) % ROSTER_POLL_MS;
+      expect(ROSTER_POLL_MS - sinceFirstRead).toBeGreaterThan(6_000);
+      const loadsBefore = hlsFake.loads;
+
+      server.liveEnded = true;
+      await advance(6_000);
+
+      expect(screen.getByText('다시보기 준비 중')).toBeInTheDocument();
+      expect(screen.queryByText('방송이 이어지는지 확인하고 있어요')).toBeNull();
+      // 재생기를 내리지 않는다: 덮개(view.cover)는 재생기 options 의 재료라(useLiveRewindPlayback) checking → preparing 이
+      // options 를 바꾼다. 그래도 라이브 재생기를 다시 싣지 않는다
+      expect(hlsFake.loads).toBe(loadsBefore);
+      expect(playbackFetches()).toBe(0);
+    });
+
+    it('R7 끝남 대기에 들면 명부를 곧바로 한 번 · 그 뒤 5초마다 읽고, ended 를 받으면 짧은 주기를 멈춘다', async () => {
+      mediaCalls.configured = true;
+      await renderLive();
+      await liveListLoaded();
+      const beforeEntry = rosterReads().length;
+
+      await liveClosed();
+      expect(rosterReads()).toHaveLength(beforeEntry + 1);
+      await advance(FAST_POLL_MS);
+      expect(rosterReads()).toHaveLength(beforeEntry + 2);
+
+      server.liveEnded = true;
+      await advance(FAST_POLL_MS);
+      expect(screen.getByText('다시보기 준비 중')).toBeInTheDocument();
+      const afterEnded = rosterReads().length;
+      await advance(ROSTER_POLL_MS - FAST_POLL_MS);
+      expect(rosterReads()).toHaveLength(afterEnded);
+    });
+
+    it('R7 명부가 live 그대로면 재접속 대기(360초) 동안만 5초 주기이고, 그 뒤 30초 주기로 돌아간다', async () => {
+      await endingAtEnd();
+      const enteredAt = Date.now();
+      const atEntry = rosterReads().length;
+
+      await advance(60_000);
+      // 60초 창에 5초 주기 열두 번 — 30초 주기와 겹치면 열네 번이다
+      expect(rosterReads().length - atEntry).toBe(60_000 / FAST_POLL_MS);
+
+      await advance(enteredAt + RESUME_WAIT_MS + 40_000 - Date.now());
+      const afterWait = rosterReads().length;
+      await advance(2 * ROSTER_POLL_MS);
+      expect(rosterReads().length - afterWait).toBe(2);
+    });
+
+    it('R11 4D 직후 같은 채널에 새 방송이 서면 고정 안 한 화면은 「새 방송」 띠를 그대로 세우고 덮개는 「다시보기 준비 중」 이다', async () => {
+      await endingAtEnd();
+      server.relaunched = true;
+      server.liveStream2 = true;
+
+      await advance(10_000);
+
+      expect(screen.getByText('새 방송이 시작됐어요')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '보러 가기' })).toBeInTheDocument();
+      expect(screen.getByText('다시보기 준비 중')).toBeInTheDocument();
+      expect(playerBroadcastIds.at(-1)).toBe(STREAM_ID);
+    });
   });
 
   it('T4-3 닫힌 뒤 다시보기를 준비하는 동안 묻기를 이어 가다 서면 그 자리에서 VOD 재생기로 튼다 · 카드는 그 재생기로 간다', async () => {
