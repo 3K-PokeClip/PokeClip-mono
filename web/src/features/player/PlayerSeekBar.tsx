@@ -35,8 +35,8 @@ export function PlayerSeekBar({
 }: {
   behindSeconds: number;
   /**
-   * 재생기가 반올림 전 시차로 정한 「끝에 있음」(PlayerSimulation.atEdge) — LIVE 단추와 같은 값이다. behindSeconds 는 보이는
-   * 숫자라(steadySeconds) 끝 판정에 쓰지 않는다(POK-583)
+   * 재생기가 정한 「끝에 있음」(PlayerSimulation.atEdge) — LIVE 단추와 같은 값이다(라이브 재생기는 반올림 전
+   * 시차로 정한다). behindSeconds 는 보이는 숫자라(steadySeconds) 끝 판정에 쓰지 않는다(POK-583)
    */
   atEdge: boolean;
   /** 되감기 창 = 시크바 좌측 끝 (계약3 4절 4번) */
