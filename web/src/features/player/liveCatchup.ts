@@ -308,11 +308,12 @@ function bufferAheadAt(buffered: TimeRanges, time: number): number {
 }
 
 /**
- * 우리가 건 배속이 영상에서 풀렸으면 상태도 1 로 맞춘다 — 미디어 load(recoverMediaError)는 ratechange 없이 기본 배속으로
- * 되돌린다. 맞추지 않으면 걸려 있다고 믿고 다시 걸지 않아 따라잡기가 멎는다
+ * 우리가 건 배속이 영상에서 기본 배속(1)으로 풀렸으면 상태도 1 로 맞춘다 — 미디어 load(recoverMediaError)는 ratechange
+ * 없이 기본 배속으로 되돌린다. 맞추지 않으면 걸려 있다고 믿고 다시 걸지 않아 따라잡기가 멎는다. 1 이 아닌 다른 배속은 밖
+ * (확장 · 브라우저 메뉴)에서 고른 것이라 맞추지 않는다 — 다음 표본에서 덮어쓰지 않게
  */
 function syncRate(state: LiveCatchupState, playbackRate: number): LiveCatchupState {
-  return state.rate !== 1 && playbackRate !== state.rate ? { ...state, rate: 1 } : state;
+  return state.rate !== 1 && playbackRate === 1 ? { ...state, rate: 1 } : state;
 }
 
 /**
@@ -340,10 +341,14 @@ export function watchLiveCatchup(
     if (disposed || state.mode === 'off') return;
     const { liveEdgeS, ...reading } = opts.read();
     const currentTimeS = video.currentTime;
+    const latencyS = liveEdgeS - currentTimeS;
+    // 재생 위치나 잰 지연이 유한한 수가 아니면 문턱 비교가 모두 거짓이 되어 점프 게이트를 지나간다 — 그 표본은 판정하지
+    // 않는다. 재생 위치가 유한하지 않으면 지연도 유한하지 않으므로 지연 하나만 본다
+    if (!Number.isFinite(latencyS)) return;
     const sample: LiveCatchupSample = {
       ...reading,
       nowMs: now(),
-      latencyS: liveEdgeS - currentTimeS,
+      latencyS,
       currentTimeS,
       bufferAheadS: bufferAheadAt(video.buffered, currentTimeS),
       paused: video.paused,

@@ -650,6 +650,39 @@ describe('watchLiveCatchup', () => {
     expect(state.playbackRate).toBe(1.1);
   });
 
+  it('건 배속을 밖(확장 · 브라우저 메뉴)에서 1 이 아닌 배속으로 바꾸면 다음 표본에서 덮어쓰지 않는다', () => {
+    const { tick, watch, state, writes } = setup();
+    watch.arm('full');
+    tick();
+    expect(state.playbackRate).toBe(1.1);
+    expect(writes.playbackRate).toBe(1);
+
+    // 쓰기 기록을 남기지 않고 바꾼다 — 사람이 고른 배속이다
+    state.playbackRate = 1.25;
+    tick();
+    expect(state.playbackRate).toBe(1.25);
+    expect(writes.playbackRate).toBe(1);
+  });
+
+  it('재생 위치나 잰 지연이 유한한 수가 아니면 그 표본은 배속 · 점프를 하지 않는다', () => {
+    const { tick, watch, state, writes, current } = setup();
+    watch.arm('full');
+
+    // 지연 12초 표본이지만 재생 위치가 NaN
+    state.currentTime = Number.NaN;
+    current.reading = reading(12);
+    tick();
+    expect(writes.currentTime).toBe(0);
+    expect(writes.playbackRate).toBe(0);
+
+    // 재생 위치는 수지만 라이브 끝 추정 위치가 NaN 이라 지연이 NaN
+    state.currentTime = AT;
+    current.reading = reading(12, { liveEdgeS: Number.NaN });
+    tick();
+    expect(writes.currentTime).toBe(0);
+    expect(writes.playbackRate).toBe(0);
+  });
+
   it('멈춘 영상 · 시크 중인 영상에서는 판정하지 않는다', () => {
     const { tick, watch, state } = setup({ paused: true });
     watch.arm('full');

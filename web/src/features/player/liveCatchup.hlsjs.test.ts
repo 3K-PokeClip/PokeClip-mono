@@ -12,8 +12,9 @@ import { readHlsCatchup } from './liveCatchup';
 // 앱 따라잡기(liveCatchup.ts)가 기대는 진짜 hls.js 1.7.3(dist)의 동작을 고정한다(POK-583 c2). J1: 라이브 설정
 // (maxLiveSyncPlaybackRate: 1)에서 hls.js 의 지연 제어기는 앱이 건 배속을 덮지 않는다(latency-controller onTimeupdate 의
 // 「maxLiveSyncPlaybackRate === 1 이면 돌아감」). J2: 앱이 읽는 값(targetLatency · liveSyncPosition ·
-// latestLevelDetails.edge · age · targetduration)의 뜻 — 앱이 잰 지연이 hls.latency 와 같은 식인지도 본다. jsdom 에는 MediaSource 가 없어 영상 노드를 재생기 전체에 붙이지 않고, 지연
-// 제어기에만 그 MEDIA_ATTACHED 처리기로 붙인다 — 제어기는 그 노드의 timeupdate 를 듣는다(hlsLiveStart.hlsjs.test.ts 와 같은 틀).
+// latestLevelDetails.edge · age · targetduration)의 뜻 — 앱이 잰 지연이 hls.latency 와 같은 식인지도 본다. jsdom 에는
+// MediaSource 가 없어 영상 노드를 재생기 전체에 붙이지 않고, 지연 제어기에만 그 MEDIA_ATTACHED 처리기로 붙인다 — 제어기는 그 노드의
+// timeupdate 를 듣는다(hlsLiveStart.hlsjs.test.ts 와 같은 틀).
 
 const VIDEO_URL = 'https://m/live/k/video1_stream.m3u8';
 const PDT0 = Date.parse('2026-11-19T05:00:00.000Z');
