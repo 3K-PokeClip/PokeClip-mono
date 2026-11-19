@@ -20,7 +20,7 @@ describe('SmallScreenNotice: 휴대폰 크기 화면 안내 (POK-610)', () => {
     expect(notice).not.toHaveTextContent(window.location.host);
     expect(notice).not.toHaveTextContent('pokeclip.com');
     // PC에서 창을 좁혀 이 안내를 본 사람에게는 「PC로 접속하라」가 답이 아니다
-    expect(notice).toHaveTextContent('브라우저 창을 넓혀 주세요');
+    expect(notice).toHaveTextContent('브라우저 창을 넓히거나 화면 확대 배율을 줄여 주세요');
     // 그림은 장식이다
     expect(notice.querySelector('img')).toHaveAttribute('alt', '');
   });

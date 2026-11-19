@@ -32,7 +32,11 @@ export function SmallScreenNotice() {
       </p>
       {/* PC에서 창을 좁혀도 이 안내가 뜬다 — 그 사람에게 「PC로 접속하라」는 말은 답이 아니다.
           접속 주소는 적지 않는다(2026-11-19 사용자 결정) */}
-      <p className={`${SMALL_SCREEN_CLASS}__hint`}>PC에서 보고 있다면 브라우저 창을 넓혀 주세요</p>
+      {/* 기준이 CSS px이라 PC에서 브라우저 배율을 키워도 이 안내가 뜬다 — 창을 더 넓힐 수 없는 사람에게 갈 길을 같이 적는다
+          (PR #539 2차 리뷰: 1366px 노트북을 250%로 확대하면 546px) */}
+      <p className={`${SMALL_SCREEN_CLASS}__hint`}>
+        PC에서 보고 있다면 브라우저 창을 넓히거나 화면 확대 배율을 줄여 주세요
+      </p>
     </main>
   );
 }
