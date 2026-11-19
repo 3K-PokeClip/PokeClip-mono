@@ -487,12 +487,13 @@ describe('H10 오른쪽 끝 3초 안 시크 = 「실시간으로」(Q2 (가) · 
 
 describe('브라우저별 배속 정책', () => {
   it.each([
-    ['Chromium — 초과 1.5초면 켠다', CHROME_UA, 1.1],
-    ['WebKit(Safari) — 초과 2초 이하라 켜지 않는다(Q1 (나))', SAFARI_UA, 1],
-  ] as const)('%s', async (...[, ua, rate]) => {
+    ['Chromium — 초과 1.5초면 켠다', CHROME_UA, 1.5, 1.1],
+    ['WebKit(Safari) — 초과 1.5초에 켜지 않는다(Q1 (다) 점프만)', SAFARI_UA, 1.5, 1],
+    ['WebKit(Safari) — 초과 3초에도 켜지 않는다(Q1 (다) 점프만)', SAFARI_UA, 3, 1],
+  ] as const)('%s', async (...[, ua, excessS, rate]) => {
     userAgent.value = ua;
     const { el } = await mount(LIVE, {}, EDGE_S);
-    setLatency(TARGET_S + 1.5);
+    setLatency(TARGET_S + excessS);
     timeupdate(el);
     expect(media.rate).toBe(rate);
   });

@@ -422,33 +422,70 @@ describe('isWebKitPlayback', () => {
   });
 });
 
-describe('WebKit 정책(Q1 (나))', () => {
-  it('T9 2초 넘게 밀릴 때만 배속을 켠다 — 그 아래는 Chromium 정책만 켠다', () => {
-    const cases: Array<[number, LiveCatchupAction, LiveCatchupAction]> = [
-      [1.5, NONE, { kind: 'rate', rate: 1.1 }],
-      [2, NONE, { kind: 'rate', rate: 1.1 }],
-      [2.5, { kind: 'rate', rate: 1.1 }, { kind: 'rate', rate: 1.1 }],
-    ];
-    for (const [excess, webKit, chromium] of cases) {
+describe('WebKit 정책(Q1 (다) — 점프만)', () => {
+  it('T9 지연 10초 이하면 얼마나 밀려도 배속을 켜지 않는다 — 같은 표본에서 Chromium 정책은 켠다', () => {
+    // 목표 0 이라 지연 = 초과 — 9초 초과도 지연 10초 밑이라 점프 자리가 아니다
+    for (const excess of [3, 5, 9]) {
       expect(
-        catchupStep(initialCatchupState('full'), behind(excess), WEBKIT_LIVE_CATCHUP_POLICY).action,
-      ).toEqual(webKit);
+        catchupStep(initialCatchupState('full'), exactlyBehind(excess), WEBKIT_LIVE_CATCHUP_POLICY)
+          .action,
+        `초과 ${excess}`,
+      ).toEqual(NONE);
       expect(
-        catchupStep(initialCatchupState('full'), behind(excess), LIVE_CATCHUP_POLICY).action,
-      ).toEqual(chromium);
+        catchupStep(initialCatchupState('full'), exactlyBehind(excess), LIVE_CATCHUP_POLICY).action,
+        `초과 ${excess}`,
+      ).toEqual({ kind: 'rate', rate: 1.1 });
     }
+    const { actions, state } = run(
+      initialCatchupState('full'),
+      [3, 5, 9].map((excess) => exactlyBehind(excess)),
+      WEBKIT_LIVE_CATCHUP_POLICY,
+    );
+    expect(rateChanges(initialCatchupState('full'), actions)).toBe(0);
+    expect(state.rate).toBe(1);
   });
 
-  it('T9 끄는 문턱 · 점프는 Chromium 과 같다', () => {
-    expect(
-      catchupStep(catchingUp('full', 1.1), exactlyBehind(0.1), WEBKIT_LIVE_CATCHUP_POLICY).action,
-    ).toEqual({
+  it('T9 full 에서 지연 10초를 넘으면 Chromium 과 같은 조건 · 쿨다운으로 건너뛰고, 쿨다운 동안에도 배속은 켜지 않는다', () => {
+    const late = (nowMs: number) => behind(10.5 - TARGET, { nowMs });
+    const { actions } = run(
+      initialCatchupState('full'),
+      [late(0), late(1_000), late(8_000)],
+      WEBKIT_LIVE_CATCHUP_POLICY,
+    );
+    expect(actions).toEqual([
+      { kind: 'jump', toS: AT + 10.5 - TARGET },
+      NONE,
+      { kind: 'jump', toS: AT + 10.5 - TARGET },
+    ]);
+    // 같은 표본에서 Chromium 은 쿨다운 동안 배속으로 좁힌다
+    expect(run(initialCatchupState('full'), [late(0), late(1_000)]).actions[1]).toEqual({
       kind: 'rate',
-      rate: 1,
+      rate: 1.1,
     });
+  });
+
+  it('T9 rate(넘김 확인 중)에서는 지연 10.5초도 아무것도 하지 않고, 확인이 끝나면 full 로 올라 건너뛴다', () => {
+    const confirming = catchupStep(
+      initialCatchupState('rate'),
+      behind(10.5 - TARGET, { handoffConfirming: true }),
+      WEBKIT_LIVE_CATCHUP_POLICY,
+    );
+    expect(confirming.action).toEqual(NONE);
+    expect(confirming.state.mode).toBe('rate');
+
+    const confirmed = catchupStep(
+      confirming.state,
+      behind(10.5 - TARGET, { nowMs: 250 }),
+      WEBKIT_LIVE_CATCHUP_POLICY,
+    );
+    expect(confirmed.state.mode).toBe('full');
+    expect(confirmed.action.kind).toBe('jump');
+  });
+
+  it('T9 배속이 걸린 채 이어진 상태면 1 로 되돌린다', () => {
     expect(
-      catchupStep(initialCatchupState('full'), behind(12), WEBKIT_LIVE_CATCHUP_POLICY).action.kind,
-    ).toBe('jump');
+      catchupStep(catchingUp('full', 1.1), exactlyBehind(3), WEBKIT_LIVE_CATCHUP_POLICY).action,
+    ).toEqual({ kind: 'rate', rate: 1 });
   });
 });
 

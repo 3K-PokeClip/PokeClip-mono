@@ -8,7 +8,7 @@ import type { PlaybackSource } from './rewindSwitch';
 // 「라이브를 보는 중」 은 사람의 의도로 정한다 — 거리 · DOM seeking 으로 추정하지 않는다(hls.js 도 스스로 시크하고, 거리로는
 // 창 안 되감기를 못 가른다). 그래서 이 모듈은 켜고 끄는 명령(arm · disarm)을 받기만 하고, 언제 켜는지는 사람 명령 자리를 쥔
 // 재생 훅이 정한다. 판정은 표본 하나 → 행동 하나의 순수 함수(catchupStep)이고, 영상 노드에 거는 몫(watchLiveCatchup)은
-// 표본을 모아 행동을 적용할 뿐이다. 브라우저마다 달라지는 것은 배속을 켜는 문턱(정책) 하나다.
+// 표본을 모아 행동을 적용할 뿐이다. 브라우저마다 달라지는 것은 배속을 쓰는지와 켜는 문턱(정책) 하나다.
 
 /**
  * 따라잡기 모드. off = 아무것도 안 함 · rate = 배속만(되감기 → 라이브 자동 넘김 뒤 — 점프는 계약3 7-3 넘김 확인을 깬다) ·
@@ -16,20 +16,26 @@ import type { PlaybackSource } from './rewindSwitch';
  */
 export type LiveCatchupMode = 'off' | 'rate' | 'full';
 
-/** 브라우저별 배속 정책 — 따라잡기에서 브라우저마다 다른 유일한 축 */
-export interface LiveCatchupPolicy {
-  /** 「지연 − 목표」 가 이 초를 넘어야 배속을 켠다 */
-  readonly rateOnExcessS: number;
-}
+/**
+ * 브라우저별 배속 정책 — 따라잡기에서 브라우저마다 다른 유일한 축. rateAndJump = 배속과 점프 · jumpOnly = 배속을 켜지 않고
+ * 점프만(rate 모드에서는 아무것도 하지 않는다)
+ */
+export type LiveCatchupPolicy =
+  | {
+      readonly kind: 'rateAndJump';
+      /** 「지연 − 목표」 가 이 초를 넘어야 배속을 켠다 */
+      readonly rateOnExcessS: number;
+    }
+  | { readonly kind: 'jumpOnly' };
 
 /** Chromium 계열 · Firefox 의 정책 */
-export const LIVE_CATCHUP_POLICY: LiveCatchupPolicy = { rateOnExcessS: 0.5 };
+export const LIVE_CATCHUP_POLICY: LiveCatchupPolicy = { kind: 'rateAndJump', rateOnExcessS: 0.5 };
 
 /**
- * WebKit(Safari · iOS 의 모든 브라우저) 정책 — 배속을 바꾸는 순간 잠깐 멎으므로(WebKit 163433 · macOS 약 90ms · iOS 200–300ms)
- * 2초 넘게 밀릴 때만 배속을 켠다(Q1 (나)). 끄는 문턱 · 점프는 같다
+ * WebKit(Safari · iOS 의 모든 브라우저) 정책 — 배속을 바꾸는 순간 멎으므로(WebKit 163433 · 로컬 headless WebKit 실측 전환
+ * 40/40 이 266–335ms) 배속 없이 10초 넘게 밀릴 때만 점프한다(Q1 (다)). 점프 조건 · 쿨다운은 같다
  */
-export const WEBKIT_LIVE_CATCHUP_POLICY: LiveCatchupPolicy = { rateOnExcessS: 2 };
+export const WEBKIT_LIVE_CATCHUP_POLICY: LiveCatchupPolicy = { kind: 'jumpOnly' };
 
 /** 초과가 이 초 이상이면 빠른 배속으로 켠다 */
 const FAST_EXCESS_S = 1;
@@ -153,12 +159,16 @@ function jumpTarget(state: LiveCatchupState, sample: LiveCatchupSample): number 
   return cooled ? target : null;
 }
 
-/** 배속 히스테리시스 — 켤 때 1.05 · 1.1 을 고르고, 켠 뒤에는 끌 때까지 바꾸지 않는다 */
+/**
+ * 배속 히스테리시스 — 켤 때 1.05 · 1.1 을 고르고, 켠 뒤에는 끌 때까지 바꾸지 않는다. 점프만 하는 정책은 배속을 켜지 않고,
+ * 걸려 있으면 1 로 되돌린다
+ */
 function stepRate(
   state: LiveCatchupState,
   sample: LiveCatchupSample,
   policy: LiveCatchupPolicy,
 ): LiveCatchupStep {
+  if (policy.kind === 'jumpOnly') return resetRate(state);
   const excess = sample.latencyS - sample.targetLatencyS;
   const bufferShort = sample.bufferAheadS < MIN_BUFFER_AHEAD_S;
   if (state.rate !== 1) {
