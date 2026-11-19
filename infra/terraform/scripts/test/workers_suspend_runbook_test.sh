@@ -250,8 +250,9 @@ readonly MUTATION_CASE=(
   rotate_ok rotate_false rotpin_between clipup_changed clipup_writefail
 )
 
-# 셸마다 사례 · 셸마다 격리 사례 둘 · 블록 글자 하나 · 변이 · 격리 변이 하나.
-readonly EXPECTED_CASES=$(((${#CASE_TABLE[@]} + 2) * ${#SHELLS[@]} + 1 +
+# 셸마다 사례 · 셸마다 격리 사례 둘 · 키 검사 하나 · 블록 글자 하나 · 변이 ·
+# 격리 변이 하나.
+readonly EXPECTED_CASES=$(((${#CASE_TABLE[@]} + 3) * ${#SHELLS[@]} + 1 +
   ${#MUTATION_NAMES[@]} + 1))
 
 failures=0
@@ -656,7 +657,7 @@ run_cases() {
   local shell row why
   for shell in "${SHELLS[@]}"; do
     if ! command -v "${shell}" >/dev/null 2>&1; then
-      fail "${shell} 이 없음 — 사례 $((${#CASE_TABLE[@]} + 2))개를 돌리지 못함"
+      fail "${shell} 이 없음 — 사례 $((${#CASE_TABLE[@]} + 3))개를 돌리지 못함"
       continue
     fi
     for row in "${CASE_TABLE[@]}"; do
@@ -667,7 +668,32 @@ run_cases() {
       fi
     done
     test_isolation "${shell}"
+    test_key_guard "${shell}"
   done
+}
+
+#######################################
+# 키 검사를 본다 — 일꾼이 아닌 키(clip)로 긴급 정지를 부르면 aws 호출 0 ·
+# 종료 ≠ 0 · 표준 오류에 키 멈춤 줄이다.
+# Globals:
+#   tmp_root
+# Arguments:
+#   셸.
+#######################################
+test_key_guard() {
+  local shell="$1" dir rc
+  dir="$(setup_case keyguard 11 N -)" || return 1
+  printf '%s\n' 'worker_stop clip' >"${dir}/clip-stop"
+  run_script "${shell}" "${dir}" "${tmp_root}/fake.sh" on \
+    "${tmp_root}/blocks/defs" "${dir}/clip-stop"
+  rc=$?
+  if [[ "${rc}" != 0 && ! -s "${dir}/calls" ]] &&
+    grep -q '일꾼 키는 render · upload 만' "${dir}/err"; then
+    pass "${shell}: 키 검사 — clip 은 aws 호출 0 · 멈춤"
+  else
+    fail "${shell}: 키 검사 — 종료 ${rc} · 가짜 호출 $(wc -l \
+      <"${dir}/calls" | tr -d ' ')"
+  fi
 }
 
 #######################################

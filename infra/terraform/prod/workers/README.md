@@ -206,10 +206,14 @@ kty 에게 넘깁니다. 블록은 함수를 정의만 하고 AWS 를 부르지 
     수는 태스크가 뜨고 내려가는 동안 바뀌므로 보지 않습니다.
 *   `worker_stop <키>` — 긴급 정지(「긴급 정지와 상태 어긋남」).
 *   `worker_wake_stop <키>` — 관문 ② 0대 갈래의 깨우기 정지(「값과 적용」).
+*   키는 `render` · `upload` 만 받습니다. 읽기 · 쓰기 함수가 다른 키(예:
+    `clip`)를 받으면 AWS 를 부르지 않고 `멈춤:` 으로 끝납니다 — 확장 대상이
+    없는 앱 서버를 「대상 없음」 으로 읽어 원하는 수 0 을 쓰지 않게 합니다.
 
 ```shell
 worker_now() {
   local counts flags
+  worker_key "$1" || return 2
   counts="$(aws ecs describe-services --region ap-northeast-2 \
     --cluster pokeclip-prod --services "pokeclip-prod-$1" \
     --query 'services[0].[desiredCount,runningCount]' --output text)" ||
@@ -234,7 +238,16 @@ worker_match() {
   }'
 }
 
+worker_key() {
+  case "$1" in
+    render | upload) return 0 ;;
+  esac
+  printf '멈춤: 일꾼 키는 render · upload 만 — 「%s」 · 쓰지 않음\n' "$1" >&2
+  return 2
+}
+
 worker_set_suspended() {
+  worker_key "$1" || return 2
   aws application-autoscaling register-scalable-target \
     --region ap-northeast-2 --service-namespace ecs \
     --scalable-dimension ecs:service:DesiredCount \
@@ -248,6 +261,7 @@ worker_set_suspended() {
 }
 
 worker_set_desired() {
+  worker_key "$1" || return 2
   aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     --service "pokeclip-prod-$1" --desired-count "$2" \
     --query service.serviceName --output text >/dev/null
