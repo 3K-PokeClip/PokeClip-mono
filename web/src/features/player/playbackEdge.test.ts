@@ -541,6 +541,53 @@ describe('sessionAxis — 시크바 하나 · 실제 시각 축(설계 5.2절)',
     ).toBeNull();
   });
 
+  describe('시차의 원시 값(behindMs) — 표시 · 끝 판정의 입력(POK-583 떨림 ① · ③)', () => {
+    it('behindMs 는 반올림 전 시차(ms)이고 behindSeconds 는 그 반올림이다', () => {
+      const axis = sessionAxis({
+        ...at(26.4),
+        kind: 'live',
+        live: true,
+        liveEdgeTime: 28,
+        axisLowerMs: null,
+      });
+      expect(axis?.behindMs).toBeCloseTo(1_600, 6);
+      expect(axis?.behindSeconds).toBe(2);
+    });
+
+    it('라이브 끝 너머의 재생 위치는 behindSeconds 처럼 0 이다', () => {
+      const axis = sessionAxis({
+        ...at(28.5),
+        kind: 'live',
+        live: true,
+        liveEdgeTime: 28,
+        axisLowerMs: null,
+      });
+      expect(axis).toMatchObject({ behindMs: 0, behindSeconds: 0 });
+    });
+  });
+
+  it('되감기가 열린 라이브의 왼쪽 끝은 목록이 밀려도 되감기 범위 첫 시각 그대로다(떨림 ② 는 고치지 않음 — K-Q4 (가))', () => {
+    const entryFirstMs = PDT0 - 600_000;
+    const before = sessionAxis({
+      ...at(26),
+      kind: 'live',
+      live: true,
+      liveEdgeTime: 28,
+      axisLowerMs: entryFirstMs,
+    });
+    // 조각 하나가 새로 붙고 맨 앞 조각이 빠진 다음 목록
+    const slid = [...FRAGS.slice(1), { start: 30, duration: 4, programDateTime: PDT0 + 20_000 }];
+    const after = sessionAxis({
+      ...at(30),
+      fragments: slid,
+      kind: 'live',
+      live: true,
+      liveEdgeTime: 32,
+      axisLowerMs: entryFirstMs,
+    });
+    expect([before?.barLowerMs, after?.barLowerMs]).toEqual([entryFirstMs, entryFirstMs]);
+  });
+
   describe('시크바 왼쪽 끝(barLowerMs) — 되감기 · 다시보기는 첫 내용 조각 · 라이브는 되감기 범위까지 넓힌다', () => {
     /** 맨 앞 GAP 둘 · 4초 내용 조각 넷(첫 내용 조각 = PDT0 + 8 000 · 끝 = PDT0 + 24 000) */
     const gapped = {

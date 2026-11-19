@@ -631,6 +631,7 @@ function GlassPlayerBody({
         {seekHidden ? null : (
           <PlayerSeekBar
             behindSeconds={sim.behindSeconds}
+            atEdge={sim.atEdge}
             windowSeconds={sim.windowSeconds}
             clipMarked={sim.clipMarked}
             onSeekToFraction={sim.seekToFraction}

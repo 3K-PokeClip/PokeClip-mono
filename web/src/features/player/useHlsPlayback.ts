@@ -5,6 +5,7 @@ import type Hls from 'hls.js';
 import type { LevelDetails } from 'hls.js';
 import {
   behindFromCurrentTime,
+  behindMsFromCurrentTime,
   dvrRange,
   liveEdgePosition,
   mediaTimeAt,
@@ -23,7 +24,14 @@ import { HLS_LIVE_CONFIG, HLS_REWIND_CONFIG } from './hlsConfig';
 import { consumeDvrSegmentGone, isFirstListFailure, isPlaylistLoadError } from './hlsErrors';
 import { loadHls } from './hlsLoader';
 import { armStart, createSwapPause, startConfig, trackLoadFrom } from './hlsStart';
-import { behindFromSeekFraction, isAtEdge } from './playerMath';
+import {
+  liveCatchupPolicy,
+  liveCatchupStartMode,
+  readHlsCatchup,
+  watchLiveCatchup,
+  type LiveCatchupWatch,
+} from './liveCatchup';
+import { behindFromSeekFraction, isAtEdge, steadySeconds } from './playerMath';
 import {
   endStalled,
   loadedList,
@@ -178,6 +186,11 @@ export interface PlaybackHooks extends PositionHooks {
    * 값으로 서게 부른 쪽이 기억한다
    */
   onSoundChange?: (sound: PlayerSound) => void;
+  /**
+   * 되감기 → 라이브 넘김을 확인하는 중인가(계약3 7-3) — 라이브 따라잡기가 표본마다 읽고, 참이면 건너뛰지 않는다(POK-583
+   * Q3 (다)). 없으면 거짓
+   */
+  isHandoffConfirming?: () => boolean;
 }
 
 export type { LivePosition } from './livePosition';
@@ -238,6 +251,12 @@ export function useHlsPlayback(
   // 넘겨받은 소리가 켜짐이면 이 재생기의 첫 재생 하나만, 막힐 때 소리를 끄고 다시 튼다. 라이브 · 세션 재생기는 지금 그대로다
   const soundFallbackRef = useRef(initialSound?.muted === false);
   const [behindSeconds, setBehind] = useState(0);
+  // 끝에 있는가 — 보이는 숫자(steadySeconds)가 아니라 반올림 전 시차로 정한다. 시크바 손잡이 · LIVE 단추가 이 값 하나를 쓴다
+  // (POK-583 계획 D5 · R8): 숫자로 정하면 실제로 3초 넘게 밀렸는데도 숫자가 2에 머무는 동안 끝으로 보였다
+  const [atEdge, setAtEdge] = useState(true);
+  // 사람 시크 · LIVE · 소스 교체 뒤 첫 그리기는 보이는 숫자를 실제 시차의 반올림으로 다시 잡는다(POK-583 c3 #1). steadySeconds
+  // 만 쓰면 1초 안쪽 시크에서 옛 숫자가 남았다(10초를 보이다 9초로 옮겨도 10). 그 뒤 그리기는 다시 steadySeconds 다
+  const resetShownBehindRef = useRef(true);
   // 매니페스트 로드 전엔 되감을 곳이 없다 — 0이면 시크바가 엣지에 붙는다 (POK-32)
   const [windowSeconds, setWindowSeconds] = useState(0);
   const [uptimeSeconds, setUptime] = useState(options.initialUptimeSeconds ?? 0);
@@ -285,6 +304,8 @@ export function useHlsPlayback(
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
   const hlsRef = useRef<Hls | null>(null);
+  /** 라이브 재생기의 따라잡기(POK-583) — hls.js 라이브 재생기가 선 동안만 있다. 되감기 · 다시보기 · 기본 HLS 는 없다(POK-583 계획 D1) */
+  const catchupRef = useRef<LiveCatchupWatch | null>(null);
   /** 재생기의 조각별 영상 시작 — 되감기 · 다시보기 재생기(라이브는 구성 시차 스위치를 켰을 때)가 선 동안만 적는다(설계 r7 3.3절) */
   const startOfRef = useRef<StartOf>(noVideoStart);
   /** 시각 환산에 넘길 목록 조각 — 판 2 는 영상 축 조각이다(설계 r7 3.5절). 목록을 모르면 빈 배열 */
@@ -346,6 +367,15 @@ export function useHlsPlayback(
     return programDateAt(fragmentsOf(details), video.currentTime);
   }, [videoRef, fragmentsOf]);
 
+  // 사람의 시크가 따라잡기를 켜고 끈다 — 라이브 끝 3초 안이면 「실시간으로」 와 같다(POK-583 Q2 (가))
+  const followSeek = useCallback((atEdge: boolean) => {
+    if (atEdge) {
+      catchupRef.current?.arm('full');
+    } else {
+      catchupRef.current?.disarm();
+    }
+  }, []);
+
   /** 세션 모드: 목표 실제 시각을 세션에 넘긴다. 축을 모르면 false */
   const requestSeek = useCallback(
     (targetMs: number): boolean => {
@@ -371,6 +401,7 @@ export function useHlsPlayback(
       }
       const range = dvrRange(video.seekable);
       if (!range) return;
+      resetShownBehindRef.current = true;
       // 되감기 기준점은 엣지와 같은 지점이어야 한다 — range.end 기준으로 시크하고
       // liveEdgePosition 기준으로 시차를 재면 둘이 그 차이만큼 어긋난다.
       const sync = hlsRef.current?.liveSyncPosition ?? null;
@@ -386,9 +417,11 @@ export function useHlsPlayback(
         video.currentTime = Math.max(range.start, live - clamped);
         setBehind(Math.round(clamped));
       }
+      setAtEdge(isAtEdge(clamped));
+      followSeek(isAtEdge(clamped));
       onSeek?.();
     },
-    [videoRef, onSeek, readAxis, requestSeek, sessionActive],
+    [videoRef, onSeek, readAxis, requestSeek, sessionActive, followSeek],
   );
 
   // 맨 왼쪽(Home · 비율 0)은 세션 모드에서 막대 왼쪽 끝을 바로 요청한다 — 그린 뒤 자란 창이면 React 의 창 폭이 낡았고,
@@ -482,13 +515,16 @@ export function useHlsPlayback(
         target = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
       }
       video.currentTime = target;
+      resetShownBehindRef.current = true;
+      // 세션의 「안에서 시크」 는 사람의 시크다. 세션이 같은 호출 안에서 부르므로 이 축이 요청 때의 라이브 끝이다(POK-583 계획 D6)
+      followSeek(axis !== null && isAtEdge((axis.edgeMs - atMs) / 1000));
       if (video.paused) {
         pausedAtMsRef.current = atMs;
         pausedHandledRef.current = false;
       }
       onSeek?.();
     },
-    [videoRef, readAxis, onSeek, fragmentsOf],
+    [videoRef, readAxis, onSeek, fragmentsOf, followSeek],
   );
 
   const keepPausedOnSwap = useCallback(
@@ -518,12 +554,15 @@ export function useHlsPlayback(
     if (range) {
       video.currentTime = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
     }
+    resetShownBehindRef.current = true;
     pausedAtMsRef.current = null;
+    catchupRef.current?.arm('full');
     video.play().catch(() => {});
     onSeek?.();
   }, [videoRef, onSeek]);
 
-  // 라이브 복귀는 이 액션(LIVE 버튼)뿐이다 — 플레이어가 스스로 복귀하는 경로는 없다 (계약3 4절 3번)
+  // 되감은 시청자를 라이브로 데려오는 것은 이 액션(LIVE 버튼)뿐이다. 라이브를 보는 중인 시청자만 재생기가 따라잡는다 —
+  // LIVE · 끝 3초 안 시크로 켜고 사람의 시크 · 멈춤으로 끈다(liveCatchup.ts · POK-583 · 계약3 4절 3번)
   // 세션 모드면 세션이 정한다(라이브 국면은 라이브 끝으로 · 되감기는 지금 방송 번호를 대조해 라이브로 — 설계 5.3절)
   const returnToLive = useCallback(() => {
     const onLiveButton = hooksRef.current.onLiveButton;
@@ -532,13 +571,15 @@ export function useHlsPlayback(
       return;
     }
     seekToBehind(0);
+    // 시크할 범위가 아직 없어도 켠다
+    catchupRef.current?.arm('full');
     videoRef.current?.play().catch(() => {});
   }, [seekToBehind, videoRef]);
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    // 재개 시 currentTime을 만지지 않는다 — 되감은 위치를 그대로 이어서 튼다 (계약3 4절 1번)
+    // 재개 시 currentTime을 만지지 않는다 — 되감은 위치를 그대로 이어서 튼다. 멈출 때 끈 따라잡기도 다시 켜지 않는다(POK-583)
     if (video.paused && hooksRef.current.holdPlay) {
       wake();
       return;
@@ -651,6 +692,8 @@ export function useHlsPlayback(
     let recoveredMedia = false;
     // 브라우저 기본 HLS(옛 iOS Safari)의 오류 처리. hls.js 갈래에서만 단다
     let onNativeError: (() => void) | null = null;
+    // 이 재생기의 따라잡기 — hls.js 라이브 재생기에서만 선다(POK-583)
+    let catchup: LiveCatchupWatch | null = null;
     // 영상 조각을 한 번이라도 받았나(hls.js 조각 받기 완료 · 기본 재생 loadeddata). 받았으면 403에서 회복한 것이다. 목록 읽기로
     // 가르면 목록만 열리고 조각이 403인 곳에서 1분마다 다시 받았다(로컬 리뷰 1라운드)
     let healed = false;
@@ -664,6 +707,8 @@ export function useHlsPlayback(
     // 같은 값이라 no-op. 새 소스의 자동재생이 거부되면 playing=false로 남아 재생 버튼이 노출된다.
     setPlaying(false);
     setBehind(0);
+    resetShownBehindRef.current = true;
+    setAtEdge(true);
     // 이전 스트림의 창 폭이 새 스트림 시크바에 남으면 안 된다
     setWindowSeconds(0);
     // 이전 스트림의 자리도 남기지 않는다: 새 스트림 채팅이 앞 방송 시각을 따른다
@@ -712,6 +757,7 @@ export function useHlsPlayback(
         return;
       }
       swap.userPaused();
+      catchupRef.current?.disarm();
       setPlaying(false);
       if (!sessionActive()) return;
       pausedAtMsRef.current = readAxis()?.atMs ?? null;
@@ -748,13 +794,20 @@ export function useHlsPlayback(
       setVolumeState(sound.volume);
       hooksRef.current.onSoundChange?.(sound);
     };
+    // 보이는 시차를 고친다 — 갱신 함수가 순수하게 남게 다시 잡을지는 밖에서 읽는다(resetShownBehindRef)
+    const showBehind = (rawMs: number) => {
+      const reset = resetShownBehindRef.current;
+      resetShownBehindRef.current = false;
+      setBehind((prev) => (reset ? Math.round(rawMs / 1000) : steadySeconds(prev, rawMs)));
+    };
     // 세션 모드의 그리기: 세 재생기가 같은 실제 시각 축(설계 5.2절). 끝 정체(D9)와 라이브의 멈춘 자리(5.3.1절)도 여기서
     // 본다
     const paintSession = () => {
       const axis = readAxis();
       if (axis === null) return;
       setWindowSeconds(axis.windowSeconds);
-      setBehind(axis.behindSeconds);
+      showBehind(axis.behindMs);
+      setAtEdge(isAtEdge(axis.behindMs / 1000));
       // 라이브는 되감기가 준비됐을 때만 멈춘 채 갈아 끼운다. 준비 전이면 재개 때 자른다(onPlay) — 창이 밀릴 때마다 알리지
       // 않게. 되감기의 멈춘 자리는 LEVEL_UPDATED 가 지킨다(keepRewindFloor)
       const handsOverPaused = kind === 'live' && hooksRef.current.axisLowerMs != null;
@@ -803,7 +856,9 @@ export function useHlsPlayback(
       // timeupdate마다 값이 달라져 리렌더가 돈다 (시차를 반올림하는 이유와 같다)
       setWindowSeconds(Math.round(rewindWindowSeconds(range, sync)));
       const behind = behindFromCurrentTime(range, video.currentTime, sync);
-      setBehind(behind);
+      const behindMs = behindMsFromCurrentTime(range, video.currentTime, sync);
+      showBehind(behindMs);
+      setAtEdge(isAtEdge(behindMs / 1000));
       // 재생 위치에 영상이 없으면(첫 조각이 붙기 전, 옮긴 자리를 받는 중, 미디어 오류 복구로 다시 붙는 중) 자리를 바꾸지 않는다:
       // 그때의 재생 위치(첫 조각 전엔 0초)는 보고 있는 화면이 아니라, 라이브를 여는 순간 1시간 되감은 것처럼 채팅이 따라갔다
       // (POK-326 리뷰 1라운드)
@@ -873,6 +928,16 @@ export function useHlsPlayback(
         // GAP 을 건너 첫 내용 조각에서 받는다(POK-573 · startConfig)
         const hls = new HlsCtor(startConfig(base, { kind, startAtMs }));
         hlsRef.current = hls;
+        // 라이브 재생기만 따라잡는다(POK-583 계획 D1) — 켜는 것은 MANIFEST_PARSED 와 사람 명령 자리다
+        catchup =
+          kind === 'live'
+            ? watchLiveCatchup(video, {
+                read: () =>
+                  readHlsCatchup(hlsRef.current, hooksRef.current.isHandoffConfirming?.() === true),
+                policy: liveCatchupPolicy(navigator),
+              })
+            : null;
+        catchupRef.current = catchup;
         // 라이브는 구성 시차 스위치를 켰을 때만 단다(5.4절)
         videoStarts =
           kind === 'live' && !LIVE_PTS_CORRECTION ? null : trackVideoStarts(hls, HlsCtor.Events);
@@ -1013,6 +1078,8 @@ export function useHlsPlayback(
         hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
           // 멈춘 채 갈아 끼운 재생기는 스스로 틀지 않는다(5.3.1절 3번)
           if (swap.holds(generation)) return;
+          // 첫 진입 · 「실시간으로」 는 full, 되감기 → 라이브 넘김은 rate(POK-583)
+          catchup?.arm(liveCatchupStartMode({ kind, startAtMs }));
           // 자동재생 거부는 reject로 온다 — playing=false로 남아 재생 버튼이 노출된다
           autoplay();
         });
@@ -1069,6 +1136,9 @@ export function useHlsPlayback(
       releaseVideoStarts();
       hlsRef.current?.destroy();
       hlsRef.current = null;
+      // 배속을 1 로 되돌려 다음 재생기(되감기 · 다시보기)가 물려받지 않게 한다(POK-583)
+      catchup?.dispose();
+      catchupRef.current = null;
       // src 제거만으로는 네트워크·디코더가 붙어 있다 — load()까지 해야 리소스가 해제된다
       video.removeAttribute('src');
       video.load();
@@ -1091,7 +1161,7 @@ export function useHlsPlayback(
     volume,
     behindSeconds,
     ...position,
-    atEdge: isAtEdge(behindSeconds),
+    atEdge,
     windowSeconds,
     uptimeSeconds,
     quality,

@@ -23,6 +23,7 @@ const CLIP_MARK_WIDTH_PCT = 5;
 // LL-HLS가 매번 버퍼를 비우고 프래그먼트를 다시 받는다. 드래그 중엔 프리뷰만 움직인다.
 export function PlayerSeekBar({
   behindSeconds,
+  atEdge: playerAtEdge,
   windowSeconds,
   clipMarked,
   onSeekToFraction,
@@ -33,6 +34,11 @@ export function PlayerSeekBar({
   recordingEnded = false,
 }: {
   behindSeconds: number;
+  /**
+   * 재생기가 정한 「끝에 있음」(PlayerSimulation.atEdge) — LIVE 단추와 같은 값이다(라이브 재생기는 반올림 전
+   * 시차로 정한다). behindSeconds 는 보이는 숫자라(steadySeconds) 끝 판정에 쓰지 않는다(POK-583)
+   */
+  atEdge: boolean;
   /** 되감기 창 = 시크바 좌측 끝 (계약3 4절 4번) */
   windowSeconds: number;
   clipMarked: boolean;
@@ -65,11 +71,13 @@ export function PlayerSeekBar({
   // 클램프가 한 곳에 있어야 ARIA 값·표기·트랙이 같은 수를 쓴다 — valuenow에만 걸면
   // 스크린리더가 좌측 끝에 붙은 썸을 두고 그보다 큰 시차를 읽는다.
   const displayBehind = Math.min(rawBehind, windowSeconds);
-  const atEdge = isAtEdge(displayBehind);
+  // 드래그 중엔 놓을 자리로, 아니면 재생기의 판정으로 끝을 정한다
+  const atEdge = dragFraction === null ? playerAtEdge : isAtEdge(displayBehind);
   const edge = edgeWords(replay);
   // 끝 문구(끝 · 끝에서)는 방송이 끝났다는 근거를 받은 세션 재생기도 녹화 끝이다. 이름 · 키는 replay 만 가른다
   const endWords = edgeWords(replay || recordingEnded);
-  const pct = progressFraction(displayBehind, windowSeconds) * 100;
+  // 끝이면 손잡이도 오른쪽 끝이다 — 3초 안쪽 시차를 창 비율로 그리면 「실시간」 인데 손잡이가 끝에서 떨어져 떨렸다(POK-583 떨림 ③)
+  const pct = atEdge ? 100 : progressFraction(displayBehind, windowSeconds) * 100;
   // 클립 마커는 프리뷰를 따라가지 않는다 — 실제 재생 지점 기준 구간이라 스크럽과 무관하다
   const clipPct = progressFraction(behindSeconds, windowSeconds) * 100;
 
@@ -129,7 +137,8 @@ export function PlayerSeekBar({
       aria-label={edge.seekLabel}
       aria-valuemin={-windowSeconds}
       aria-valuemax={0}
-      aria-valuenow={-displayBehind}
+      // 끝이면 손잡이 · 낭독처럼 0 이다 — 3초 안쪽 시차를 읽으면 끝에 붙은 손잡이를 두고 −2 를 읽는다
+      aria-valuenow={atEdge ? 0 : -displayBehind}
       aria-valuetext={
         atEdge ? endWords.atEdge : `${endWords.fromEdge} ${formatBehind(displayBehind)}`
       }
