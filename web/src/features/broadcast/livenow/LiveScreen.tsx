@@ -380,7 +380,7 @@ const LivePlayer = memo(function LivePlayer({
   const [accessExpiredFor, setAccessExpiredFor] = useState<string | null>(null);
   const accessReady = accessKey === null || accessReadyFor === accessKey;
   // 재생 세션(POK-200 M5) — 라이브 · 되감기 · 끝남 대기. 지난 방송 판정은 세션이 past 로 닫히거나(POK-547) 세션을 연 적 없는
-  // 화면이 끝난 방송일 때만 한다: 명부는 정산 15분 뒤에야 ended 라 「명부 ended 단독」 조건을 쓰지 않는다(설계 5.5절)
+  // 화면이 끝난 방송일 때만 한다: 판정은 회차별 조회로만 하므로(계약3 7-3) 「명부 ended 단독」 조건을 쓰지 않는다(설계 5.5절)
   const live = useLiveSession({
     liveStreamId,
     mediaKey,

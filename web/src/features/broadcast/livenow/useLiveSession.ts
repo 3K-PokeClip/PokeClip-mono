@@ -19,7 +19,8 @@ import type { BroadcastStatus } from './useBroadcastClock';
 import type { Reselect } from './useLiveStreamSelection';
 
 // 라이브 화면의 재생 세션 배선(설계 5.5절, POK-200 M5) — 세션을 여는 조건 · 지난 방송 판정 화면 · 재생 보유 · 「새 방송」 띠를 정한다.
-// 세션은 이 층(GlassPlayer key 바깥)에 살아 재생기가 다시 마운트돼도 남는다. 명부 ended 는 세션을 닫지 않는다(재조회 신호다).
+// 세션은 이 층(GlassPlayer key 바깥)에 살아 재생기가 다시 마운트돼도 남는다. 명부 ended 는 세션을 닫지 않는다(재조회 신호이고
+// 덮개 문구만 바꾼다 — POK-612).
 
 /** 지금 방송 번호를 묻는 한도 — 넘으면 「모름」이다(설계 5.3절) */
 const X_TIMEOUT_MS = 2_000;
@@ -238,6 +239,7 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     // 제어면 키는 출입증 쿠키와 무관하다 — 쿠키를 못 받은 곳(로컬 · dev)에서도 폴링이 돈다(R30)
     controlKey: mediaKey ?? (liveStreamId || null),
     controlBase: mediaControlBaseUrl(),
+    rosterEnded: broadcastStatus === 'ended',
     resolveX,
     onClose,
     onNotice,
@@ -249,7 +251,8 @@ export function useLiveSession(input: LiveSessionInput): LiveSession {
     if (opened && accessKey !== null) setOpenedFor(accessKey);
   }, [opened, accessKey]);
 
-  // 명부 ended 는 재조회 신호 하나다(정산 15분 뒤라 끝 증거가 아니다)
+  // 명부 ended 는 국면을 바꾸지 않는다 — 재조회 신호이고 덮개 문구만 바꾼다. 끝 증거(국면 · 판정)는 회차별 조회뿐이다
+  // (계약3 7-3). 종료 신호(4D)면 수십 초 안에 온다(2026-11-19 prod 21초)
   const dispatch = session?.dispatch;
   useEffect(() => {
     if (broadcastStatus === 'ended') dispatch?.({ type: 'roster-ended' });

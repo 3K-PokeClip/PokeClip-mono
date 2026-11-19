@@ -76,6 +76,8 @@ export interface SessionOptions {
   controlKey: string | null;
   /** 제어면 주소(NEXT_PUBLIC_MEDIA_CONTROL_BASE_URL). 비면 세션을 열지 않는다 */
   controlBase: string | null;
+  /** 명부가 이 방송을 ended 로 답했다. 덮개 문구에만 쓴다 · 국면 · 판정에는 안 쓴다(POK-612) */
+  rosterEnded: boolean;
   /** 지금 방송 번호 X. fresh = 기억을 버리고 새로 묻는다(LIVE 누름) — 2초 안에 모르면 unknown */
   resolveX: (fresh: boolean) => Promise<XAnswer>;
   onClose: (closed: SessionClosed) => void;
@@ -437,9 +439,10 @@ export function usePlaybackSession(options: SessionOptions): PlaybackSession | n
     [],
   );
 
+  const { rosterEnded } = options;
   const view = useMemo(
-    () => (state === null ? null : sessionView(state, Math.max(now, Date.now()))),
-    [state, now],
+    () => (state === null ? null : sessionView(state, Math.max(now, Date.now()), { rosterEnded })),
+    [state, now, rosterEnded],
   );
   if (state === null || view === null || state.closed !== null) return null;
   return {
