@@ -369,8 +369,11 @@ export function useHlsPlayback(
 
   // 사람의 시크가 따라잡기를 켜고 끈다 — 라이브 끝 3초 안이면 「실시간으로」 와 같다(POK-583 Q2 (가))
   const followSeek = useCallback((atEdge: boolean) => {
-    if (atEdge) catchupRef.current?.arm('full');
-    else catchupRef.current?.disarm();
+    if (atEdge) {
+      catchupRef.current?.arm('full');
+    } else {
+      catchupRef.current?.disarm();
+    }
   }, []);
 
   /** 세션 모드: 목표 실제 시각을 세션에 넘긴다. 축을 모르면 false */

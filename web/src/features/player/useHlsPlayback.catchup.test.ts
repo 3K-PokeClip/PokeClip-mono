@@ -289,8 +289,11 @@ describe.each([
   it('10초 되감은 뒤 지연 15초 · timeupdate 20회 — 배속 1 · 재생 위치 쓰기는 그 시크 하나', async () => {
     const { el, view } = await mount(LIVE, session ? sessionHooks() : {}, EDGE_S);
     act(() => {
-      if (session) view.result.current.seekToMs(EDGE_MS - 10_000);
-      else view.result.current.seekBy(10);
+      if (session) {
+        view.result.current.seekToMs(EDGE_MS - 10_000);
+      } else {
+        view.result.current.seekBy(10);
+      }
     });
     expect(media.timeWrites).toEqual([EDGE_S - 10]);
     setLatency(15);
@@ -340,8 +343,11 @@ describe('H4 꺼진 뒤 LIVE 로 다시 켠다', () => {
     const { el, view } = await mount(LIVE, session ? sessionHooks() : {});
     userPause(el);
     act(() => {
-      if (session) view.result.current.seekToLiveEdge();
-      else view.result.current.returnToLive();
+      if (session) {
+        view.result.current.seekToLiveEdge();
+      } else {
+        view.result.current.returnToLive();
+      }
     });
     expect(media.time).toBe(EDGE_S);
     setLatency(3);
@@ -480,13 +486,19 @@ describe('H10 오른쪽 끝 3초 안 시크 = 「실시간으로」(Q2 (가) · 
     const { el, view } = await mount(LIVE, session ? sessionHooks() : {}, EDGE_S);
     // 먼저 10초 되감아 끈다(재생 위치 20초)
     act(() => {
-      if (session) view.result.current.seekToMs(EDGE_MS - 10_000);
-      else view.result.current.seekBy(10);
+      if (session) {
+        view.result.current.seekToMs(EDGE_MS - 10_000);
+      } else {
+        view.result.current.seekBy(10);
+      }
     });
     expect(media.time).toBe(EDGE_S - 10);
     act(() => {
-      if (session) view.result.current.seekToMs(EDGE_MS - behindS * 1000);
-      else view.result.current.seekBy(behindS - 10);
+      if (session) {
+        view.result.current.seekToMs(EDGE_MS - behindS * 1000);
+      } else {
+        view.result.current.seekBy(behindS - 10);
+      }
     });
     expect(media.time).toBe(behindS < 3 && !session ? EDGE_S : EDGE_S - behindS);
     setLatency(TARGET_S + 1.5);
@@ -503,8 +515,11 @@ describe('사람 시크 · LIVE 직후 첫 표본은 그 자리의 지연으로 
   async function rewound(session: boolean) {
     const mounted = await mount(LIVE, session ? sessionHooks() : {}, EDGE_S);
     act(() => {
-      if (session) mounted.view.result.current.seekToMs(EDGE_MS - 10_000);
-      else mounted.view.result.current.seekBy(10);
+      if (session) {
+        mounted.view.result.current.seekToMs(EDGE_MS - 10_000);
+      } else {
+        mounted.view.result.current.seekBy(10);
+      }
     });
     lastHls().latency = 11.3;
     return mounted;
@@ -516,8 +531,11 @@ describe('사람 시크 · LIVE 직후 첫 표본은 그 자리의 지연으로 
   ] as const)('%s — 배속 0 · 점프 0', async (...[, session]) => {
     const { el, view } = await rewound(session);
     act(() => {
-      if (session) view.result.current.seekToLiveEdge();
-      else view.result.current.returnToLive();
+      if (session) {
+        view.result.current.seekToLiveEdge();
+      } else {
+        view.result.current.returnToLive();
+      }
     });
     timeupdate(el);
     expect(rateRaised()).toBe(false);

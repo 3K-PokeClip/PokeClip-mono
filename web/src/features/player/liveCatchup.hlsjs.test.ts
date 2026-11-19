@@ -42,7 +42,7 @@ function mediaPlaylist(slide: number): string {
   return lines.join('\n');
 }
 
-const quiet = () => {};
+function quiet() {}
 const SILENT = { trace: quiet, debug: quiet, log: quiet, warn: quiet, info: quiet, error: quiet };
 
 /** hls.js 1.7.3 지연 제어기의 비공개 몫 — 노드 붙이기만 쓴다 */

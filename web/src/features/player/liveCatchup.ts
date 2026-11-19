@@ -308,9 +308,9 @@ function bufferAheadAt(buffered: TimeRanges, time: number): number {
 }
 
 /**
- * 우리가 건 배속이 영상에서 기본 배속(1)으로 풀렸으면 상태도 1 로 맞춘다 — 미디어 load(recoverMediaError)는 ratechange
- * 없이 기본 배속으로 되돌린다. 맞추지 않으면 걸려 있다고 믿고 다시 걸지 않아 따라잡기가 멎는다. 1 이 아닌 다른 배속은 밖
- * (확장 · 브라우저 메뉴)에서 고른 것이라 맞추지 않는다 — 다음 표본에서 덮어쓰지 않게
+ * 우리가 건 배속이 영상에서 기본 배속(1)으로 풀렸을 때만 상태도 1 로 맞춘다 — 미디어 load(recoverMediaError)는
+ * ratechange 없이 기본 배속으로 되돌린다. 맞추지 않으면 걸려 있다고 믿고 다시 걸지 않아 따라잡기가 멎는다. 1 이 아닌
+ * 배속으로 바뀐 것은 건드리지 않지만, 목표에 닿거나 끄면(disarm) 1 로 되돌린다
  */
 function syncRate(state: LiveCatchupState, playbackRate: number): LiveCatchupState {
   return state.rate !== 1 && playbackRate === 1 ? { ...state, rate: 1 } : state;
