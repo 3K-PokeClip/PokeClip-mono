@@ -53,6 +53,10 @@ public class PairingCodeService {
         // 내려줄 키가 있어야 한다. 발급의 유일한 입구가 ensureKey다.
         streamKeyService.ensureKey(userId);
 
+        // 전에 받은 코드는 지금 만료시킨다 — 살아있는 코드를 회원당 하나로 둔다(PairingCodeRepository.expireAliveOfUser).
+        // 잠금 순서는 키 → 코드로, 탈퇴(revokeAlive → consumeAliveOfUser)와 같다. 교환은 코드 행만 잡는다.
+        pairingCodeRepository.expireAliveOfUser(userId, now);
+
         String code = CrockfordBase32.random(random, CODE_LENGTH);
         Instant expiresAt = now.plus(TTL);
         pairingCodeRepository.save(PairingCode.of(userId, Sha256.hex(code), expiresAt, now));

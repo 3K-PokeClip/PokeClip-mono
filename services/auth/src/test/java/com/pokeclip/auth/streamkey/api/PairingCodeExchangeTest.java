@@ -99,14 +99,43 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
     @Test
     void 코드를_두_번_발급해_교환해도_같은_키가_나온다() throws Exception {
         User user = newUser();
+        // 새 코드를 받으면 전 코드는 만료되므로(PR #539 2차 리뷰) 받은 차례대로 하나씩 쓴다 — PC 두 대를 붙이는 순서다
         String first = issueCode(user);
-        String second = issueCode(user);
-
         String a = exchange(first, "10.0.0.1").andReturn().getResponse().getContentAsString();
+        String second = issueCode(user);
         String b = exchange(second, "10.0.0.2").andReturn().getResponse().getContentAsString();
 
         assertThat(JsonPath.read(a, "$.passphrase").toString())
                 .isEqualTo(JsonPath.read(b, "$.passphrase").toString());
+    }
+
+    /**
+     * PR #539 2차 리뷰: 살아있는 코드는 회원당 하나다. 전 코드가 살아 있으면 그것을 넣어도 웹이 새 코드가 쓰인 것으로
+     * 읽어 새 코드 창이 「연결됐어요」로 바뀐다. 전 코드는 「이미 썼다」(409)가 아니라 만료(410)로 답한다 — 쓴 적이 없다.
+     */
+    @Test
+    void 새_코드를_받으면_전에_받은_코드는_만료된다() throws Exception {
+        User user = newUser();
+        String first = issueCode(user);
+        String second = issueCode(user);
+
+        exchange(first, "10.0.0.1")
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.reason").value("PAIRING_CODE_EXPIRED"));
+        exchange(second, "10.0.0.2").andExpect(status().isOk());
+    }
+
+    /** 쓰인 코드는 새 발급이 건드리지 않는다 — 다시 넣으면 여전히 「이미 썼다」(409)다. */
+    @Test
+    void 새_코드를_받아도_이미_쓴_코드는_409_그대로다() throws Exception {
+        User user = newUser();
+        String first = issueCode(user);
+        exchange(first, "10.0.0.1").andExpect(status().isOk());
+        issueCode(user);
+
+        exchange(first, "10.0.0.2")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.reason").value("PAIRING_CODE_ALREADY_USED"));
     }
 
     @Test
