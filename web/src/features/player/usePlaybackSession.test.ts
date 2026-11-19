@@ -74,6 +74,7 @@ function options(patch: Partial<SessionOptions> = {}): SessionOptions {
     liveUrl: `${BASE}/live/key-1/index.m3u8`,
     controlKey: 'key-1',
     controlBase: BASE,
+    rosterEnded: false,
     resolveX: () => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-A' }),
     onClose: vi.fn(),
     onNotice: vi.fn(),
@@ -119,6 +120,20 @@ describe('여는 조건 · 폴링', () => {
     rerender(options({ canOpen: false }));
     await flush();
     expect(result.current?.state.closed).toBeNull();
+  });
+
+  it('명부 ended(rosterEnded) 는 끝남 대기 덮개 문구만 바꾼다 — 상태는 그대로다(POK-612)', async () => {
+    const { result, rerender } = renderHook((o: SessionOptions) => usePlaybackSession(o), {
+      initialProps: options(),
+    });
+    await flush();
+    act(() => result.current?.dispatch({ type: 'live-closed' }));
+    await flush();
+    expect(result.current?.view.cover).toBe('checking');
+    const state = result.current?.state;
+    rerender(options({ rosterEnded: true }));
+    expect(result.current?.view.cover).toBe('preparing');
+    expect(result.current?.state).toBe(state);
   });
 
   it('끝남 대기에 들면 두 경로를 묻는다 · 회차별 404 는 360초 동안 닫지 않는다', async () => {

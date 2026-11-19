@@ -3,7 +3,7 @@
 // 시계의 주인은 clip의 방송 명부다.
 // 라이브면 시작 시각부터 매초 센다. 지난 방송이면 시작~종료 길이를 고정으로 준다.
 // 방송 번호가 없으면 오프라인이다. 결과는 liveDataStore에도 흘려 채팅·통계가 같은 기준을 쓴다.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchBroadcast } from '@/api/clipEditor';
 import { setVisibleInterval } from '@/lib/visibleInterval';
 import { publishLiveData } from './liveDataStore';
@@ -34,6 +34,27 @@ const POLL_MS = 30_000;
  * 끝 시각을 고치고(무음 종료 뒤 applyEnded), 권한이 회수되면 이 주기가 줄이 없다고 알려야 상세 화면이 404로 간다
  */
 const SETTLED_POLL_MS = 60_000;
+/**
+ * 끝남 대기의 재접속 대기 동안 명부를 다시 보는 간격(POK-612). 종료 신호(4D)면 명부는 정지 뒤 수십 초 안에 ended 가 되고
+ * (2026-11-19 prod 21초), 덮개 문구가 그 답을 기다린다. 켜고 끄는 쪽(useLiveSession)이 재접속 대기(360초) 안 · 명부가 아직
+ * ended 가 아닐 때만 켠다
+ */
+const ENDING_WAIT_POLL_MS = 5_000;
+
+interface BroadcastClockOptions {
+  /**
+   * 명부를 빨리 다시 읽는다 — 호출자가 끝남 대기의 재접속 대기 안이고 명부가 아직 ended 가 아닐 때 켠다. 켜지면 곧바로 한 번 ·
+   * 그 뒤 ENDING_WAIT_POLL_MS 주기
+   */
+  rosterFastPoll?: boolean;
+}
+
+/** 방송 번호 effect 가 만든 지금 방송의 명부 읽기 — 주기 전환 effect 가 이것으로 곧바로 읽고 주기를 바꾼다 */
+interface RosterPoller {
+  load: (fresh: boolean) => Promise<void>;
+  /** 지금 조건(빠른 읽기 · 시각이 다 찼나)에 맞는 주기로 바꾼다. 같은 주기면 그대로 둔다 */
+  retime: () => void;
+}
 
 function ms(iso: string | null): number | null {
   if (!iso) return null;
@@ -41,13 +62,19 @@ function ms(iso: string | null): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-export function useBroadcastClock(streamId: string): BroadcastClock {
+export function useBroadcastClock(
+  streamId: string,
+  { rosterFastPoll = false }: BroadcastClockOptions = {},
+): BroadcastClock {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
   const [status, setStatus] = useState<BroadcastStatus>('unknown');
   const [missingStreamId, setMissingStreamId] = useState<string | null>(null);
   const [ingestStreamId, setIngestStreamId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // 주기 전환은 방송 번호 effect 를 다시 돌리지 않는다: 다시 돌리면 status · 시각을 「모름」 으로 되돌린다(POK-612)
+  const rosterFastPollRef = useRef(rosterFastPoll);
+  const pollerRef = useRef<RosterPoller | null>(null);
 
   useEffect(() => {
     setStartedAt(null);
@@ -77,9 +104,17 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
     let alive = true;
     let stopPolling = () => {};
     let settled = false;
-    const poll = (ms: number) => {
+    let periodMs = 0;
+    const retime = () => {
+      const next = rosterFastPollRef.current
+        ? ENDING_WAIT_POLL_MS
+        : settled
+          ? SETTLED_POLL_MS
+          : POLL_MS;
+      if (next === periodMs) return;
+      periodMs = next;
       stopPolling();
-      stopPolling = setVisibleInterval(() => void load(true), ms);
+      stopPolling = setVisibleInterval(() => void load(true), next);
     };
     const load = async (fresh: boolean) => {
       try {
@@ -133,19 +168,30 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
           ms(row.timelineOriginAt ?? null) !== null
         ) {
           settled = true;
-          poll(SETTLED_POLL_MS);
+          retime();
         }
       } catch {
         /* 다음 주기에 다시 */
       }
     };
     void load(false);
-    poll(POLL_MS);
+    retime();
+    pollerRef.current = { load, retime };
     return () => {
       alive = false;
+      pollerRef.current = null;
       stopPolling();
     };
   }, [streamId]);
+
+  useEffect(() => {
+    if (rosterFastPollRef.current === rosterFastPoll) return;
+    rosterFastPollRef.current = rosterFastPoll;
+    const poller = pollerRef.current;
+    if (poller === null) return;
+    if (rosterFastPoll) void poller.load(true);
+    poller.retime();
+  }, [rosterFastPoll]);
 
   useEffect(() => {
     if (startedAt === null || endedAt !== null) return;

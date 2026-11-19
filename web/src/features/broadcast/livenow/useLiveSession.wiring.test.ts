@@ -8,6 +8,7 @@ import type {
   SessionClosed,
   SessionOptions,
 } from '@/features/player/usePlaybackSession';
+import { resetLiveData, useLiveField } from './liveDataStore';
 import { useLiveSession, type LiveSession, type LiveSessionInput } from './useLiveSession';
 
 // useLiveSession 의 배선(cc c10 L2) — 세션에 넘기는 지금 방송 번호 묻기가 최신 방송|영상 키를 싣고, 그 기억이 렌더를 넘어 산다.
@@ -494,5 +495,77 @@ describe('useLiveSession: 다시보기 재생기에서 바꾼 소리(POK-547)', 
     await act(async () => root.render(stage(keyB, false)));
     expect(shown!.vodSound).toBeNull();
     act(() => root.unmount());
+  });
+});
+
+// 명부를 빨리 다시 읽어 달라는 신호(POK-612 R10) — 끝남 대기의 재접속 대기 안이고 명부가 아직 ended 가 아닐 때만 그 방송
+// 번호를 낸다. 방송 시계가 이 칸을 보고 명부를 곧바로 한 번 · 5초마다 다시 읽는다
+describe('useLiveSession: 명부 빠른 재조회 신호 rosterFastPollFor(POK-612 R10)', () => {
+  function waitingSession(resumeWaiting: boolean, accessKey = 'r-A|key-1'): PlaybackSession {
+    return {
+      state: { accessKey },
+      view: { banner: null, resumeWaiting },
+      dispatch: vi.fn(),
+    } as unknown as PlaybackSession;
+  }
+
+  /** 저장소 칸을 듣는 쪽 — 세션 화면이 내려가도 남아 그 뒤의 값을 본다 */
+  function watchFastPoll() {
+    return renderHook(() => useLiveField('rosterFastPollFor'));
+  }
+
+  beforeEach(() => resetLiveData());
+
+  it('재접속 대기 안 · 명부 live 면 그 방송 번호다 — 재접속 대기가 끝나거나 명부가 ended 로 답하면 null 이다', () => {
+    const signal = watchFastPoll();
+    hoisted.session = waitingSession(true);
+    const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
+      initialProps: input(),
+    });
+    expect(signal.result.current).toBe('r-A');
+
+    view.rerender(input({ broadcastStatus: 'ended' }));
+    expect(signal.result.current).toBeNull();
+
+    view.rerender(input());
+    expect(signal.result.current).toBe('r-A');
+    hoisted.session = waitingSession(false);
+    view.rerender(input());
+    expect(signal.result.current).toBeNull();
+  });
+
+  it('재접속 대기가 아니면(라이브 · 세션 없음) 내지 않는다', () => {
+    const signal = watchFastPoll();
+    hoisted.session = waitingSession(false);
+    const view = renderHook(() => useLiveSession(input()));
+    expect(signal.result.current).toBeNull();
+    view.unmount();
+
+    hoisted.session = null;
+    renderHook(() => useLiveSession(input()));
+    expect(signal.result.current).toBeNull();
+  });
+
+  it('방송 번호가 A 에서 B 로 바뀌면 A 를 남기지 않는다 · 화면이 내려가면 null 이다', () => {
+    const signal = watchFastPoll();
+    hoisted.session = waitingSession(true);
+    const view = renderHook((props: LiveSessionInput) => useLiveSession(props), {
+      initialProps: input(),
+    });
+    expect(signal.result.current).toBe('r-A');
+
+    // 세션이 닫히기 전 그리기 하나(세션 훅은 같은 그리기에서 left 로 닫는다) — 남은 세션은 A 의 것이라 B 도 싣지 않는다
+    const toB = input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1' });
+    view.rerender(toB);
+    expect(signal.result.current).toBeNull();
+    hoisted.session = null;
+    view.rerender(toB);
+    expect(signal.result.current).toBeNull();
+
+    hoisted.session = waitingSession(true, 'r-B|key-1');
+    view.rerender(toB);
+    expect(signal.result.current).toBe('r-B');
+    view.unmount();
+    expect(signal.result.current).toBeNull();
   });
 });

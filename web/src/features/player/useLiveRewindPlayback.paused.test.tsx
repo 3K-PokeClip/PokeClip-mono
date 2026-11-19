@@ -90,6 +90,7 @@ function options(): SessionOptions {
     liveUrl: `${BASE}/live/key-1/index.m3u8`,
     controlKey: 'key-1',
     controlBase: BASE,
+    rosterEnded: false,
     resolveX: () => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-A' }),
     onClose: vi.fn(),
   };

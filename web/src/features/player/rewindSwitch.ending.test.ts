@@ -421,6 +421,43 @@ describe('ending-wait 국면', () => {
     expect(sessionView(atEnd, NOW).actions).toEqual([]);
   });
 
+  it('POK-612 R1 명부가 ended 면 재접속 대기 안이어도 끝에 닿은 덮개는 곧바로 「다시보기 준비 중」 이다', () => {
+    const atEnd = endingFromLiveClosed();
+    expect(sessionView(atEnd, NOW + 1_000, { rosterEnded: true }).cover).toBe('preparing');
+  });
+
+  it('POK-612 R2 명부가 ended 가 아니면(인자 생략 포함) 재접속 대기 동안 「확인」 · 그 뒤 「준비 중」 그대로다', () => {
+    const atEnd = endingFromLiveClosed();
+    const notEnded = { rosterEnded: false };
+    expect(sessionView(atEnd, NOW + RESUME_WAIT_MS - 1, notEnded).cover).toBe('checking');
+    expect(sessionView(atEnd, NOW + RESUME_WAIT_MS, notEnded).cover).toBe('preparing');
+    expect(sessionView(atEnd, NOW + 1_000)).toEqual(sessionView(atEnd, NOW + 1_000, notEnded));
+  });
+
+  it('POK-612 R3 명부가 ended 여도 아직 보는 시청자(ENDLIST · atEnd:false)에게는 덮개가 없다', () => {
+    const watching = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
+    expect(watching.phase).toMatchObject({ kind: 'ending-wait', atEnd: false });
+    expect(sessionView(watching, NOW + 1_000, { rosterEnded: true }).cover).toBeNull();
+  });
+
+  it('POK-612 R4 명부 ended 로 「준비 중」 이 돼도 「새 방송 보기」 제안은 그대로 선다', () => {
+    const other = liveReady(B1, NOW + MIN, NOW + 2 * MIN);
+    const offered = run(endingFromLiveClosed(), [[streamPoll(other, X_B)]]).state;
+    const view = sessionView(offered, NOW + 1_000, { rosterEnded: true });
+    expect(view.cover).toBe('preparing');
+    expect(view.actions).toEqual(['new-broadcast']);
+  });
+
+  it('POK-612 R5 resumeWaiting 은 끝남 대기의 재접속 대기 동안만 참이다(atEnd · 명부와 무관)', () => {
+    const atEnd = endingFromLiveClosed();
+    expect(sessionView(atEnd, NOW + 1_000).resumeWaiting).toBe(true);
+    expect(sessionView(atEnd, NOW + 1_000, { rosterEnded: true }).resumeWaiting).toBe(true);
+    expect(sessionView(atEnd, NOW + RESUME_WAIT_MS).resumeWaiting).toBe(false);
+    const watching = run(rewindAt(T0 + 20 * MIN), [[{ type: 'endlist' }]]).state;
+    expect(sessionView(watching, NOW + 1_000).resumeWaiting).toBe(true);
+    expect(sessionView(liveWithEntry(), NOW).resumeWaiting).toBe(false);
+  });
+
   it('T1-4 명부 ended 는 끝남 대기의 상태를 바꾸지 않는다 — 효과 0 · 자동 전환 0(POK-547)', () => {
     const start = endingFromLiveClosed();
     const { state, effects } = run(start, [[{ type: 'roster-ended' }]]);

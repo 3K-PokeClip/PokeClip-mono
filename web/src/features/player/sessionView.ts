@@ -12,7 +12,7 @@ import {
 export interface SessionView {
   /**
    * 마지막 프레임 위 덮개. checking = 재접속 대기 동안 「방송이 이어지는지 확인하고 있어요」 · preparing = 그 뒤
-   * 「다시보기 준비 중」 · vod-ready = 「다시보기 보기」
+   * 「다시보기 준비 중」(명부가 ended 면 재접속 대기 안이어도 곧바로 — POK-612) · vod-ready = 「다시보기 보기」
    */
   cover: 'checking' | 'preparing' | 'vod-ready' | null;
   /** 덮개(끝에 닿음) 또는 띠(아직 보는 중)에 둘 버튼 */
@@ -30,7 +30,21 @@ export interface SessionView {
    * 지시이지 그릴 것이 아니다 — 재생기가 기동할 때 한 번 읽는다
    */
   startHeld: boolean;
+  /** 끝남 대기의 재접속 대기(RESUME_WAIT_MS) 안이다 — 명부를 짧은 주기로 다시 읽을 때다(POK-612) */
+  resumeWaiting: boolean;
 }
+
+/**
+ * 화면 밖에서 오는 보기 재료(POK-612). 국면 · 판정에는 쓰지 않고 그릴 것에만 쓴다 — 판정은 회차별
+ * 조회뿐이다(계약3 7-3)
+ */
+interface SessionViewContext {
+  /** 명부(방송 목록)가 이 방송을 ended 로 답했다 — 종료 판정이 났으니 같은 회차가 이어지지 않는다 */
+  rosterEnded: boolean;
+}
+
+/** 명부가 ended 라고 답하지 않은 보기 재료 — 명부를 모르는 호출의 기본값이다 */
+const ROSTER_NOT_ENDED: SessionViewContext = { rosterEnded: false };
 
 type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 
@@ -60,12 +74,16 @@ export function watchesDrain(session: PlaybackSessionState): boolean {
 /**
  * 끝남 대기의 덮개 — 막혔거나 마지막 확인 중이면 끝까지 볼 수 없음이 정해졌으니 재접속 대기
  * 안이어도 「다시보기 준비 중」(POK-528 (나)-5 · W6), 끝에 닿았으면 재접속 대기 동안 「확인 중」 ·
- * 그 뒤 「준비 중」
+ * 그 뒤 「준비 중」. 명부가 ended 면 이어지지 않으니 재접속 대기 안이어도 「준비 중」(POK-612)
  */
-function endingCover(phase: EndingPhase, waiting: boolean): SessionView['cover'] {
+function endingCover(
+  phase: EndingPhase,
+  waiting: boolean,
+  rosterEnded: boolean,
+): SessionView['cover'] {
   if (phase.blocked || phase.finalCheck) return 'preparing';
   if (!phase.atEnd) return null;
-  return waiting ? 'checking' : 'preparing';
+  return waiting && !rosterEnded ? 'checking' : 'preparing';
 }
 
 /** 끝남 대기의 단추 — 버튼 규칙이 제안한 것뿐이다. 제안이 없으면 없다(녹화 출구 없음 · POK-547) */
@@ -75,7 +93,11 @@ function offerActions(session: PlaybackSessionState): SessionButton[] {
   return [];
 }
 
-export function sessionView(session: PlaybackSessionState, now: number): SessionView {
+export function sessionView(
+  session: PlaybackSessionState,
+  now: number,
+  context: SessionViewContext = ROSTER_NOT_ENDED,
+): SessionView {
   const base: SessionView = {
     cover: null,
     actions: [],
@@ -84,15 +106,17 @@ export function sessionView(session: PlaybackSessionState, now: number): Session
     liveChecking: session.liveChecking,
     vodReady: false,
     startHeld: isPlayerStartHeld(session),
+    resumeWaiting: false,
   };
   const phase = session.phase;
   if (phase.kind === 'ending-wait') {
     const waiting = session.endingSince !== null && now - session.endingSince < RESUME_WAIT_MS;
     return {
       ...base,
-      cover: endingCover(phase, waiting),
+      cover: endingCover(phase, waiting, context.rosterEnded),
       actions: offerActions(session),
       seekHidden: phase.atEnd && phase.origin === 'live',
+      resumeWaiting: waiting,
     };
   }
   if (phase.kind === 'vod-offered') {

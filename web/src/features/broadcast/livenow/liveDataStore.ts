@@ -78,6 +78,11 @@ export interface LiveData {
    * 방송 다시 고르기(useLiveStreamSelection)가 보던 재생을 내리지 않게 이 값을 본다. 없으면 null
    */
   playbackHold: string | null;
+  /**
+   * 명부를 빨리 다시 읽어 달라는 방송 번호(POK-612) — 재생 세션이 끝남 대기의 재접속 대기 안이고 명부가 아직 ended 가 아니다.
+   * 방송 시계(useBroadcastClock)가 이 방송이면 명부를 곧바로 한 번 · 5초마다 다시 읽는다. 없으면 null
+   */
+  rosterFastPollFor: string | null;
 }
 
 /**
@@ -151,6 +156,7 @@ const INITIAL: LiveData = {
   listTitle: null,
   channelNames: null,
   playbackHold: null,
+  rosterFastPollFor: null,
 };
 let state: LiveData = INITIAL;
 const listeners = new Set<() => void>();
