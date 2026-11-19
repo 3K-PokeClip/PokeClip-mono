@@ -175,6 +175,19 @@ export function seekFractionFromPointer(
   return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
 }
 
+/** 보이는 시차 숫자는 실제 시차에서 이만큼(초)을 넘게 벗어날 때만 바꾼다 */
+const STEADY_SLACK_SECONDS = 1;
+
+/**
+ * 보이는 시차(정수 초) — 실제 시차(rawMs, 반올림 전)가 지금 숫자에서 1초 넘게 벗어날 때만 반올림한 새 값이고, 아니면 지금 숫자
+ * 그대로다(POK-583 떨림 ①). 반올림만 하면 0.5초 파트 계단에서 1.4 · 1.6 초를 오갈 때 숫자가 1 · 2 로 흔들린다. 표시
+ * 전용이다: 끝 판정(isAtEdge)과 시크 계산은 실제 시차로 한다
+ */
+export function steadySeconds(prevSeconds: number, rawMs: number): number {
+  const raw = rawMs / 1000;
+  return Math.abs(raw - prevSeconds) > STEADY_SLACK_SECONDS ? Math.round(raw) : prevSeconds;
+}
+
 /** 라이브 엣지에 있는가 — LIVE 복귀 버튼·진행 트랙 색이 갈리는 기준 */
 export function isAtEdge(behindSeconds: number): boolean {
   return behindSeconds < AT_EDGE_THRESHOLD_SECONDS;

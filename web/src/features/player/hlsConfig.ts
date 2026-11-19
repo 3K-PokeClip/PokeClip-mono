@@ -1,9 +1,10 @@
 import type { HlsConfig } from 'hls.js';
 import { mediaCredentials } from '@/api/mediaAccess';
 
-// 계약3 4절 1번 "catch-up 끄기" — POK-31 스파이크에서 확정한 설정 (hls.js 1.7 기준 실측).
-// catch-up이 살아 있으면 되감기 중 플레이어가 스스로 라이브로 점프해 "DVR이 안 되는
-// 것처럼" 보인다 — 과거 서버 탓 오판정의 원인.
+// 계약3 4절 1번 "라이브러리 catch-up 끄기" — POK-31 스파이크에서 확정한 설정 (hls.js 1.7 기준 실측).
+// 라이브러리 catch-up은 시청자의 의도를 모른다: 살아 있으면 되감기 중 플레이어가 스스로 라이브로
+// 점프해 "DVR이 안 되는 것처럼" 보인다 — 과거 서버 탓 오판정의 원인. 라이브를 보는 중인 시청자의
+// 따라잡기(배속 · 점프)는 라이브러리가 아니라 앱이 liveCatchup.ts 로 한다(POK-583).
 //
 // hls.js의 catch-up은 두 갈래이고, 1.7 기본값은 둘 다 꺼져 있다:
 //   1) 강제 시크 — liveMaxLatencyDurationCount 초과 시. 기본값 Infinity = 발동 안 함.
@@ -20,8 +21,9 @@ export const HLS_BASE_CONFIG = {
   // LL-HLS(EXT-X-PART·blocking reload) 활성 — LIVE 복귀 지점(liveSyncPosition)이
   // PART-HOLD-BACK 기준으로 잡힌다
   lowLatencyMode: true,
-  // 배속 추격 비활성 고정 — 기본값(1)과 같지만, 라이브러리 기본값 변경에 흔들리지
-  // 않도록 "catch-up 끄기"의 의도를 설정으로 못박는다 (1 = 재생 속도 조절 없음)
+  // 라이브러리 배속 추격 비활성 고정 — 기본값(1)과 같지만, 라이브러리 기본값 변경에 흔들리지
+  // 않도록 의도를 설정으로 못박는다. 1 이면 hls.js 는 재생 속도를 건드리지 않아(latency-controller
+  // onTimeupdate) 앱 따라잡기(liveCatchup.ts)가 건 배속을 덮지 않는다 (liveCatchup.hlsjs.test.ts J1)
   maxLiveSyncPlaybackRate: 1,
   // 출입증 쿠키(POK-317). CDN 뒤 조각은 쿠키가 없으면 403이다. 요청마다 읽으므로 출입증을 받은 뒤 요청부터 실린다.
   // 받기 전(로컬·dev)에는 안 싣는다: 로컬 영상 서버는 Allow-Origin * 라 켜면 브라우저가 조각을 버린다

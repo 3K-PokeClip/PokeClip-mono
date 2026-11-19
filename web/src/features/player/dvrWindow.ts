@@ -66,8 +66,20 @@ export function behindFromCurrentTime(
   currentTime: number,
   syncPosition: number | null,
 ): number {
-  const behind = Math.round(liveEdgePosition(range, syncPosition) - currentTime);
-  return Math.min(REWIND_UI_MAX_SECONDS, Math.max(0, behind));
+  return Math.round(behindMsFromCurrentTime(range, currentTime, syncPosition) / 1000);
+}
+
+/**
+ * behindFromCurrentTime 의 반올림 전 값(ms) — 같은 기준점 · 같은 상한이다. 보이는 시차(steadySeconds)와 끝 판정
+ * (isAtEdge)의 입력이다(POK-583 떨림 ① · ③)
+ */
+export function behindMsFromCurrentTime(
+  range: DvrRange,
+  currentTime: number,
+  syncPosition: number | null,
+): number {
+  const behindMs = (liveEdgePosition(range, syncPosition) - currentTime) * 1000;
+  return Math.min(REWIND_UI_MAX_SECONDS * 1000, Math.max(0, behindMs));
 }
 
 /**

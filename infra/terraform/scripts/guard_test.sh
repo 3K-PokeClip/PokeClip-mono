@@ -13,6 +13,8 @@
 # 경로(엣지)의 SG 조회가 VPC origin 하나만 기다리는 통과 트리다(bad_R15_module
 # 과 depends_on 한 줄만 다르다). testdata/guard/ok_R7/ 은 R7 대상
 # 경로(registry)에 CI 역할 둘과 푸시 역할의 인라인 정책만 둔 통과 트리다.
+# testdata/guard/ok_R16/ 은 R16 대상 둘(모듈 서비스 · workers 확장 대상)이
+# 무시 줄을 지킨 통과 트리다.
 # testdata/guard/err_<이름>/ 은 Terraform 도
 # 받지 않는(파싱되지 않는) 트리라 guard.sh 가 종료 코드 2 로 실패해야
 # 한다(fail-closed). 읽을 수 없는 파일은 git 에 둘 수 없어 시험이 임시 디렉터리에 만든다.
@@ -1215,6 +1217,7 @@ main() {
   expect_clean "${FIXTURES}/ok_R8"
   expect_clean "${FIXTURES}/ok_R15"
   expect_clean "${FIXTURES}/ok_R7"
+  expect_clean "${FIXTURES}/ok_R16"
   for dir in "${FIXTURES}"/err_*/; do
     [[ -d "${dir}" ]] || continue
     expect_fixture_error "${dir%/}"
@@ -1249,7 +1252,7 @@ main() {
     echo "guard_test: ${failures}건 실패" >&2
     exit 1
   fi
-  echo "guard_test: 전부 통과(bad ${count}개 · ok 6개 · 운영 표지 5개)"
+  echo "guard_test: 전부 통과(bad ${count}개 · ok 7개 · 운영 표지 5개)"
 }
 
 main "$@"

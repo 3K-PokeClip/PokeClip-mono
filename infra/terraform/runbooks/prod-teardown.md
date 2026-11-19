@@ -185,11 +185,14 @@ plan_summary() {
 
 「시작 전」 4 에서 `prod/workers` 의 상태 키가 나왔을 때만 합니다. 일꾼
 render · upload 의 ECS 서비스 · 태스크 정의 · Cloud Map 서비스 · SG · 역할 ·
-로그 그룹과 clip · auth SG 의 인그레스 ← 일꾼 셋을 지웁니다. platform · 런타임
-1단의 자원은 건드리지 않습니다. workers 의 리전은 「시작 전」 2 의 루프가 이미
+로그 그룹, 자동 조절(POK-605)의 확장 대상 둘 · 조절 정책 넷 · 경보 넷과
+clip · auth SG 의 인그레스 ← 일꾼 셋을 지웁니다. platform · 런타임 1단의
+자원은 건드리지 않습니다. workers 의 리전은 「시작 전」 2 의 루프가 이미
 봤습니다.
 
-*   **일꾼만 내릴 때**(롤백의 기본): 「시작 전」 1–4 · 6 과 이 절만 하고
+*   **일꾼만 내릴 때**(workers 루트 전체를 되돌릴 때의 기본 — 자동 조절
+    코드만 되돌릴 때는 내리지 않음: workers README 「되돌리기 · 내리기」):
+    「시작 전」 1–4 · 6 과 이 절만 하고
     「정리」 로 갑니다. T1 에서는 리전 · 의존 루트 확인만 봅니다.
     *   「시작 전」 2 의 리전 루프는 `${workers}` 하나만 돌립니다 — 다른
         루트는 이 흐름에서 열지 않아 `terraform console` 이 실패할 수
@@ -210,7 +213,7 @@ umask 077
 terraform -chdir="${workers}" plan -destroy -input=false -out="${work}/workers.plan"
 plan_summary "${workers}" "${work}/workers.plan" | tee "${evidence}/05-workers-plan.txt"
 grep -vc '^delete ' "${evidence}/05-workers-plan.txt"
-grep -Evc '^delete (module\.(render|upload)\.|aws_vpc_security_group_ingress_rule\.(clip_from_worker|auth_from_upload)|terraform_data\.runtime_contract$)' \
+grep -Evc '^delete (module\.(render|upload)\.|aws_vpc_security_group_ingress_rule\.(clip_from_worker|auth_from_upload)|terraform_data\.runtime_contract$|aws_appautoscaling_target\.worker[[]"(render|upload)"[]]$|aws_(appautoscaling_policy|cloudwatch_metric_alarm)\.queue_(wake|idle)[[]"(render|upload)"[]]$)' \
   "${evidence}/05-workers-plan.txt"
 wc -l <"${evidence}/05-workers-plan.txt"
 grep -Evc '(^|\.)data\.' "${evidence}/01-workers-state.txt"
@@ -219,11 +222,18 @@ grep -Evc '(^|\.)data\.' "${evidence}/01-workers-state.txt"
 요지에는 일꾼마다 모듈 자원(서비스 · 태스크 정의 · Cloud Map 서비스 · SG ·
 이그레스 규칙 · 실행 · 작업 역할과 정책 · 로그 그룹), clip · auth SG 의
 인그레스 셋(`clip_from_worker` 둘 · `auth_from_upload`), 원격 출력 확인
-자원(`terraform_data.runtime_contract`)만 나옵니다. 요지 뒤의 수 넷은
-차례로 `delete` 가 아닌 줄 수(`0`) · 이 루트 밖 주소 수(`0`) · 요지 줄 수 ·
-「시작 전」 6 의 상태 목록에서 `data` 자원을 뺀 수이고, 셋째와 넷째가
-같아야 합니다. kty 가 요지를 보고(T0w)
-승인하면 적용합니다. 서비스 삭제는 태스크가 멈출 때까지 기다려 몇 분 걸릴
+자원(`terraform_data.runtime_contract`), 자동 조절 자원 열(확장 대상
+`aws_appautoscaling_target.worker` 둘 · 조절 정책
+`aws_appautoscaling_policy.queue_wake` · `queue_idle` 넷 · 경보
+`aws_cloudwatch_metric_alarm.queue_wake` · `queue_idle` 넷 — 키는 `render` ·
+`upload`)만 나옵니다. 정규식은 대괄호 글자를 `[[]` · `[]]` 로 적습니다 — GNU
+grep 3.8 이후는 `\]` 에 「stray \」 경고를 낼 수 있습니다. 이 주소 · 키를
+바꾸면 `prod/workers/scaling.tf` 와 이 정규식을 한 PR 로 고칩니다
+(`scripts/test/prod_teardown_workers_allow_test.sh` 가 정규식을 봅니다).
+요지 뒤의 수 넷은 차례로 `delete` 가 아닌 줄 수(`0`) · 이 루트 밖 주소
+수(`0`) · 요지 줄 수 · 「시작 전」 6 의 상태 목록에서 `data` 자원을 뺀
+수이고, 셋째와 넷째가 같아야 합니다. kty 가 요지를 보고(T0w) 승인하면
+적용합니다. 서비스 삭제는 태스크가 멈출 때까지 기다려 몇 분 걸릴
 수 있습니다.
 
 ```shell

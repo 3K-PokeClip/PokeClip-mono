@@ -256,6 +256,8 @@ export interface SessionAxis {
   view: SeekView;
   windowSeconds: number;
   behindSeconds: number;
+  /** behindSeconds 의 반올림 전 값(ms, 같은 상한) — 보이는 시차(steadySeconds)와 끝 판정(isAtEdge)의 입력이다(POK-583) */
+  behindMs: number;
 }
 
 /**
@@ -371,5 +373,7 @@ export function sessionAxis(input: SessionAxisInput): SessionAxis | null {
     },
     windowSeconds: clampSeconds(edgeMs - barLowerMs),
     behindSeconds: atMs === null ? 0 : clampSeconds(edgeMs - atMs),
+    behindMs:
+      atMs === null ? 0 : Math.min(REWIND_UI_MAX_SECONDS * 1000, Math.max(0, edgeMs - atMs)),
   };
 }

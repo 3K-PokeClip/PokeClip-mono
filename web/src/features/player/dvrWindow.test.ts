@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   behindFromCurrentTime,
+  behindMsFromCurrentTime,
   dvrRange,
   liveEdgePosition,
   mediaTimeAt,
@@ -92,6 +93,21 @@ describe('behindFromCurrentTime', () => {
     // 1시간 넘게 일시정지하면 currentTime은 멈춘 채 라이브 지점만 계속 전진한다
     const long = { start: 0, end: 90_000 };
     expect(behindFromCurrentTime(long, 0, 80_000)).toBe(REWIND_UI_MAX_SECONDS);
+  });
+});
+
+describe('behindMsFromCurrentTime — 반올림 전 시차(POK-583 떨림 ① · ③)', () => {
+  const range = { start: 0, end: 300 };
+
+  it('라이브 지점과의 거리를 ms 로 반올림 없이 준다', () => {
+    expect(behindMsFromCurrentTime(range, 236.4, 297)).toBeCloseTo(60_600, 6);
+    expect(behindMsFromCurrentTime(range, 294.4, 297)).toBeCloseTo(2_600, 6);
+  });
+
+  it('behindFromCurrentTime 과 같은 범위로 자른다 — 라이브 지점 너머는 0 · 위는 창 상한', () => {
+    expect(behindMsFromCurrentTime(range, 300, 297)).toBe(0);
+    const long = { start: 0, end: 90_000 };
+    expect(behindMsFromCurrentTime(long, 0, 80_000)).toBe(REWIND_UI_MAX_SECONDS * 1000);
   });
 });
 

@@ -15,6 +15,7 @@ const VIEW: SessionView = {
   liveChecking: false,
   vodReady: false,
   startHeld: false,
+  resumeWaiting: true,
 };
 
 describe('PlayerSessionOverlay 층', () => {

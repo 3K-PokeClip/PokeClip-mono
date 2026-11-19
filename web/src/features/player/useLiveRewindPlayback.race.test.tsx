@@ -73,6 +73,7 @@ function options(): SessionOptions {
     liveUrl: LIVE,
     controlKey: 'key-1',
     controlBase: BASE,
+    rosterEnded: false,
     resolveX: () => Promise.resolve<XAnswer>({ kind: 'known', id: 'r-A' }),
     onClose: vi.fn(),
   };

@@ -12,6 +12,7 @@ import {
   progressFraction,
   restoredVolume,
   seekFractionFromPointer,
+  steadySeconds,
   volumeLevel,
 } from './playerMath';
 
@@ -176,6 +177,25 @@ describe('isAtEdge', () => {
     expect(isAtEdge(0)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS - 1)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS)).toBe(false);
+  });
+});
+
+describe('steadySeconds — 시차 숫자는 1초 넘게 벗어날 때만 바꾼다(POK-583 떨림 ①)', () => {
+  it('1.4 → 1.6 → 1.4 를 오가도 숫자가 뒤집히지 않는다 — 반올림만 하면 1 · 2 · 1 로 흔들린다', () => {
+    const first = steadySeconds(0, 1_400);
+    const second = steadySeconds(first, 1_600);
+    const third = steadySeconds(second, 1_400);
+    expect([first, second, third]).toEqual([1, 1, 1]);
+  });
+
+  it('1초 넘게 벗어나면 반올림한 새 값이다', () => {
+    expect(steadySeconds(1, 2_600)).toBe(3);
+    expect(steadySeconds(3, 1_900)).toBe(2);
+  });
+
+  it('정확히 1초 벗어난 것은 그대로다', () => {
+    expect(steadySeconds(1, 2_000)).toBe(1);
+    expect(steadySeconds(2, 1_000)).toBe(2);
   });
 });
 

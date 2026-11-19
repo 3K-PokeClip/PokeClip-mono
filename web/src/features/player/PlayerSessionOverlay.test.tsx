@@ -16,6 +16,7 @@ const QUIET: SessionView = {
   liveChecking: false,
   vodReady: false,
   startHeld: false,
+  resumeWaiting: false,
 };
 
 describe('PlayerSessionOverlay', () => {
@@ -35,16 +36,20 @@ describe('PlayerSessionOverlay', () => {
     expect(screen.getByRole('status').parentElement?.children).toHaveLength(1);
   });
 
-  it('T2-1 끝남 대기 덮개(명부 ended 뒤 포함)에 「녹화 보기」 가 없다 · T2-2 단추에 강조 속성이 없다(POK-547)', () => {
+  it('T2-1 끝남 대기 덮개(명부 ended 뒤 포함)에 「녹화 보기」 가 없다 · T2-2 단추에 강조 속성이 없다(POK-547) · 명부 ended 뒤 문구는 「다시보기 준비 중」(POK-612 R5b)', () => {
     const now = Date.parse('2026-10-25T06:00:00.000Z');
     const opened = openSession({ roundId: 'r-A', accessKey: 'r-A|key-1', liveUrl: 'live.m3u8' });
     const ending = transition(opened, { type: 'live-closed' }, now).state;
     const rostered = transition(ending, { type: 'roster-ended' }, now).state;
-    for (const state of [ending, rostered]) {
+    const cases: Array<[SessionView, string]> = [
+      [sessionView(ending, now), '방송이 이어지는지 확인하고 있어요'],
+      [sessionView(rostered, now, { rosterEnded: true }), '다시보기 준비 중'],
+    ];
+    for (const [view, text] of cases) {
       const { container, unmount } = render(
-        <PlayerSessionOverlay view={sessionView(state, now)} onAction={vi.fn()} />,
+        <PlayerSessionOverlay view={view} onAction={vi.fn()} />,
       );
-      expect(screen.getByRole('status')).toHaveTextContent('방송이 이어지는지 확인하고 있어요');
+      expect(screen.getByRole('status')).toHaveTextContent(text);
       expect(screen.queryByRole('button', { name: '녹화 보기' })).toBeNull();
       expect(screen.queryAllByRole('button')).toEqual([]);
       expect(container.querySelectorAll('[data-emphasis]')).toHaveLength(0);

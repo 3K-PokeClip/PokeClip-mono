@@ -380,7 +380,7 @@ const LivePlayer = memo(function LivePlayer({
   const [accessExpiredFor, setAccessExpiredFor] = useState<string | null>(null);
   const accessReady = accessKey === null || accessReadyFor === accessKey;
   // 재생 세션(POK-200 M5) — 라이브 · 되감기 · 끝남 대기. 지난 방송 판정은 세션이 past 로 닫히거나(POK-547) 세션을 연 적 없는
-  // 화면이 끝난 방송일 때만 한다: 명부는 정산 15분 뒤에야 ended 라 「명부 ended 단독」 조건을 쓰지 않는다(설계 5.5절)
+  // 화면이 끝난 방송일 때만 한다: 판정은 회차별 조회로만 하므로(계약3 7-3) 「명부 ended 단독」 조건을 쓰지 않는다(설계 5.5절)
   const live = useLiveSession({
     liveStreamId,
     mediaKey,
@@ -736,7 +736,9 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const startedAtMs = useLiveField('startedAt');
   /** 카드 시각의 0초(카드 목록과 같은 기준점, timeBaseOf). 라이브 카드를 그 실제 시각으로 옮길 때 쓴다(POK-326) */
   const cardBase = timeBaseOf({ timeBaseMs, originMs, startedAt: startedAtMs });
-  const clock = useBroadcastClock(streamId);
+  // 재생 세션이 끝남 대기의 재접속 대기 안이면 명부를 빨리 다시 읽는다 — 덮개 문구가 명부 ended 를 기다린다(POK-612)
+  const rosterFastPollFor = useLiveField('rosterFastPollFor');
+  const clock = useBroadcastClock(streamId, { rosterFastPoll: rosterFastPollFor === streamId });
   // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
   // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
   if (

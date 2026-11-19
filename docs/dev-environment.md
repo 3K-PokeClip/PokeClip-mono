@@ -438,11 +438,13 @@ ERROR  Failed to proxy http://localhost:8082/api/auth/me AggregateError
 | 진짜 LL-HLS (송출 필요) | `http://localhost:8888/{streamId}/index.m3u8` |
 
 - MediaMTX는 `index.m3u8` 요청에 **302 리다이렉트**(세션 파라미터 부여)를 줄 수 있음 — hls.js 기본 동작이 따라가므로 커스텀 fetch를 끼울 때만 주의.
-- 로컬은 인증·서명 쿠키 없음. 프로덕션 규약은 **PokeClip-architecture `contracts/계약3-LLHLS-DVR재생규약.md`**(정본)을 따를 것 — 특히 §4 catch-up 끄기.
+- 로컬은 인증·서명 쿠키 없음. 프로덕션 규약은 팀 위키 `PokeClip-LLM-WIKI` 의
+    **`contracts/계약3-LLHLS-DVR재생규약.md`**(정본)을 따를 것 — 특히 4절
+    라이브러리 catch-up 끄기(앱 따라잡기는 라이브 시청자만).
 
 ## 설계 근거 포인터
 
 - 파라미터(4s/0.5s): ADR-020 · 라이브 창 7조각 28초: ADR-102(1시간 되감기는
-  사이드카 /dvr 별도 URL) · 재생 규약: 계약3 (플레이어는 **catch-up 끄기** 필수)
+  사이드카 /dvr 별도 URL) · 재생 규약: 계약3 (플레이어는 **라이브러리 catch-up 끄기** 필수)
 - 이 환경은 로컬 전용 — AWS 배포(프라이빗+NLB, ADR-021)는 별도 IaC로 진행
 - 멘토 데모용 AWS 임시 서버는 `infra/dev-media/`(유지 확정 — ADR-040 2026-08-30 추기, 팀 공용 아님)

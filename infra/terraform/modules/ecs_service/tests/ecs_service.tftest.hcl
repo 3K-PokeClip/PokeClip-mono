@@ -1,7 +1,7 @@
 # ECS Fargate 서비스 모듈(설계 3-3 ecs_service · 5-5 「ECS 서비스 SG」)을 mock
 # provider 로 단언한다 — 계획 M8 c6: 실행 역할 비밀 읽기 Resource = 입력
 # secrets 값 집합(와일드카드 없음) · egress_targets 마다 이그레스 규칙 1개 · 공인
-# IP 끔 · desired 1 · Cloud Map 등록, 「O7d 선행 0」 의 실행 · 작업 역할 path =
+# IP 끔 · 생성 초기값 1 · Cloud Map 등록, 「O7d 선행 0」 의 실행 · 작업 역할 path =
 # /pokeclip/prod/, 결정 146 의 ARM64.
 # 계정 ID 는 가짜 12자리(111122223333), CIDR 은 문서용 범위(RFC 5737)다.
 
