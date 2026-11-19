@@ -198,9 +198,9 @@ test('null 이벤트는 null로 돌려준다', () => {
   assert.equal(loadBeforeSend()(null), null);
 });
 
-test('새 달 안내 메일(<연도>_<월>_streamer_outreach)과 새 시안(draft_d 등)은 배포 없이 받는다 — 꼴이 다르면 other', () => {
+test('스트리머·MCN 안내 메일과 새 시안(draft_d 등)은 배포 없이 받는다 — 꼴이 다르면 other', () => {
   const beforeSend = loadBeforeSend();
-  for (const campaign of ['2026_12_streamer_outreach', '2027_01_streamer_outreach']) {
+  for (const campaign of ['2026_12_streamer_outreach', '2027_01_streamer_outreach', '2026_11_mcn_outreach', '2027_01_mcn_outreach']) {
     const search = `?utm_source=email&utm_medium=dm&utm_campaign=${campaign}&utm_content=draft_d&r=k3f7x2ab`;
     assert.deepEqual(loadPage({ search }).captures, [['outreach_link_opened', { outreach_code: 'k3f7x2ab' }]], campaign);
     const out = beforeSend({ event: '$pageview', properties: { utm_campaign: campaign, utm_content: 'draft_d' } });
@@ -214,6 +214,8 @@ test('새 달 안내 메일(<연도>_<월>_streamer_outreach)과 새 시안(draf
     'kim_2026_12_streamer_outreach',
     'gamerkim_12_streamer_outreach',
     '2026_12_partner_outreach',
+    '2026_13_mcn_outreach',
+    '2026_11_mcn_outreach_company',
   ];
   for (const campaign of badCampaigns) {
     const out = beforeSend({ event: '$pageview', properties: { utm_campaign: campaign } });

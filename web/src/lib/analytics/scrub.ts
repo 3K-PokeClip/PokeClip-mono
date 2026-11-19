@@ -76,9 +76,9 @@ const UTM_ALLOWED: Record<string, RegExp> = {
   utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram|email)$/,
   utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
   // 모양(패턴)이 아니라 목록이다 — 패턴이면 채널 ID·핸들 같은 소문자 값이 통과한다(PR #382 리뷰). 새 캠페인·자리는 표부터 더한다.
-  // 예외는 안내 메일의 캠페인(<연도>_<월>_streamer_outreach)과 시안(draft_ + 영문 한 글자) 두 닫힌 꼴뿐이다 — 바뀌는 자리가
+  // 예외는 안내 메일의 캠페인(<연도>_<월>_(streamer|mcn)_outreach)과 시안(draft_ + 영문 한 글자) 두 닫힌 꼴뿐이다 — 바뀌는 자리가
   // 날짜 숫자와 글자 한 개라 이름·아이디가 들어갈 틈이 없고, 새 달 메일을 배포 없이 쓴다
-  utm_campaign: /^(launch_2026_10|20[0-9]{2}_(0[1-9]|1[0-2])_streamer_outreach)$/,
+  utm_campaign: /^(launch_2026_10|20[0-9]{2}_(0[1-9]|1[0-2])_(?:streamer|mcn)_outreach)$/,
   utm_content: /^(pinned_comment|banner|draft_[a-z])$/,
 };
 /**

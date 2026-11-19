@@ -229,8 +229,13 @@ describe('scrubEvent — PostHog before_send', () => {
     });
   });
 
-  it('새 달 안내 메일 캠페인과 새 시안은 배포 없이 받는다 — 날짜·글자 자리 밖으로 벗어나면 other', () => {
-    for (const campaign of ['2026_12_streamer_outreach', '2027_01_streamer_outreach']) {
+  it('스트리머·MCN 안내 메일 캠페인과 새 시안은 배포 없이 받는다 — 날짜·글자 자리 밖으로 벗어나면 other', () => {
+    for (const campaign of [
+      '2026_12_streamer_outreach',
+      '2027_01_streamer_outreach',
+      '2026_11_mcn_outreach',
+      '2027_01_mcn_outreach',
+    ]) {
       const out = scrubEvent(
         event('$pageview', { utm_campaign: campaign, utm_content: 'draft_d' }),
       );
@@ -243,6 +248,8 @@ describe('scrubEvent — PostHog before_send', () => {
       'kim_2026_12_streamer_outreach',
       'gamerkim_12_streamer_outreach',
       '2026_12_partner_outreach',
+      '2026_13_mcn_outreach',
+      '2026_11_mcn_outreach_company',
     ];
     for (const campaign of badCampaigns) {
       expect(scrubEvent(event('$pageview', { utm_campaign: campaign }))?.properties).toEqual({

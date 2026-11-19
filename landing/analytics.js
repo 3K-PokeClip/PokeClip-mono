@@ -33,12 +33,12 @@
 
   // 홍보 링크 값은 README 「홍보 링크와 UTM」 표에 적은 값만 그대로 두고 나머지는 other로 바꾼다.
   // 자유 문자열(utm_term)과 광고 클릭 식별자는 지운다 — 대시보드 web/src/lib/analytics/scrub.ts와 같은 규칙이다
-  // 값 목록이 원칙이고, 안내 메일의 캠페인(<연도>_<월>_streamer_outreach)과 시안(draft_ + 영문 한 글자)만 닫힌 꼴로 받는다 —
+  // 값 목록이 원칙이고, 안내 메일의 캠페인(<연도>_<월>_(streamer|mcn)_outreach)과 시안(draft_ + 영문 한 글자)만 닫힌 꼴로 받는다 —
   // 바뀌는 자리가 날짜 숫자와 글자 한 개뿐이라 이름·아이디가 들어갈 틈이 없고, 새 달 메일을 배포 없이 쓸 수 있다
   var UTM_ALLOWED = {
     utm_source: /^(youtube|chzzk|soop|discord|kakao|x|naver|instagram|email)$/,
     utm_medium: /^(video_description|profile|community|post|dm|ad)$/,
-    utm_campaign: /^(launch_2026_10|20[0-9]{2}_(0[1-9]|1[0-2])_streamer_outreach)$/,
+    utm_campaign: /^(launch_2026_10|20[0-9]{2}_(0[1-9]|1[0-2])_(?:streamer|mcn)_outreach)$/,
     utm_content: /^(pinned_comment|banner|draft_[a-z])$/,
   };
 
