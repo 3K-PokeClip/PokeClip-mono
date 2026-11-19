@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
+import { VisuallyHidden } from '@/ui';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { AudioTrackNamesCard } from './AudioTrackNamesCard';
 import { ConnectStepsCard } from './ConnectStepsCard';
@@ -71,6 +72,22 @@ export function PluginSettingsScreen() {
   const paired = code.pairedAt !== undefined;
   // 연결한 적 없다는 것을 「읽어서 아는」 때만 순서 카드다 — 읽는 중·못 읽음은 연동 코드 카드가 스켈레톤·오류로 그린다
   const showSteps = !loading && !error && !paired;
+
+  // 창을 닫은 뒤 이 화면에서 연결을 본 순간(순서 카드 → 연동 코드 카드). 주 흐름이 「확인했어요」로 창부터 닫고 OBS에
+  // 넣는 것이라, 창을 닫을 때만 초점을 챙기면 여기서 초점이 있던 「코드 받기」가 사라져 body로 떨어지고 카드가 바뀐 것도
+  // 읽히지 않는다(PR #539 2차 리뷰). 처음 들어올 때부터 연결된 회원은 건드리지 않는다 — 순서 카드를 본 적이 있을 때만이다.
+  // 창이 떠 있으면 창이 알린다(IssuedCodeDialog) — 그 창을 닫을 때의 초점은 위 dialogClosed가 맡는다
+  const [pairedAnnouncement, setPairedAnnouncement] = useState('');
+  const wasShowingSteps = useRef(false);
+  useEffect(() => {
+    if (wasShowingSteps.current && paired && justIssued === null) {
+      setPairedAnnouncement('플러그인이 연결됐어요');
+      if (document.activeElement === null || document.activeElement === document.body) {
+        topCardTitleRef.current?.focus();
+      }
+    }
+    wasShowingSteps.current = showSteps;
+  }, [showSteps, paired, justIssued]);
   // 배너(「다른 PC에 설치하나요?」)는 이미 연결한 회원의 것이다. 상태를 모르는 동안에도 세운다: 다운로드는 서버와 무관한
   // 고정 주소라, 읽기가 오래 걸리거나 실패했다고 받을 길까지 막을 까닭이 없다(GET 한도 30초 + 재시도 1회면 1분).
   // 맨 아래 블록이라 늦게 온 「연결한 적 없음」에 거둬도 위쪽이 밀리지 않는다 — 그때는 순서 카드 1번이 받을 길이다
@@ -112,6 +129,8 @@ export function PluginSettingsScreen() {
         <AudioTrackNamesCard />
         {showBanner && <DownloadBanner onOpen={() => openDownload('banner')} />}
       </div>
+      {/* 늘 있는 상태 칸 — 창을 닫은 뒤 이 화면에서 본 연결을 읽어 준다(위 pairedAnnouncement) */}
+      <VisuallyHidden role="status">{pairedAnnouncement}</VisuallyHidden>
       <IssuedCodeDialog
         issued={justIssued}
         paired={justPaired}

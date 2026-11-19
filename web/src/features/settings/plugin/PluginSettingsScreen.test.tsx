@@ -1,4 +1,4 @@
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PAIRING_CODE_TTL_MS } from '@/api/streamKeys';
@@ -635,6 +635,64 @@ describe('PluginSettingsScreen', () => {
       const afterPaired = statusCalls(spy);
       await passTime(queryClient, PAIRING_WATCH_MS * 3);
       expect(statusCalls(spy)).toBe(afterPaired);
+    });
+
+    it('주기 조회가 못 본 연결도 마감 때 한 번 더 읽어 놓치지 않는다 (PR #539 2차 리뷰)', async () => {
+      // 마지막 주기 조회와 마감 사이에 넣은 코드는 다음 주기가 마감 뒤라 주기 조회로는 못 본다. 그 틈을 숨은 탭으로
+      // 만든다 — 숨은 동안은 주기 조회가 서므로, 마감 때의 마지막 읽기만이 연결을 볼 수 있다
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const spy = stubStreamKeyFetch({ issued: false });
+      const { queryClient } = renderWithProviders(<PluginSettingsScreen />);
+      try {
+        await issueFromSteps();
+        expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+        await passTime(queryClient, PAIRING_CODE_TTL_MS - PAIRING_WATCH_MS * 2);
+        act(() => focusManager.setFocused(false));
+        const asked = statusCalls(spy);
+
+        // 마감 직전에 OBS가 코드를 넣었다 — 주기 조회는 서 있다
+        spy.pairNow();
+        await passTime(queryClient, PAIRING_WATCH_MS);
+        expect(statusCalls(spy)).toBe(asked);
+        await passTime(queryClient, PAIRING_WATCH_MS * 2);
+
+        expect(
+          await screen.findByRole('heading', { name: '플러그인이 연결됐어요' }),
+        ).toBeInTheDocument();
+      } finally {
+        act(() => focusManager.setFocused(undefined));
+      }
+    });
+
+    it('창을 닫은 뒤 이 화면에서 연결을 보면 초점이 바뀐 카드 제목으로 가고 상태 칸이 알린다 (PR #539 2차 리뷰)', async () => {
+      // 주 흐름: 「확인했어요」로 창부터 닫고 OBS에 넣는다 — 초점이 있던 「코드 받기」가 카드째 사라진다
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const spy = stubStreamKeyFetch({ issued: false });
+      const { queryClient } = renderWithProviders(<PluginSettingsScreen />);
+
+      await issueFromSteps();
+      fireEvent.click(await screen.findByRole('button', { name: '확인했어요' }));
+      screen.getByRole('button', { name: '코드 받기' }).focus();
+
+      spy.pairNow();
+      await passTime(queryClient);
+
+      expect(await screen.findByText('OBS 플러그인을 연결했어요')).toBeInTheDocument();
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: '연동 코드' }));
+      expect(screen.getAllByRole('status').map((el) => el.textContent)).toContain(
+        '플러그인이 연결됐어요',
+      );
+    });
+
+    it('처음 들어올 때부터 연결된 회원에게는 초점을 옮기지도 알리지도 않는다', async () => {
+      stubStreamKeyFetch({ paired: true });
+      renderWithProviders(<PluginSettingsScreen />);
+
+      expect(await screen.findByText('OBS 플러그인을 연결했어요')).toBeInTheDocument();
+      expect(document.activeElement).toBe(document.body);
+      expect(screen.getAllByRole('status').map((el) => el.textContent)).not.toContain(
+        '플러그인이 연결됐어요',
+      );
     });
 
     it('창을 닫은 뒤 코드가 만료되면 더 묻지 않고, 순서 카드가 새로 받으라고 한다', async () => {

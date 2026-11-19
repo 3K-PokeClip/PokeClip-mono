@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, TriangleAlert } from 'lucide-react';
 import { Button, Dialog, IconButton, VisuallyHidden } from '@/ui';
 import { REPLAY_BLOCK_CLASS } from '@/lib/analytics';
@@ -45,6 +45,13 @@ export function IssuedCodeDialog({
     return () => window.clearTimeout(id);
   }, [copied]);
 
+  // 연결을 본 순간 초점이 있던 「코드 복사」가 사라진다 — FocusScope는 처음 열릴 때만 초점을 잡아서, 옮기지 않으면
+  // 초점이 창 밖(body)으로 빠져 Enter·Space가 듣지 않는다(PR #539 2차 리뷰). 남은 하나뿐인 「확인」으로 옮긴다
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (paired) confirmRef.current?.focus();
+  }, [paired]);
+
   if (issued === null) return null;
 
   const copy = async () => {
@@ -65,13 +72,14 @@ export function IssuedCodeDialog({
             {/* 연결을 본 순간 코드는 이미 쓰였다 — 원문·카운트다운·만료 경고를 치우고 결과만 말한다.
                 만료 직전에 넣어 둘이 겹쳐도 연결이 이긴다(쓰인 코드는 만료될 수 없다) */}
             <Dialog.Title>플러그인이 연결됐어요</Dialog.Title>
-            <p role="status" className={styles.issueExpired}>
+            {/* 낭독은 창 맨 아래의 늘 있는 상태 칸이 맡는다 — 이 문단은 바뀐 순간 새로 끼워져 읽힌다는 보장이 없다 */}
+            <p className={styles.issueExpired}>
               OBS에서 코드를 확인했어요.
               <br />
               이제 방송을 켜면 포키가 하이라이트를 찾기 시작해요.
             </p>
             <div className={styles.confirmActions}>
-              <Button variant="solid" size="md" onClick={onClose}>
+              <Button ref={confirmRef} variant="solid" size="md" onClick={onClose}>
                 확인
               </Button>
             </div>
@@ -137,6 +145,11 @@ export function IssuedCodeDialog({
             </Button>
           </>
         )}
+        {/* 창이 떠 있는 내내 있는 상태 칸 — 연결을 본 순간 글이 채워져 낭독된다. 내용과 함께 새로 끼우는 role="status"는
+            화면 읽기 프로그램이 읽는다는 보장이 없다(PR #539 2차 리뷰) */}
+        <VisuallyHidden role="status">
+          {paired ? '플러그인이 연결됐어요. OBS에서 코드를 확인했어요.' : ''}
+        </VisuallyHidden>
       </Dialog.Content>
     </Dialog>
   );

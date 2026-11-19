@@ -100,15 +100,27 @@ export function useStreamKeyState(): StreamKeyState {
   const { toast } = useToast();
   const [justIssued, setJustIssued] = useState<DisplayedPairingCode | null>(null);
   const [watching, setWatching] = useState<WatchedCode | null>(null);
-  // 코드가 죽으면 지켜보기를 거둔다 — 순서 카드 문구도 이때 「새로 받아 주세요」로 돌아간다
+  // 코드가 죽으면 지켜보기를 거둔다 — 순서 카드 문구도 이때 「새로 받아 주세요」로 돌아간다.
+  // 거두기 전에 한 번 더 읽는다: 마지막 주기 조회(최대 3초 전)와 마감 사이에 넣은 코드도 성공이다. 안 읽고 거두면 창은
+  // 「코드가 만료됐어요」를 띄우고 화면을 옮기거나 60초(staleTime)가 지나기 전에는 연결을 모른다(PR #539 2차 리뷰)
   useEffect(() => {
     if (watching === null) return;
+    let cancelled = false;
     const id = window.setTimeout(
-      () => setWatching(null),
+      () => {
+        void queryClient
+          .refetchQueries({ queryKey: streamKeyStatusQueryOptions.queryKey })
+          .finally(() => {
+            if (!cancelled) setWatching(null);
+          });
+      },
       Math.max(0, watching.deadline - Date.now()),
     );
-    return () => window.clearTimeout(id);
-  }, [watching]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+    };
+  }, [watching, queryClient]);
   const status = useQuery({
     ...streamKeyStatusQueryOptions,
     // 받은 코드가 살아 있는 동안 다시 읽는다(POK-608) — 창을 닫아도. 창의 주 버튼이 「확인했어요」라 코드를 복사하고
