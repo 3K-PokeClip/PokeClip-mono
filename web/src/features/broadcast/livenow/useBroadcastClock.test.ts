@@ -160,12 +160,12 @@ describe('useBroadcastClock 끝남 대기 주기(POK-612)', () => {
   function mountWaiting() {
     const statuses: string[] = [];
     const view = renderHook(
-      ({ endingWait }) => {
-        const clock = useBroadcastClock('7', { endingWait });
+      ({ rosterFastPoll }) => {
+        const clock = useBroadcastClock('7', { rosterFastPoll });
         statuses.push(clock.status);
         return clock;
       },
-      { initialProps: { endingWait: false } },
+      { initialProps: { rosterFastPoll: false } },
     );
     return { ...view, statuses };
   }
@@ -179,11 +179,11 @@ describe('useBroadcastClock 끝남 대기 주기(POK-612)', () => {
     const readsBefore = vi.mocked(fetchBroadcast).mock.calls.length;
     const settledRenders = statuses.length;
 
-    rerender({ endingWait: true });
+    rerender({ rosterFastPoll: true });
     await settle();
     expect(fetchBroadcast).toHaveBeenCalledTimes(readsBefore + 1);
     expect(vi.mocked(fetchBroadcast).mock.calls.at(-1)?.[2]).toEqual({ fresh: true });
-    rerender({ endingWait: false });
+    rerender({ rosterFastPoll: false });
     await settle();
 
     expect(statuses.slice(settledRenders)).not.toContain('unknown');
@@ -196,14 +196,14 @@ describe('useBroadcastClock 끝남 대기 주기(POK-612)', () => {
     const { rerender } = mountWaiting();
     await settle();
 
-    rerender({ endingWait: true });
+    rerender({ rosterFastPoll: true });
     await settle();
     const afterEnter = vi.mocked(fetchBroadcast).mock.calls.length;
     await tick(POLL_MS);
     // 30초 창에 5초 주기 여섯 번 — 30초 주기가 남았으면 일곱 번이다
     expect(fetchBroadcast).toHaveBeenCalledTimes(afterEnter + POLL_MS / ENDING_WAIT_POLL_MS);
 
-    rerender({ endingWait: false });
+    rerender({ rosterFastPoll: false });
     await settle();
     const afterLeave = vi.mocked(fetchBroadcast).mock.calls.length;
     await tick(POLL_MS - 1);
@@ -216,7 +216,7 @@ describe('useBroadcastClock 끝남 대기 주기(POK-612)', () => {
     vi.mocked(fetchBroadcast).mockResolvedValue(ROW);
     const { rerender } = mountWaiting();
     await settle();
-    rerender({ endingWait: true });
+    rerender({ rosterFastPoll: true });
     await settle();
 
     vi.mocked(fetchBroadcast).mockResolvedValue(ENDED);
@@ -225,7 +225,7 @@ describe('useBroadcastClock 끝남 대기 주기(POK-612)', () => {
     await tick(ENDING_WAIT_POLL_MS);
     expect(fetchBroadcast).toHaveBeenCalledTimes(afterSettled + 1);
 
-    rerender({ endingWait: false });
+    rerender({ rosterFastPoll: false });
     await settle();
     const afterLeave = vi.mocked(fetchBroadcast).mock.calls.length;
     await tick(SETTLED_POLL_MS - 1);

@@ -738,7 +738,7 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
   const cardBase = timeBaseOf({ timeBaseMs, originMs, startedAt: startedAtMs });
   // 재생 세션이 끝남 대기의 재접속 대기 안이면 명부를 빨리 다시 읽는다 — 덮개 문구가 명부 ended 를 기다린다(POK-612)
   const rosterFastPollFor = useLiveField('rosterFastPollFor');
-  const clock = useBroadcastClock(streamId, { endingWait: rosterFastPollFor === streamId });
+  const clock = useBroadcastClock(streamId, { rosterFastPoll: rosterFastPollFor === streamId });
   // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
   // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
   if (

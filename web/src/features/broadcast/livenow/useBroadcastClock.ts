@@ -42,14 +42,17 @@ const SETTLED_POLL_MS = 60_000;
 const ENDING_WAIT_POLL_MS = 5_000;
 
 interface BroadcastClockOptions {
-  /** 재생 세션이 끝남 대기의 재접속 대기 안이다 — 켜지면 곧바로 한 번, 그 뒤 5초마다 명부를 다시 읽는다 */
-  endingWait?: boolean;
+  /**
+   * 명부를 빨리 다시 읽는다 — 호출자가 끝남 대기의 재접속 대기 안이고 명부가 아직 ended 가 아닐 때 켠다. 켜지면 곧바로 한 번 ·
+   * 그 뒤 ENDING_WAIT_POLL_MS 주기
+   */
+  rosterFastPoll?: boolean;
 }
 
 /** 방송 번호 effect 가 만든 지금 방송의 명부 읽기 — 주기 전환 effect 가 이것으로 곧바로 읽고 주기를 바꾼다 */
 interface RosterPoller {
   load: (fresh: boolean) => Promise<void>;
-  /** 지금 조건(끝남 대기 · 시각이 다 찼나)에 맞는 주기로 바꾼다. 같은 주기면 그대로 둔다 */
+  /** 지금 조건(빠른 읽기 · 시각이 다 찼나)에 맞는 주기로 바꾼다. 같은 주기면 그대로 둔다 */
   retime: () => void;
 }
 
@@ -61,7 +64,7 @@ function ms(iso: string | null): number | null {
 
 export function useBroadcastClock(
   streamId: string,
-  { endingWait = false }: BroadcastClockOptions = {},
+  { rosterFastPoll = false }: BroadcastClockOptions = {},
 ): BroadcastClock {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
@@ -70,7 +73,7 @@ export function useBroadcastClock(
   const [ingestStreamId, setIngestStreamId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   // 주기 전환은 방송 번호 effect 를 다시 돌리지 않는다: 다시 돌리면 status · 시각을 「모름」 으로 되돌린다(POK-612)
-  const endingWaitRef = useRef(endingWait);
+  const rosterFastPollRef = useRef(rosterFastPoll);
   const pollerRef = useRef<RosterPoller | null>(null);
 
   useEffect(() => {
@@ -103,7 +106,7 @@ export function useBroadcastClock(
     let settled = false;
     let periodMs = 0;
     const retime = () => {
-      const next = endingWaitRef.current
+      const next = rosterFastPollRef.current
         ? ENDING_WAIT_POLL_MS
         : settled
           ? SETTLED_POLL_MS
@@ -182,13 +185,13 @@ export function useBroadcastClock(
   }, [streamId]);
 
   useEffect(() => {
-    if (endingWaitRef.current === endingWait) return;
-    endingWaitRef.current = endingWait;
+    if (rosterFastPollRef.current === rosterFastPoll) return;
+    rosterFastPollRef.current = rosterFastPoll;
     const poller = pollerRef.current;
     if (poller === null) return;
-    if (endingWait) void poller.load(true);
+    if (rosterFastPoll) void poller.load(true);
     poller.retime();
-  }, [endingWait]);
+  }, [rosterFastPoll]);
 
   useEffect(() => {
     if (startedAt === null || endedAt !== null) return;
