@@ -36,7 +36,8 @@ describe('TOUR_STEPS', () => {
 
   it('설정 2단계의 CTA가 해당 화면으로 간다 (DoD — 각 단계가 해당 화면으로 연결)', () => {
     expect(TOUR_STEPS[0]!.cta).toEqual({ label: '채널 연동하기', href: '/settings/channels' });
-    expect(TOUR_STEPS[1]!.cta).toEqual({ label: '연동 코드 발급', href: '/settings/plugin' });
+    // 코드가 아니라 설치로 이끈다(POK-609)
+    expect(TOUR_STEPS[1]!.cta).toEqual({ label: '플러그인 설치하기', href: '/settings/plugin' });
   });
 
   it('스포트라이트는 홈 위에서 아래 순서다 — 큰 칸 → 포키가 해 주는 일 → 지난 방송 → 오른쪽 패널(POK-378)', () => {
