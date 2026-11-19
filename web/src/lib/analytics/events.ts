@@ -73,7 +73,7 @@ export interface AnalyticsEvents {
   /**
    * 플러그인에 연동 코드를 넣은 것을 웹이 처음 봄(POK-608) — 서버가 준 연결 시각(`lastPairedAt`)이 새로 생기거나 바뀌었을 때,
    * 그 브라우저에서 연결마다 한 번. pairing_code_issued와 짝 → 「코드만 받고 못 넣은」 이탈률.
-   * seen: code_dialog=코드 창을 띄워 둔 채 넣음, later=창을 닫은 뒤 홈·플러그인 화면에 돌아와서 봄
+   * seen: code_dialog=코드 창이 떠 있을 때 봄, later=창을 닫은 뒤에 봄(같은 화면에서 지켜보다가, 또는 홈·플러그인 화면에 돌아와서)
    */
   plugin_paired: { seen: 'code_dialog' | 'later' };
   /**
