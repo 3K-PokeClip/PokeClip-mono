@@ -211,6 +211,15 @@ function thumbLeft(slider: HTMLElement): string | undefined {
     ?.style.left;
 }
 
+/** 손잡이 left 를 % 숫자로 — 단위가 % 가 아니면(예: "100px") 숫자로 읽기 전에 실패한다 */
+function thumbPct(slider: HTMLElement): number {
+  const left = thumbLeft(slider) ?? '';
+  expect(left).toMatch(/%$/);
+  const pct = Number(left.slice(0, -1));
+  expect(Number.isFinite(pct)).toBe(true);
+  return pct;
+}
+
 describe('PlayerSeekBar 끝 판정 — 재생기의 atEdge 하나를 손잡이 · 낭독이 함께 쓴다(POK-583 떨림 ③)', () => {
   it('시차 2초 · 창 28초에서 끝이면 손잡이는 오른쪽 끝(100%)이고 낭독은 「실시간」 이다', () => {
     const { slider } = renderSeekBar({ behindSeconds: 2, windowSeconds: 28, atEdge: true });
@@ -220,13 +229,13 @@ describe('PlayerSeekBar 끝 판정 — 재생기의 atEdge 하나를 손잡이 �
 
   it('시차 3초는 끝이 아니다 — 손잡이가 창 비율 자리이고 낭독은 시차다', () => {
     const { slider } = renderSeekBar({ behindSeconds: 3, windowSeconds: 28, atEdge: false });
-    expect(parseFloat(thumbLeft(slider) ?? '')).toBeCloseTo((25 / 28) * 100, 6);
+    expect(thumbPct(slider)).toBeCloseTo((25 / 28) * 100, 6);
     expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -00:03');
   });
 
   it('보이는 숫자가 2초여도 재생기가 끝이 아니라고 하면 끝이 아니다 — LIVE 단추와 같은 판정', () => {
     const { slider } = renderSeekBar({ behindSeconds: 2, windowSeconds: 28, atEdge: false });
-    expect(parseFloat(thumbLeft(slider) ?? '')).toBeCloseTo((26 / 28) * 100, 6);
+    expect(thumbPct(slider)).toBeCloseTo((26 / 28) * 100, 6);
     expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -00:02');
   });
 

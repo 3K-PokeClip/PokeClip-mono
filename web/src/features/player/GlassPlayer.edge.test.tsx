@@ -81,13 +81,20 @@ async function renderAt() {
     });
 }
 
-/** 손잡이의 가로 자리(%) — 트랙 안에서 left 를 가진 요소는 손잡이 하나다 */
+/**
+ * 손잡이의 가로 자리(%) — 트랙 안에서 left 를 가진 요소는 손잡이 하나다.
+ * 단위가 % 가 아니면(예: "100px") 숫자로 읽기 전에 실패한다.
+ */
 function thumbPct(): number {
   const slider = screen.getByRole('slider', { name: '라이브 탐색' });
   const thumb = Array.from(slider.querySelectorAll<HTMLElement>('div')).find(
     (el) => el.style.left !== '',
   );
-  return parseFloat(thumb?.style.left ?? '');
+  const left = thumb?.style.left ?? '';
+  expect(left).toMatch(/%$/);
+  const pct = Number(left.slice(0, -1));
+  expect(Number.isFinite(pct)).toBe(true);
+  return pct;
 }
 
 beforeEach(() => {
