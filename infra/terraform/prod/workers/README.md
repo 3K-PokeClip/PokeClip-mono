@@ -420,11 +420,13 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     가 같은지 대조하고, 다르면 멈추고 kty 에게 넘깁니다(다른 빌드가 같은
     태그를 먼저 차지함).
 1.  **PR · CI · 리뷰.**
-1.  **관문 ① — platform 무변경:** develop 체크아웃과 PR 머리 체크아웃에서
+1.  **관문 ① — platform 무변경:** develop 체크아웃과 PR 머리를 develop 과
+    합친 체크아웃(브랜치가 develop 뒤에 있으면 `git merge-tree` 시험 병합 —
+    PR 머리만으로는 그사이 develop 에 들어온 platform 변경이 삭제로 보임)에서
     `terraform -chdir=infra/terraform/prod/platform plan -detailed-exitcode
     -input=false` 가 둘 다 종료 0 이어야 합니다. 두 체크아웃의 platform
     `terraform.tfvars` sha256 을 먼저 맞춥니다. 두 plan 은 같은 상태 잠금을
-    쓰므로 develop 쪽을 끝낸 뒤 PR 머리 쪽을 돌립니다(동시에 돌리면 한쪽이
+    쓰므로 develop 쪽을 끝낸 뒤 합친 쪽을 돌립니다(동시에 돌리면 한쪽이
     잠금에 걸림). develop 쪽이 0 이 아니면 무관한 드리프트라 멈추고 kty 에게
     넘깁니다.
 1.  **런타임 출력 · 첫 plan:** `terraform -chdir=infra/terraform/prod/runtime
@@ -1893,8 +1895,17 @@ worker_stop "${k}"
     「0a. prod/workers 먼저 내리기」 를 따릅니다. 요지는 모두 delete 이고 이
     루트 주소만 나옵니다(자동 조절 자원 열 포함). platform 은 건드리지 않고,
     주문은 큐에 남습니다.
-*   **revert 전에 내립니다** — 되돌리면 이 루트의 코드가 사라져 destroy 할
-    구성이 없어집니다. PR 은 머지 커밋이라 `git revert -m 1 <머지 커밋>` 으로
+*   **자동 조절 코드 되돌리기(POK-605 PR revert) — 내리지 않습니다:** 이
+    루트는 남으므로 철거하지 않습니다. 머지 커밋을 `git revert -m 1 <머지
+    커밋>` 으로 되돌려 머지한 뒤, 이 루트를 plan · apply 합니다(kty 승인).
+    요지는 확장 대상 둘 · 조절 정책 넷 · 경보 넷의 delete 와 원하는 수가 0 인
+    서비스의 1 로의 update 뿐입니다 — 서비스 · 역할 · 로그 그룹의 delete 가
+    보이면 멈추고 kty 에게 넘깁니다. 자동 조절 apply 전이면 revert 만 합니다.
+    revert 는 `modules/ecs_service` 의 원하는 수 무시도 되돌리므로, platform
+    도 plan 해 다섯 서비스의 원하는 수가 구성 값과 같은지(변경 0) 봅니다.
+*   **루트 전체를 되돌릴 때(workers 루트를 처음 만든 PR revert) revert 전에
+    내립니다** — 되돌리면 이 루트의 코드가 사라져 destroy 할 구성이
+    없어집니다. PR 은 머지 커밋이라 `git revert -m 1 <머지 커밋>` 으로
     되돌립니다. `modules/ecs_service` 의 포트 없는 꼴을 되돌리는 것도
     이 루트를 내린 뒤에만 합니다.
 *   **render 이그레스 되돌리기:** `render_egress_via_endpoints = false` 는
