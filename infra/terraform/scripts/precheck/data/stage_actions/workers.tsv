@@ -96,10 +96,11 @@ ec2:DescribeSecurityGroupRules	ap-northeast-2	*
 #     요청에 default_tags 가 실려 TagResource 도 인가한다(API 원문
 #     PutMetricAlarm 「you must be signed on with both the
 #     cloudwatch:PutMetricAlarm and cloudwatch:TagResource permissions」).
-# 태그를 바꾸는 apply 만 부르는 UntagResource 는 이 묶음의 ECS · 로그 그룹
-# 행처럼 넣지 않는다. AAS 안내서(security_iam_id-based-policy-examples 의
-# 「ECS services」)가 호출자에게 요구하는 ecs:DescribeServices(위 ECS
-# 덩어리) · ecs:UpdateService(아래 운영 덩어리)는 그 행을 쓴다.
+# 태그를 바꾸는 apply 가 부르는 UntagResource 는 둘 다 넣는다 — 경보 선례
+# (O7d.tsv · O7f.tsv 의 cloudwatch:UntagResource)와 기준을 맞춘다. AAS
+# 안내서(security_iam_id-based-policy-examples 의 「ECS services」)가
+# 호출자에게 요구하는 ecs:DescribeServices(위 ECS 덩어리) ·
+# ecs:UpdateService(아래 운영 덩어리)는 그 행을 쓴다.
 # DescribeScalingActivities · DescribeAlarmHistory 는 provider 가 아니라
 # 운영이 부른다 — README 「자동 조절(0 ↔ 1)」 의 읽기 명령과 C3 차가운 큐
 # 관찰(계획 쟁점 4 · Phase C).
@@ -110,12 +111,14 @@ application-autoscaling:PutScalingPolicy	ap-northeast-2	*
 application-autoscaling:DescribeScalingPolicies	ap-northeast-2	*
 application-autoscaling:DeleteScalingPolicy	ap-northeast-2	*
 application-autoscaling:TagResource	ap-northeast-2	*
+application-autoscaling:UntagResource	ap-northeast-2	*
 application-autoscaling:ListTagsForResource	ap-northeast-2	*
 application-autoscaling:DescribeScalingActivities	ap-northeast-2	*
 cloudwatch:PutMetricAlarm	ap-northeast-2	*
 cloudwatch:DescribeAlarms	ap-northeast-2	*
 cloudwatch:DeleteAlarms	ap-northeast-2	*
 cloudwatch:TagResource	ap-northeast-2	*
+cloudwatch:UntagResource	ap-northeast-2	*
 cloudwatch:ListTagsForResource	ap-northeast-2	*
 cloudwatch:DescribeAlarmHistory	ap-northeast-2	*
 # 서비스 연결 역할 — 계정에 AWSServiceRoleForApplicationAutoScaling_ECSService

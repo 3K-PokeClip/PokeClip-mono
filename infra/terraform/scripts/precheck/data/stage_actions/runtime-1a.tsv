@@ -201,8 +201,8 @@ ecs:DescribeTasks	ap-northeast-2	*
 # 대상의 SuspendedState 세 값을 true 로 걸고 false 로 풀기(min 0 · max 1
 # 함께 — register-scalable-target).
 application-autoscaling:RegisterScalableTarget	ap-northeast-2	*
-# 회전의 자동 조절 멈춤 · 복원(같은 절차) — 걸기 전 · 풀기 전에 세 값과
-# 원하는 수를 다시 읽기(describe-scalable-targets).
+# 회전의 자동 조절 멈춤 · 복원(같은 절차) — 걸기 전 · 풀기 전에 세 값을
+# 다시 읽기(describe-scalable-targets — 원하는 수는 ecs:DescribeServices 행).
 application-autoscaling:DescribeScalableTargets	ap-northeast-2	*
 # 회전의 완료 조건(같은 절차) — 일꾼마다 정책 둘이 그대로 있는지 보기
 # (describe-scaling-policies).

@@ -2341,8 +2341,10 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
     을 올리지는 않습니다. 그러나 platform 은 runtime 출력(env)을 clip 태스크
     정의에 굳힙니다(`prod/platform/services.tf:93-94` ·
     `modules/ecs_service/main.tf:176-196`). 4걸음 밖의 platform apply 는
-    되돌림 중간의 env 를 굳혀, 그 판으로 clip 이 뜨게 합니다. 그래서 4걸음
-    밖의 platform apply(다른 PR 포함)는 plan 내용과 무관하게 거부합니다.
+    되돌림 중간의 env 를 clip 태스크 정의에 굳히고, auth 등 다른 서비스도
+    그 중간 env 로 다시 배포합니다. clip 은 다시 올리기의 확인 걸음이 그 판을
+    잡아 멈추지만, 다른 서비스의 재배포는 막지 못합니다. 그래서 4걸음 밖의
+    platform apply(다른 PR 포함)는 plan 내용과 무관하게 거부합니다.
 
 1.  **clip 0개**(ECS 쓰기 — 실행 직전 승인):
 
@@ -2462,7 +2464,8 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
     판에서 runtime plan(ECS 변경 0 — plan 승인) → apply. 그릇은 30일 복구
     대기입니다. clip 은 계속 `runningCount` 0 입니다.
 1.  **clip 다시 올리기**(세 걸음 — platform apply · 확인 · 올리기). platform
-    apply 는 clip 태스크 정의만 바꾸고 원하는 수는 0 으로 둡니다 — 모듈이
+    apply 는 되돌린 runtime 출력을 platform 전체에 반영하고(clip 태스크
+    정의는 바뀐 판에서만 교체), clip 의 원하는 수는 0 으로 둡니다 — 모듈이
     `desired_count` 를 무시합니다(위 「platform 동결」). 먼저 조건을 봅니다.
 
     ```shell
@@ -2492,9 +2495,11 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         출력 · 미완료 명부 수 · 2걸음 숫자. 언제 · 어떤 판으로 올릴지는 회부
         때 정합니다.
 
-    앞의 두 걸음 가운데 하나라도 기대와 다르면 올리기로 가지 않고 멈춰 kty
-    에게 회부합니다. 그동안 clip 은 0 으로 둡니다. 세 걸음은 같은 셸에서
-    합니다(첫 걸음이 적은 `td_before` 를 둘째 걸음이 읽음).
+    아래 세 걸음 가운데 첫 걸음(platform plan · apply)과 둘째 걸음(확인) 중
+    하나라도 기대와 다르면 셋째 걸음(올리기)으로 가지 않고 멈춰 kty 에게
+    회부합니다. 그동안 clip 은 0 으로 둡니다. 세 걸음은 같은 셸에서
+    합니다(첫 걸음이 적은 `td_before` 를 둘째 걸음이 읽음 — 셸이 바뀌어
+    비어 있으면 둘째 걸음이 리비전을 비교하지 않고 멈춤).
 
     1.  **platform plan · apply**(plan 승인). 지금 clip 리비전을 적어 두고,
         저장 plan 에서 clip 서비스의 동작과 원하는 수 before · after 를
@@ -2519,8 +2524,10 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         `terraform apply clip-up.tfplan && rm clip-up.tfplan` 을 합니다. 두
         갈래의 차이는 둘째 걸음의 리비전 기대뿐입니다.
 
-        *   `update 0 0`: 되돌림이 clip env 를 바꾼 판입니다. clip 쪽 요지는
-            태스크 정의 교체와 서비스의 `task_definition` 갱신입니다.
+        *   `update 0 0`: clip 태스크 정의가 바뀌는 판입니다(대개 되돌림이
+            clip env 를 바꾼 때 — env 밖 속성이 바뀌어도 이 줄이 나옵니다).
+            clip 쪽 요지는 태스크 정의 교체와 서비스의 `task_definition`
+            갱신입니다. 무엇이 바뀌었든 둘째 걸음이 env 를 대조합니다.
         *   `no-op 0 0`: 되돌림이 clip env 를 바꾸지 않은 판입니다(예: auth
             설정 · rewind CORS 만 되돌림). clip 리비전은 그대로입니다.
         *   그 밖(출력 없음 · 두 줄 이상 · 원하는 수가 `0 0` 이 아님 — 예
@@ -2536,7 +2543,7 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
         aws ecs describe-services --region ap-northeast-2 \
           --cluster pokeclip-prod --services pokeclip-prod-clip \
           --query 'services[0].desiredCount' --output text
-        if [[ "${td}" != "${td_before}" ]]; then
+        if [[ "${td}" != "${td_before:?첫 걸음의 td_before 가 없음 — 같은 셸}" ]]; then
           echo '새 리비전'
         else
           echo '리비전 그대로'
@@ -2556,8 +2563,8 @@ kty 결정(2026-10-24): clip 을 먼저 내리고, 나머지를 되돌린 뒤, �
 
         `0` 과 네 이름 모두 `일치` 여야 하고, 리비전은 첫 걸음의 갈래와
         맞아야 합니다 — `update 0 0` 이면 `새 리비전`, `no-op 0 0` 이면
-        `리비전 그대로` 입니다. 갈래와 다른 리비전 줄 · `불일치` ·
-        `출력없음` 이 하나라도 나오면 멈춥니다.
+        `리비전 그대로` 입니다. 갈래와 다른 리비전 줄 · 리비전 줄 없음(`td_before`
+        오류) · `불일치` · `출력없음` 이 하나라도 나오면 멈춥니다.
     1.  **올리기**(ECS 쓰기 — 실행 직전 승인).
 
         ```shell
@@ -2795,9 +2802,8 @@ kty 가 세션 밖에서 caller identity 를 본 뒤 1 의 세 명령을 그 순
     풀고 읽는 행(`application-autoscaling:RegisterScalableTarget` ·
     `DescribeScalableTargets` · `DescribeScalingPolicies` ·
     `cloudwatch:DescribeAlarms`)도 같은 이유로 늘었습니다. ⑤ 보고와 함께
-    묻고, 답을 들은 뒤
-    `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다. 종료 1(DENIED) ·
-    2(검사 불가)면 2 로 가지 않습니다.
+    묻고, 답을 들은 뒤 `--accept` 하고 다시 판정해 종료 0 이어야 다음입니다.
+    종료 1(DENIED) · 2(검사 불가)면 2 로 가지 않습니다.
 *   ② 는 1단-가 apply 뒤 기준입니다(4 의 첫 걸음 — 1 의 「apply 전이라
     정상」 은 맞지 않음). 늘 정상인 `TARGET_NONE` 은 `prod-instance`
     하나입니다. `prod-roles` 는 O7d 전이면 정상이고(실행기가 꺼져 있고
@@ -3436,7 +3442,8 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         두고 기록합니다(다시 띄우는 것은 그 정지의 절차 · 승인 몫).
     *   기록이 `INACTIVE` · `None` 이던 서비스는 할 일이 없습니다(지워졌거나
         없음 — 복원 대상 아님).
-    *   완료(`auto`): 아래가 모두 맞아야 합니다. 맞지 않으면 kty 회부입니다.
+    *   완료(`auto`): 아래가 모두 맞아야 합니다. 앞의 둘이 맞지 않으면 kty
+        회부입니다. 셋째(원하는 수)는 그 항목의 보정 갈래를 따릅니다.
         *   위 확장 대상 읽기를 다시 돌려 세 값이 `False False False`.
         *   아래 읽기에서 정책 둘(`pokeclip-prod-<키>-queue-idle` ·
             `-queue-wake`)과 경보 둘이 그대로 있음.
