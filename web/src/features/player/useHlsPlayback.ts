@@ -5,6 +5,7 @@ import type Hls from 'hls.js';
 import type { LevelDetails } from 'hls.js';
 import {
   behindFromCurrentTime,
+  behindMsFromCurrentTime,
   dvrRange,
   liveEdgePosition,
   mediaTimeAt,
@@ -30,7 +31,7 @@ import {
   watchLiveCatchup,
   type LiveCatchupWatch,
 } from './liveCatchup';
-import { behindFromSeekFraction, isAtEdge } from './playerMath';
+import { behindFromSeekFraction, isAtEdge, steadySeconds } from './playerMath';
 import {
   endStalled,
   loadedList,
@@ -250,6 +251,9 @@ export function useHlsPlayback(
   // 넘겨받은 소리가 켜짐이면 이 재생기의 첫 재생 하나만, 막힐 때 소리를 끄고 다시 튼다. 라이브 · 세션 재생기는 지금 그대로다
   const soundFallbackRef = useRef(initialSound?.muted === false);
   const [behindSeconds, setBehind] = useState(0);
+  // 끝에 있는가 — 보이는 숫자(steadySeconds)가 아니라 반올림 전 시차로 정한다. 시크바 손잡이 · LIVE 단추가 이 값 하나를 쓴다
+  // (POK-583 계획 D5 · R8): 숫자로 정하면 실제로 3초 넘게 밀렸는데도 숫자가 2에 머무는 동안 끝으로 보였다
+  const [atEdge, setAtEdge] = useState(true);
   // 매니페스트 로드 전엔 되감을 곳이 없다 — 0이면 시크바가 엣지에 붙는다 (POK-32)
   const [windowSeconds, setWindowSeconds] = useState(0);
   const [uptimeSeconds, setUptime] = useState(options.initialUptimeSeconds ?? 0);
@@ -406,6 +410,7 @@ export function useHlsPlayback(
         video.currentTime = Math.max(range.start, live - clamped);
         setBehind(Math.round(clamped));
       }
+      setAtEdge(isAtEdge(clamped));
       followSeek(isAtEdge(clamped));
       onSeek?.();
     },
@@ -693,6 +698,7 @@ export function useHlsPlayback(
     // 같은 값이라 no-op. 새 소스의 자동재생이 거부되면 playing=false로 남아 재생 버튼이 노출된다.
     setPlaying(false);
     setBehind(0);
+    setAtEdge(true);
     // 이전 스트림의 창 폭이 새 스트림 시크바에 남으면 안 된다
     setWindowSeconds(0);
     // 이전 스트림의 자리도 남기지 않는다: 새 스트림 채팅이 앞 방송 시각을 따른다
@@ -784,7 +790,8 @@ export function useHlsPlayback(
       const axis = readAxis();
       if (axis === null) return;
       setWindowSeconds(axis.windowSeconds);
-      setBehind(axis.behindSeconds);
+      setBehind((prev) => steadySeconds(prev, axis.behindMs));
+      setAtEdge(isAtEdge(axis.behindMs / 1000));
       // 라이브는 되감기가 준비됐을 때만 멈춘 채 갈아 끼운다. 준비 전이면 재개 때 자른다(onPlay) — 창이 밀릴 때마다 알리지
       // 않게. 되감기의 멈춘 자리는 LEVEL_UPDATED 가 지킨다(keepRewindFloor)
       const handsOverPaused = kind === 'live' && hooksRef.current.axisLowerMs != null;
@@ -833,7 +840,9 @@ export function useHlsPlayback(
       // timeupdate마다 값이 달라져 리렌더가 돈다 (시차를 반올림하는 이유와 같다)
       setWindowSeconds(Math.round(rewindWindowSeconds(range, sync)));
       const behind = behindFromCurrentTime(range, video.currentTime, sync);
-      setBehind(behind);
+      const behindMs = behindMsFromCurrentTime(range, video.currentTime, sync);
+      setBehind((prev) => steadySeconds(prev, behindMs));
+      setAtEdge(isAtEdge(behindMs / 1000));
       // 재생 위치에 영상이 없으면(첫 조각이 붙기 전, 옮긴 자리를 받는 중, 미디어 오류 복구로 다시 붙는 중) 자리를 바꾸지 않는다:
       // 그때의 재생 위치(첫 조각 전엔 0초)는 보고 있는 화면이 아니라, 라이브를 여는 순간 1시간 되감은 것처럼 채팅이 따라갔다
       // (POK-326 리뷰 1라운드)
@@ -1136,7 +1145,7 @@ export function useHlsPlayback(
     volume,
     behindSeconds,
     ...position,
-    atEdge: isAtEdge(behindSeconds),
+    atEdge,
     windowSeconds,
     uptimeSeconds,
     quality,

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PlayerSeekBar } from './PlayerSeekBar';
-import { REWIND_UI_MAX_SECONDS } from './playerMath';
+import { REWIND_UI_MAX_SECONDS, isAtEdge } from './playerMath';
 
 // 드래그가 놓을 때 딱 한 번만 커밋되는지를 재는 테스트 (계약3 4절 2번 · POK-32).
 // jsdom엔 레이아웃이 없어 rect가 전부 0이므로 트랙 폭만 국소 스텁한다 — 좌표 환산 자체는
@@ -23,6 +23,8 @@ function stubTrackWidth(el: HTMLElement, left: number, width: number) {
 function renderSeekBar(overrides: Partial<Parameters<typeof PlayerSeekBar>[0]> = {}) {
   const props = {
     behindSeconds: 0,
+    // 재생기가 원시 시차로 정하는 값 — 시험이 따로 주지 않으면 보이는 시차와 같은 판정이다
+    atEdge: isAtEdge(overrides.behindSeconds ?? 0),
     windowSeconds: REWIND_UI_MAX_SECONDS,
     clipMarked: false,
     onSeekToFraction: vi.fn(),
@@ -44,6 +46,7 @@ describe('PlayerSeekBar 다시보기(POK-518)', () => {
     render(
       <PlayerSeekBar
         behindSeconds={60}
+        atEdge={false}
         windowSeconds={600}
         clipMarked={false}
         onSeekToFraction={onSeekToFraction}
@@ -199,5 +202,38 @@ describe('PlayerSeekBar 되감기 창', () => {
 
     expect(slider).toHaveAttribute('aria-valuenow', '-600');
     expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -10:00');
+  });
+});
+
+/** 손잡이(썸)의 가로 자리 — 트랙 안에서 left 를 가진 요소는 손잡이 하나다(클립 마커는 끈 채로 잰다) */
+function thumbLeft(slider: HTMLElement): string | undefined {
+  return Array.from(slider.querySelectorAll<HTMLElement>('div')).find((el) => el.style.left !== '')
+    ?.style.left;
+}
+
+describe('PlayerSeekBar 끝 판정 — 재생기의 atEdge 하나를 손잡이 · 낭독이 함께 쓴다(POK-583 떨림 ③)', () => {
+  it('시차 2초 · 창 28초에서 끝이면 손잡이는 오른쪽 끝(100%)이고 낭독은 「실시간」 이다', () => {
+    const { slider } = renderSeekBar({ behindSeconds: 2, windowSeconds: 28, atEdge: true });
+    expect(thumbLeft(slider)).toBe('100%');
+    expect(slider).toHaveAttribute('aria-valuetext', '실시간');
+  });
+
+  it('시차 3초는 끝이 아니다 — 손잡이가 창 비율 자리이고 낭독은 시차다', () => {
+    const { slider } = renderSeekBar({ behindSeconds: 3, windowSeconds: 28, atEdge: false });
+    expect(parseFloat(thumbLeft(slider) ?? '')).toBeCloseTo((25 / 28) * 100, 6);
+    expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -00:03');
+  });
+
+  it('보이는 숫자가 2초여도 재생기가 끝이 아니라고 하면 끝이 아니다 — LIVE 단추와 같은 판정', () => {
+    const { slider } = renderSeekBar({ behindSeconds: 2, windowSeconds: 28, atEdge: false });
+    expect(parseFloat(thumbLeft(slider) ?? '')).toBeCloseTo((26 / 28) * 100, 6);
+    expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -00:02');
+  });
+
+  it('드래그 프리뷰는 놓을 자리로 끝을 판정한다 — 재생기의 atEdge 를 읽지 않는다', () => {
+    const { slider } = renderSeekBar({ behindSeconds: 0, windowSeconds: 28, atEdge: true });
+    fireEvent.pointerDown(slider, { pointerId: 1, button: 0, clientX: 500 });
+    expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -00:14');
+    expect(thumbLeft(slider)).toBe('50%');
   });
 });
