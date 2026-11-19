@@ -137,7 +137,8 @@ export function PlayerSeekBar({
       aria-label={edge.seekLabel}
       aria-valuemin={-windowSeconds}
       aria-valuemax={0}
-      aria-valuenow={-displayBehind}
+      // 끝이면 손잡이 · 낭독처럼 0 이다 — 3초 안쪽 시차를 읽으면 끝에 붙은 손잡이를 두고 −2 를 읽는다
+      aria-valuenow={atEdge ? 0 : -displayBehind}
       aria-valuetext={
         atEdge ? endWords.atEdge : `${endWords.fromEdge} ${formatBehind(displayBehind)}`
       }

@@ -438,7 +438,8 @@ ERROR  Failed to proxy http://localhost:8082/api/auth/me AggregateError
 | 진짜 LL-HLS (송출 필요) | `http://localhost:8888/{streamId}/index.m3u8` |
 
 - MediaMTX는 `index.m3u8` 요청에 **302 리다이렉트**(세션 파라미터 부여)를 줄 수 있음 — hls.js 기본 동작이 따라가므로 커스텀 fetch를 끼울 때만 주의.
-- 로컬은 인증·서명 쿠키 없음. 프로덕션 규약은 **PokeClip-architecture `contracts/계약3-LLHLS-DVR재생규약.md`**(정본)을 따를 것 — 특히 4절
+- 로컬은 인증·서명 쿠키 없음. 프로덕션 규약은 팀 위키 `PokeClip-LLM-WIKI` 의
+  **`contracts/계약3-LLHLS-DVR재생규약.md`**(정본)을 따를 것 — 특히 4절
   라이브러리 catch-up 끄기(앱 따라잡기는 라이브 시청자만).
 
 ## 설계 근거 포인터

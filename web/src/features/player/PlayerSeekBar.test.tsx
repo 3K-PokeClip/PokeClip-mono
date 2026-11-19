@@ -230,6 +230,16 @@ describe('PlayerSeekBar 끝 판정 — 재생기의 atEdge 하나를 손잡이 �
     expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -00:02');
   });
 
+  it('끝이면 ARIA 값도 손잡이 · 낭독과 같은 0 이다 — 보이는 시차 2초를 읽지 않는다', () => {
+    const { slider } = renderSeekBar({ behindSeconds: 2, windowSeconds: 28, atEdge: true });
+    expect(slider).toHaveAttribute('aria-valuenow', '0');
+  });
+
+  it('끝이 아니면 ARIA 값은 −시차다', () => {
+    const { slider } = renderSeekBar({ behindSeconds: 2, windowSeconds: 28, atEdge: false });
+    expect(slider).toHaveAttribute('aria-valuenow', '-2');
+  });
+
   it('드래그 프리뷰는 놓을 자리로 끝을 판정한다 — 재생기의 atEdge 를 읽지 않는다', () => {
     const { slider } = renderSeekBar({ behindSeconds: 0, windowSeconds: 28, atEdge: true });
     fireEvent.pointerDown(slider, { pointerId: 1, button: 0, clientX: 500 });

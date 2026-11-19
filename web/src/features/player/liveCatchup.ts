@@ -66,7 +66,7 @@ const LIVE_CATCHUP_STALE_TD_MULTIPLE = 2;
 const FRESH_SAMPLES_TO_RECOVER = 2;
 
 /** 지금 라이브 목록(hls.latestLevelDetails)에서 읽은 값 */
-export interface LiveListSample {
+interface LiveListSample {
   /** 목록이 마지막으로 전진(파트 포함)한 뒤 흐른 초 — details.age */
   readonly ageS: number;
   /** 목표 조각 길이(초) — details.targetduration */
@@ -124,7 +124,7 @@ export type LiveCatchupAction =
   | { readonly kind: 'jump'; readonly toS: number };
 
 /** catchupStep 의 결과 */
-export interface LiveCatchupStep {
+interface LiveCatchupStep {
   readonly state: LiveCatchupState;
   readonly action: LiveCatchupAction;
 }
@@ -291,7 +291,7 @@ export interface LiveCatchupWatch {
 }
 
 /** watchLiveCatchup 에 넘기는 재생기 쪽 값 · 정책 · 시계 */
-export interface LiveCatchupWatchOptions {
+interface LiveCatchupWatchOptions {
   /** 켜 있는 동안 timeupdate 마다 부른다 — 재생기의 라이브 끝 추정 위치 · 목표 · 동기 위치 · 목록 · 넘김 확인 여부 */
   read: () => LiveCatchupReading;
   policy: LiveCatchupPolicy;
