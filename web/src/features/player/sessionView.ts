@@ -38,13 +38,13 @@ export interface SessionView {
  * 화면 밖에서 오는 보기 재료(POK-612). 국면 · 판정에는 쓰지 않고 그릴 것에만 쓴다 — 판정은 회차별
  * 조회뿐이다(계약3 7-3)
  */
-export interface SessionViewContext {
+interface SessionViewContext {
   /** 명부(방송 목록)가 이 방송을 ended 로 답했다 — 종료 판정이 났으니 같은 회차가 이어지지 않는다 */
   rosterEnded: boolean;
 }
 
 /** 명부가 ended 라고 답하지 않은 보기 재료 — 명부를 모르는 호출의 기본값이다 */
-export const ROSTER_NOT_ENDED: SessionViewContext = { rosterEnded: false };
+const ROSTER_NOT_ENDED: SessionViewContext = { rosterEnded: false };
 
 type EndingPhase = Extract<SessionPhase, { kind: 'ending-wait' }>;
 

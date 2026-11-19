@@ -43,7 +43,7 @@ const ENDING_WAIT_POLL_MS = 5_000;
 
 interface BroadcastClockOptions {
   /** 재생 세션이 끝남 대기의 재접속 대기 안이다 — 켜지면 곧바로 한 번, 그 뒤 5초마다 명부를 다시 읽는다 */
-  endingWait: boolean;
+  endingWait?: boolean;
 }
 
 /** 방송 번호 effect 가 만든 지금 방송의 명부 읽기 — 주기 전환 effect 가 이것으로 곧바로 읽고 주기를 바꾼다 */
@@ -61,7 +61,7 @@ function ms(iso: string | null): number | null {
 
 export function useBroadcastClock(
   streamId: string,
-  { endingWait }: BroadcastClockOptions = { endingWait: false },
+  { endingWait = false }: BroadcastClockOptions = {},
 ): BroadcastClock {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);

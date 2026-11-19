@@ -501,8 +501,9 @@ describe('useLiveSession: 다시보기 재생기에서 바꾼 소리(POK-547)', 
 // 명부를 빨리 다시 읽어 달라는 신호(POK-612 R10) — 끝남 대기의 재접속 대기 안이고 명부가 아직 ended 가 아닐 때만 그 방송
 // 번호를 낸다. 방송 시계가 이 칸을 보고 명부를 곧바로 한 번 · 5초마다 다시 읽는다
 describe('useLiveSession: 명부 빠른 재조회 신호 rosterFastPollFor(POK-612 R10)', () => {
-  function waitingSession(resumeWaiting: boolean): PlaybackSession {
+  function waitingSession(resumeWaiting: boolean, accessKey = 'r-A|key-1'): PlaybackSession {
     return {
+      state: { accessKey },
       view: { banner: null, resumeWaiting },
       dispatch: vi.fn(),
     } as unknown as PlaybackSession;
@@ -553,15 +554,15 @@ describe('useLiveSession: 명부 빠른 재조회 신호 rosterFastPollFor(POK-6
     });
     expect(signal.result.current).toBe('r-A');
 
-    // 세션이 닫히기 전 그리기 하나(세션 훅은 같은 그리기에서 left 로 닫는다)
+    // 세션이 닫히기 전 그리기 하나(세션 훅은 같은 그리기에서 left 로 닫는다) — 남은 세션은 A 의 것이라 B 도 싣지 않는다
     const toB = input({ liveStreamId: 'r-B', accessKey: 'r-B|key-1' });
     view.rerender(toB);
-    expect(signal.result.current).not.toBe('r-A');
+    expect(signal.result.current).toBeNull();
     hoisted.session = null;
     view.rerender(toB);
     expect(signal.result.current).toBeNull();
 
-    hoisted.session = waitingSession(true);
+    hoisted.session = waitingSession(true, 'r-B|key-1');
     view.rerender(toB);
     expect(signal.result.current).toBe('r-B');
     view.unmount();

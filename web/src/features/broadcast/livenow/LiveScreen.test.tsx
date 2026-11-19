@@ -895,8 +895,9 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     return body === null ? jsonResponse(404, { error: 'not_found' }) : jsonResponse(200, body);
   }
   if (path === '/api/clip/broadcasts') {
-    if (u.searchParams.get('limit') !== '1')
+    if (u.searchParams.get('limit') !== '1') {
       server.rosterRequests.push({ at: Date.now(), state: u.searchParams.get('state') });
+    }
     const gate = u.searchParams.get('limit') === '1' ? server.pickGate : server.listGate;
     return gate ? gate.then(() => listResponse(u)) : listResponse(u);
   }
