@@ -4,9 +4,12 @@ import {
   initialCatchupState,
   isWebKitPlayback,
   LIVE_CATCHUP_POLICY,
+  liveCatchupPolicy,
   liveCatchupStartMode,
+  readHlsCatchup,
   WEBKIT_LIVE_CATCHUP_POLICY,
   watchLiveCatchup,
+  type CatchupHls,
   type LiveCatchupAction,
   type LiveCatchupMode,
   type LiveCatchupPolicy,
@@ -655,5 +658,58 @@ describe('watchLiveCatchup', () => {
     current.reading = reading(1.5, { liveSyncPositionS: state.currentTime + 1.5 });
     tick();
     expect(state.playbackRate).toBe(1.1);
+  });
+});
+
+describe('liveCatchupPolicy', () => {
+  it('WebKit 재생이면 WebKit 정책 · 아니면 Chromium 정책', () => {
+    const safari =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15';
+    const chrome =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+    expect(liveCatchupPolicy({ userAgent: safari })).toBe(WEBKIT_LIVE_CATCHUP_POLICY);
+    expect(liveCatchupPolicy({ userAgent: chrome })).toBe(LIVE_CATCHUP_POLICY);
+  });
+});
+
+describe('readHlsCatchup — 재생기 값을 판정할 수 없으면 목록을 null 로', () => {
+  /** hls.js 재생기에서 읽히는 몫만 든 흉내 — over 가 덮는다 */
+  function hlsLike(
+    over: Partial<Record<keyof CatchupHls, unknown>> = {},
+    details: Record<string, unknown> = {},
+  ): CatchupHls {
+    return {
+      latency: 3,
+      targetLatency: 1.25,
+      liveSyncPosition: 30,
+      latestLevelDetails: { live: true, age: 0.5, targetduration: TD, ...details },
+      ...over,
+    } as unknown as CatchupHls;
+  }
+
+  it('정상 값은 그대로 · 넘김 확인 여부를 싣는다', () => {
+    expect(readHlsCatchup(hlsLike(), true)).toEqual({
+      latencyS: 3,
+      targetLatencyS: 1.25,
+      liveSyncPositionS: 30,
+      list: { ageS: 0.5, targetDurationS: TD },
+      handoffConfirming: true,
+    });
+  });
+
+  it.each([
+    ['재생기가 없다(내렸다)', null],
+    ['목록이 없다', hlsLike({ latestLevelDetails: null })],
+    ['목록이 끝났다(ENDLIST)', hlsLike({}, { live: false })],
+    ['목표를 아직 모른다(null)', hlsLike({ targetLatency: null })],
+    ['지연이 수가 아니다', hlsLike({ latency: undefined })],
+    ['age 가 수가 아니다', hlsLike({}, { age: Number.NaN })],
+    ['TD 가 수가 아니다', hlsLike({}, { targetduration: undefined })],
+  ] as const)('%s', (...[, hls]) => {
+    expect(readHlsCatchup(hls, false).list).toBeNull();
+  });
+
+  it('라이브 동기 위치를 모르면 null — 건너뛰지 않는다', () => {
+    expect(readHlsCatchup(hlsLike({ liveSyncPosition: null }), false).liveSyncPositionS).toBeNull();
   });
 });

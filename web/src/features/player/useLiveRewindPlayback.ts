@@ -44,6 +44,10 @@ export function useLiveRewindPlayback(
     streamEnded: session.streamEnded ?? OPEN_STREAM_FACTS.streamEnded,
     roundDenied: session.roundDenied ?? OPEN_STREAM_FACTS.roundDenied,
   });
+  // 넘김 확인 여부는 라이브 따라잡기가 표본마다 읽는다 — 렌더 때 ref 에 둬 넘김 재생기의 첫 timeupdate 부터 맞는 값을
+  // 준다(POK-583 Q3 (다))
+  const handoffConfirmingRef = useRef(false);
+  handoffConfirmingRef.current = state.handoff !== null;
   const hooks = useMemo<PlaybackHooks>(
     () => ({
       onEndlist: () => dispatch({ type: 'endlist' }),
@@ -61,6 +65,7 @@ export function useLiveRewindPlayback(
         dispatch({ type: 'dvr-drain', generation, drained, atPdtMs }),
       watchesDrain,
       isStartHeld,
+      isHandoffConfirming: () => handoffConfirmingRef.current,
       onPlaying: () => dispatch({ type: 'playing' }),
       onSeekRequest: (targetMs, view) => dispatch({ type: 'seek', targetMs, view }),
       onLiveButton: liveButton,

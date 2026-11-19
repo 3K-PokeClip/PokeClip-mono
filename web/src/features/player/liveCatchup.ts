@@ -1,3 +1,4 @@
+import type Hls from 'hls.js';
 import type { PlaybackSource } from './rewindSwitch';
 
 // 라이브를 보는 중인 시청자만 앱이 직접 따라잡는다(POK-583 · kty 결정 3). 라이브러리(hls.js)의 배속 추격은 끈 채로 두고
@@ -205,6 +206,51 @@ export function catchupStep(
 export function isWebKitPlayback(nav: Pick<Navigator, 'userAgent'>): boolean {
   const ua = nav.userAgent;
   return /AppleWebKit\//.test(ua) && !/(?:Chrome|Chromium)\//.test(ua);
+}
+
+/** 이 브라우저의 배속 정책 — WebKit 재생이면 WEBKIT_LIVE_CATCHUP_POLICY, 아니면 LIVE_CATCHUP_POLICY */
+export function liveCatchupPolicy(nav: Pick<Navigator, 'userAgent'>): LiveCatchupPolicy {
+  return isWebKitPlayback(nav) ? WEBKIT_LIVE_CATCHUP_POLICY : LIVE_CATCHUP_POLICY;
+}
+
+/** 따라잡기가 읽는 hls.js 재생기의 몫(hls.js 1.7.3 getter) */
+export type CatchupHls = Pick<
+  Hls,
+  'latency' | 'targetLatency' | 'liveSyncPosition' | 'latestLevelDetails'
+>;
+
+/** 유한한 수면 그 값, 아니면 null — 재생기 값은 아직 못 잰 동안 null · 0 · 없음으로 온다 */
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * hls.js 재생기에서 따라잡기 값을 읽는다. 재생기가 없거나(내렸다) · 목록이 없거나 끝났거나(ENDLIST) · 지연 · 목표 · age ·
+ * TD 가 수가 아니면 목록을 null 로 낸다 — 그 표본은 판정하지 않고 배속 중이면 1 로 되돌린다(catchupStep)
+ */
+export function readHlsCatchup(
+  hls: CatchupHls | null,
+  handoffConfirming: boolean,
+): LiveCatchupReading {
+  const details = hls?.latestLevelDetails ?? null;
+  const latencyS = finiteOrNull(hls?.latency);
+  const targetLatencyS = finiteOrNull(hls?.targetLatency);
+  const ageS = finiteOrNull(details?.age);
+  const targetDurationS = finiteOrNull(details?.targetduration);
+  const judged =
+    details !== null &&
+    details.live &&
+    latencyS !== null &&
+    targetLatencyS !== null &&
+    ageS !== null &&
+    targetDurationS !== null;
+  return {
+    latencyS: latencyS ?? 0,
+    targetLatencyS: targetLatencyS ?? 0,
+    liveSyncPositionS: finiteOrNull(hls?.liveSyncPosition),
+    list: judged ? { ageS, targetDurationS } : null,
+    handoffConfirming,
+  };
 }
 
 /** 라이브 재생기 하나의 따라잡기 — watchLiveCatchup 이 돌려준다 */
