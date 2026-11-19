@@ -19,8 +19,10 @@ public class StreamKeyController {
     private final StreamKeyService streamKeyService;
 
     /**
-     * 키 유무만 알려준다. 웹이 재발급 버튼을 보여줄지 정하는 데 쓴다 —
+     * 키 유무와, 연동 코드를 플러그인에 넣은 마지막 시각을 알려준다. 웹이 재발급 버튼을 보여줄지 정하는 데 쓴다 —
      * rotate가 키 없을 때 404라, 이것이 없으면 오류로 상태를 조회하게 된다.
+     *
+     * <p>웹은 코드 창을 띄운 동안 이것을 몇 초마다 다시 읽어 「연결됐다」를 알아챈다(POK-608) — 그래서 읽기만 한다.
      */
     @GetMapping
     public StreamKeyStatusResponse status(@AuthenticationPrincipal Jwt jwt) {

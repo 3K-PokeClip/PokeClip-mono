@@ -49,4 +49,19 @@ public interface PairingCodeRepository extends JpaRepository<PairingCode, Long> 
     @Query("update PairingCode c set c.usedAt = :now "
             + "where c.userId = :userId and c.usedAt is null and c.expiresAt > :now")
     int consumeAliveOfUser(@Param("userId") Long userId, @Param("now") Instant now);
+
+    /**
+     * 이 회원의 살아있는 코드를 지금 만료시킨다 — 새 코드를 발급할 때 부른다(PR #539 리뷰).
+     *
+     * <p>살아있는 코드를 회원당 하나로 둔다. 웹은 「이 코드를 발급한 뒤에 연결 시각이 생겼나」로 연결을 알아채는데,
+     * 전에 받은 코드가 살아 있으면 그것을 넣어도 새 코드가 쓰인 것으로 읽혀 새 코드 창이 「연결됐어요」로 바뀐다.
+     * 떠도는 자격증명도 줄어든다.
+     *
+     * <p>{@code usedAt}이 아니라 {@code expiresAt}을 당긴다 — 쓴 적 없는 코드에 「이미 썼다」(409)를 돌려주면 안 된다.
+     * 교환은 만료(410)로 답하고 플러그인은 새 코드를 받으라고 한다. 쓰인 코드(usedAt 있음)는 건드리지 않는다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update PairingCode c set c.expiresAt = :now "
+            + "where c.userId = :userId and c.usedAt is null and c.expiresAt > :now")
+    int expireAliveOfUser(@Param("userId") Long userId, @Param("now") Instant now);
 }

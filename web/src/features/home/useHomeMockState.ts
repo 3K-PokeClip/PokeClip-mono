@@ -32,6 +32,7 @@ import {
   type BroadcastRow,
   type LibraryEntry,
 } from '@/api/clipEditor';
+import { isPluginPaired, syncPluginPaired } from '@/lib/pluginPairing';
 import { runLimited } from '@/lib/runLimited';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useChannelStreamerId } from '@/features/channel/ChannelScope';
@@ -130,8 +131,13 @@ export interface HomeLinks {
   chzzk: ChzzkLinkState | null;
   soop: SoopLinkState | null;
   youtube: YoutubeLinkState | null;
-  /** 연동 코드를 한 번이라도 발급했는가(스트림키 존재) */
+  /** 연동 코드를 한 번이라도 발급했는가(스트림키 존재) — 연결했다는 뜻이 아니다. 「코드만 받은」 회원의 문구를 가르는 데만 쓴다 */
   streamKeyIssued: boolean | null;
+  /**
+   * 플러그인에 연동 코드를 넣었는가(서버의 연결 시각, POK-608). 준비 단계의 완료와 「연결됨」은 이것으로만 정한다 —
+   * 코드 발급으로 정하던 때는 플러그인 없는 회원에게 「이제 방송만 켜면 돼요」라고 했다
+   */
+  pluginPaired: boolean | null;
 }
 
 export interface HomeMockState {
@@ -583,6 +589,7 @@ export function useHomeMockState(): HomeMockState {
       soop: soop.data ?? null,
       youtube: youtube.data ?? null,
       streamKeyIssued: streamKey.data === undefined ? null : streamKey.data.issued === true,
+      pluginPaired: isPluginPaired(streamKey.data),
     }),
     [chzzk.data, soop.data, youtube.data, streamKey.data],
   );
@@ -595,8 +602,13 @@ export function useHomeMockState(): HomeMockState {
     // 방송 채널은 치지직·SOOP 둘 중 하나면 된다(POK-396)
     if ((links.chzzk?.linked || links.soop?.linked) && !store.channelLinked)
       store.setChannelLinked(true);
-    if (links.streamKeyIssued && !store.pluginLinked) store.markPluginLinked();
   }, [links]);
+  // 플러그인은 서버의 연결 시각대로 올리고 내린다(POK-608) — 코드 발급만으로 켜 둔 옛 값도 여기서 바로잡힌다.
+  // 코드 창을 닫은 뒤 OBS에 넣고 홈으로 돌아온 연결은 여기서 처음 보인다(분석 이벤트의 seen: later)
+  const streamKeyStatus = streamKey.data;
+  useEffect(() => {
+    if (streamKeyStatus !== undefined) syncPluginPaired(streamKeyStatus, 'later');
+  }, [streamKeyStatus]);
 
   const live =
     data.live === null

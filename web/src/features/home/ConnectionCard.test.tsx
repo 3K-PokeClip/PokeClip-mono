@@ -18,6 +18,7 @@ const base: HomeLinks = {
   soop: { linked: false },
   youtube: { linked: false },
   streamKeyIssued: true,
+  pluginPaired: true,
 };
 const chzzkOn = { linked: true, status: 'ACTIVE' as const, channelName: '재환의 방송' };
 const soopOn = { linked: true, status: 'ACTIVE' as const, nickname: '숲너구리' };
@@ -77,5 +78,44 @@ describe('ConnectionCard: 방송 채널 한 줄에 치지직·SOOP (POK-396)', (
       'href',
       '/settings/channels',
     );
+  });
+});
+
+describe('ConnectionCard: OBS 플러그인 줄은 연결 시각으로 정한다 (POK-608·609)', () => {
+  function pluginRow(links: HomeLinks) {
+    render(<ConnectionCard links={links} />);
+    return screen.getByText('OBS 플러그인').closest('li')!;
+  }
+
+  it('연결했으면 연결됨: 버튼이 없다', () => {
+    const row = pluginRow(base);
+    expect(row).toHaveTextContent('연결됨');
+    expect(row).toHaveTextContent('연동 코드로 연결했어요');
+    expect(within(row).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('코드만 받았으면 연결됨이 아니다: 남은 일과 「연결하기」', () => {
+    const row = pluginRow({ ...base, pluginPaired: false });
+    expect(row).not.toHaveTextContent('연결됨');
+    expect(row).toHaveTextContent('코드를 OBS에 넣으면 연결돼요');
+    expect(within(row).getByRole('link', { name: '연결하기' })).toHaveAttribute(
+      'href',
+      '/settings/plugin',
+    );
+  });
+
+  it('코드도 받지 않았으면 코드가 아니라 「설치하기」', () => {
+    const row = pluginRow({ ...base, streamKeyIssued: false, pluginPaired: false });
+    expect(within(row).getByRole('link', { name: '설치하기' })).toHaveAttribute(
+      'href',
+      '/settings/plugin',
+    );
+    expect(within(row).queryByRole('link', { name: /코드/ })).not.toBeInTheDocument();
+  });
+
+  it('상태를 못 읽었으면 확인 중: 버튼을 내밀지 않는다', () => {
+    const row = pluginRow({ ...base, streamKeyIssued: null, pluginPaired: null });
+    expect(row).toHaveTextContent('확인 중…');
+    expect(within(row).queryByRole('link')).not.toBeInTheDocument();
   });
 });

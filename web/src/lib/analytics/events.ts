@@ -71,6 +71,12 @@ export interface AnalyticsEvents {
   /** 플러그인 페어링 코드 발급(처음·재발급 모두) */
   pairing_code_issued: Record<string, never>;
   /**
+   * 플러그인에 연동 코드를 넣은 것을 웹이 처음 봄(POK-608) — 서버가 준 연결 시각(`lastPairedAt`)이 새로 생기거나 바뀌었을 때,
+   * 그 브라우저에서 연결마다 한 번. pairing_code_issued와 짝 → 「코드만 받고 못 넣은」 이탈률.
+   * seen: code_dialog=코드 창이 떠 있을 때 봄, later=창을 닫은 뒤에 봄(같은 화면에서 지켜보다가, 또는 홈·플러그인 화면에 돌아와서)
+   */
+  plugin_paired: { seen: 'code_dialog' | 'later' };
+  /**
    * 처음 사용 안내가 끝남. completed=마지막 단계에서 「다음」, skipped=「건너뛰기」,
    * auto=가리킬 화면 요소가 없어 저절로 끝남, later=환영 창의 「나중에 볼게요」(안내를 시작하지 않음)
    */
@@ -92,7 +98,7 @@ export interface AnalyticsEvents {
   /**
    * 플러그인 다운로드 창을 엶. 창을 연 뒤 받기까지 갔는지는 짝 이벤트 `plugin_download_clicked`로 본다 —
    * 코드만 받고 설치 파일은 안 받은 새 회원이 창까지는 열었는지 가르려고 둔다.
-   * from: guide=코드를 받은 적 없는 회원의 맨 위 설치 안내, banner=맨 아래 배너
+   * from: guide=플러그인을 연결한 적 없는 회원이 보는 연결 순서 카드의 1번, banner=맨 아래 배너
    */
   plugin_download_opened: { from: 'guide' | 'banner' };
   /**

@@ -17,7 +17,9 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -28,6 +30,7 @@ import java.util.concurrent.Future;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,11 +47,12 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
     private final TokenService tokenService;
     private final MeterRegistry meterRegistry;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate transactionTemplate;
 
     PairingCodeExchangeTest(MockMvc mockMvc, StreamKeyService streamKeyService,
                             UserService userService, UserRepository userRepository,
                             TokenService tokenService, MeterRegistry meterRegistry,
-                            JdbcTemplate jdbc) {
+                            JdbcTemplate jdbc, TransactionTemplate transactionTemplate) {
         this.mockMvc = mockMvc;
         this.streamKeyService = streamKeyService;
         this.userService = userService;
@@ -56,6 +60,7 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         this.tokenService = tokenService;
         this.meterRegistry = meterRegistry;
         this.jdbc = jdbc;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @BeforeEach
@@ -95,14 +100,78 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
     @Test
     void 코드를_두_번_발급해_교환해도_같은_키가_나온다() throws Exception {
         User user = newUser();
+        // 새 코드를 받으면 전 코드는 만료되므로(PR #539 2차 리뷰) 받은 차례대로 하나씩 쓴다 — PC 두 대를 붙이는 순서다
         String first = issueCode(user);
-        String second = issueCode(user);
-
         String a = exchange(first, "10.0.0.1").andReturn().getResponse().getContentAsString();
+        String second = issueCode(user);
         String b = exchange(second, "10.0.0.2").andReturn().getResponse().getContentAsString();
 
         assertThat(JsonPath.read(a, "$.passphrase").toString())
                 .isEqualTo(JsonPath.read(b, "$.passphrase").toString());
+    }
+
+    /**
+     * PR #539 2차 리뷰: 살아있는 코드는 회원당 하나다. 전 코드가 살아 있으면 그것을 넣어도 웹이 새 코드가 쓰인 것으로
+     * 읽어 새 코드 창이 「연결됐어요」로 바뀐다. 전 코드는 「이미 썼다」(409)가 아니라 만료(410)로 답한다 — 쓴 적이 없다.
+     */
+    @Test
+    void 새_코드를_받으면_전에_받은_코드는_만료된다() throws Exception {
+        User user = newUser();
+        String first = issueCode(user);
+        String second = issueCode(user);
+
+        exchange(first, "10.0.0.1")
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.reason").value("PAIRING_CODE_EXPIRED"));
+        exchange(second, "10.0.0.2").andExpect(status().isOk());
+    }
+
+    /** 쓰인 코드는 새 발급이 건드리지 않는다 — 다시 넣으면 여전히 「이미 썼다」(409)다. */
+    @Test
+    void 새_코드를_받아도_이미_쓴_코드는_409_그대로다() throws Exception {
+        User user = newUser();
+        String first = issueCode(user);
+        exchange(first, "10.0.0.1").andExpect(status().isOk());
+        issueCode(user);
+
+        exchange(first, "10.0.0.2")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.reason").value("PAIRING_CODE_ALREADY_USED"));
+    }
+
+    /**
+     * 🔴 연결 시각 기록이 실패해도 교환은 성공이다 — 커밋 뒤에 던지면 코드는 이미 쓰였는데 플러그인은 500을 받아 일회용
+     * 코드만 잃는다(2차 리뷰: 이 약속을 재는 테스트가 없었다). 칸에 값을 못 넣게 하는 CHECK를 잠깐 걸어 진짜로 실패시킨다.
+     */
+    @Test
+    void 연결_시각_기록이_실패해도_교환은_200이다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        jdbc.execute("ALTER TABLE stream_keys ADD CONSTRAINT test_block_last_paired "
+                + "CHECK (last_paired_at IS NULL) NOT VALID");
+        try {
+            exchange(code, "10.0.0.1")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.passphrase").exists());
+        } finally {
+            jdbc.execute("ALTER TABLE stream_keys DROP CONSTRAINT test_block_last_paired");
+        }
+    }
+
+    /** 커밋 뒤 기록은 순서가 뒤집힐 수 있다 — 늦게 도착한 앞선 시각이 더 늦은 연결 시각을 덮지 않는다(2차 리뷰). */
+    @Test
+    void 연결_시각은_앞으로만_간다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        Instant later = Instant.parse("2026-11-19T05:00:00Z");
+        streamKeyService.markPaired(material, later);
+
+        streamKeyService.markPaired(material, later.minusSeconds(1));
+
+        java.sql.Timestamp at = jdbc.queryForObject(
+                "SELECT last_paired_at FROM stream_keys WHERE user_id = ? AND revoked_at IS NULL",
+                java.sql.Timestamp.class, user.getId());
+        assertThat(at.toInstant()).isEqualTo(later);
     }
 
     @Test
@@ -295,6 +364,94 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * POK-607: 웹이 「코드만 받았다」와 「코드를 OBS에 넣었다」를 가르는 유일한 근거다.
+     * 발급만으로 시각이 생기면(첫 단언) 플러그인 없는 회원이 연결된 것으로 보인다.
+     */
+    @Test
+    void 교환에_성공하면_상태_응답에_연결_시각이_실린다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        keyStatus(user).andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+
+        exchange(code, "10.0.0.1").andExpect(status().isOk());
+
+        keyStatus(user)
+                .andExpect(jsonPath("$.issued").value(true))
+                .andExpect(jsonPath("$.lastPairedAt").exists());
+    }
+
+    /** 거절된 시도는 연결이 아니다. 만료된 코드를 넣은 회원에게 웹이 「연결됐어요」라고 하면 안 된다. */
+    @Test
+    void 교환에_실패하면_연결_시각이_생기지_않는다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        jdbc.update("UPDATE pairing_codes SET expires_at = now() - INTERVAL '1 minute'");
+
+        exchange(code, "10.0.0.1").andExpect(status().isGone());
+
+        keyStatus(user).andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+    }
+
+    /** UPDATE의 조건에서 회원이 빠지면 한 사람의 교환이 모든 키에 시각을 남긴다. */
+    @Test
+    void 남의_교환은_내_연결_시각을_만들지_않는다() throws Exception {
+        User me = newUser();
+        issueCode(me);
+        // 이메일이 같으면 둘째 회원이 안 만들어진다(이메일은 계정마다 하나다)
+        User other = userService.findOrCreate(
+                "sub-" + UUID.randomUUID(), "b@example.com", "남의 계정", null);
+        String othersCode = issueCode(other);
+
+        exchange(othersCode, "10.0.0.1").andExpect(status().isOk());
+
+        keyStatus(other).andExpect(jsonPath("$.lastPairedAt").exists());
+        keyStatus(me).andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+    }
+
+    /**
+     * PR #539 리뷰: 교환과 탈퇴가 두 행을 반대 순서로 잠그면 PostgreSQL이 한쪽을 deadlock으로 끊는다.
+     * 탈퇴는 키 행(revokeAlive) → 코드 행(consumeAliveOfUser) 순서다. 그 사이에 교환이 들어오게 만든다 —
+     * 교환이 코드 행을 쥔 채 키 행을 기다리면(연결 시각을 교환 트랜잭션 안에서 적으면) 아래 「탈퇴」의
+     * 코드 행 UPDATE와 서로 기다려 한쪽이 예외로 끝난다. 연결 시각을 커밋 뒤에 적으면 교환은 코드 행을
+     * 놓은 뒤 키 행을 기다리므로 둘 다 끝난다.
+     */
+    @Test
+    void 탈퇴가_키_행을_쥔_사이에_교환해도_서로_막지_않는다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        CountDownLatch keyLocked = new CountDownLatch(1);
+
+        try (ExecutorService pool = Executors.newSingleThreadExecutor()) {
+            // 탈퇴(WithdrawalService.withdraw)와 같은 순서: 키 행을 잠그고, 잠시 뒤 코드 행을 잠근다
+            Future<Integer> withdrawal = pool.submit(() -> transactionTemplate.execute(tx -> {
+                jdbc.update("UPDATE stream_keys SET revoked_at = now() "
+                        + "WHERE user_id = ? AND revoked_at IS NULL", user.getId());
+                keyLocked.countDown();
+                try {
+                    // 교환이 코드 행을 잡고 키 행 앞에 설 시간을 준다
+                    Thread.sleep(700);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return jdbc.update("UPDATE pairing_codes SET used_at = now() "
+                        + "WHERE user_id = ? AND used_at IS NULL AND expires_at > now()", user.getId());
+            }));
+            keyLocked.await();
+
+            int exchangeStatus = exchange(code, "10.0.0.1").andReturn().getResponse().getStatus();
+
+            // deadlock이면 탈퇴 쪽이 DeadlockLoserDataAccessException으로, 또는 교환이 500으로 끝난다
+            assertThat(withdrawal.get()).as("탈퇴가 교환 때문에 끊겼다").isNotNull();
+            assertThat(exchangeStatus).as("교환이 탈퇴 때문에 끊겼다").isEqualTo(200);
+        }
+        // 탈퇴가 폐기한 키에는 「연결했다」가 남지 않는다
+        Integer marked = jdbc.queryForObject(
+                "SELECT count(*) FROM stream_keys WHERE user_id = ? AND last_paired_at IS NOT NULL",
+                Integer.class, user.getId());
+        assertThat(marked).isZero();
+    }
+
     @Test
     void 로그인하지_않아도_교환할_수_있다() throws Exception {
         String code = issueCode(newUser());
@@ -311,6 +468,12 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
                 })
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"" + code + "\"}"));
+    }
+
+    private ResultActions keyStatus(User user) throws Exception {
+        return mockMvc.perform(get("/api/stream-keys")
+                        .header("Authorization", "Bearer " + tokenService.issue(user).accessToken()))
+                .andExpect(status().isOk());
     }
 
     private String issueCode(User user) throws Exception {

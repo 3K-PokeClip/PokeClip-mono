@@ -37,7 +37,7 @@ describe('useOnboardingStore', () => {
 
   it('플래그 변이는 localStorage에 기록된다', () => {
     useOnboardingStore.getState().setChannelLinked(true);
-    useOnboardingStore.getState().markPluginLinked();
+    useOnboardingStore.getState().setPluginLinked(true);
 
     const raw = window.localStorage.getItem(STORAGE_KEY);
     expect(raw).not.toBeNull();
@@ -87,7 +87,7 @@ describe('useOnboardingStore', () => {
       JSON.stringify({ v: 1, welcomeSeen: true, channelLinked: true }),
     );
 
-    useOnboardingStore.getState().markPluginLinked();
+    useOnboardingStore.getState().setPluginLinked(true);
 
     const s = useOnboardingStore.getState();
     expect(s.welcomeSeen).toBe(true);

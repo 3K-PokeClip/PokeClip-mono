@@ -7,7 +7,9 @@ const base: HomeLinks = {
   soop: { linked: false },
   youtube: { linked: false },
   streamKeyIssued: true,
+  pluginPaired: true,
 };
+const pluginStep = (links: HomeLinks) => setupSteps(links).find((s) => s.id === 'plugin')!;
 const chzzkOn = { linked: true, status: 'ACTIVE' as const, channelName: '재환의 방송' };
 const soopOn = { linked: true, status: 'ACTIVE' as const, nickname: '숲너구리' };
 const channelStep = (links: HomeLinks) => setupSteps(links).find((s) => s.id === 'chzzk')!;
@@ -61,17 +63,61 @@ describe('setupSteps: 방송 채널 단계는 치지직·SOOP 둘 중 하나 (PO
   });
 });
 
+describe('setupSteps: 플러그인 단계는 연결돼야 끝난다 (POK-608·609)', () => {
+  it('연결 시각이 있으면 완료', () => {
+    expect(pluginStep(base)).toMatchObject({ done: true, unknown: false, doneNote: '연결 완료' });
+  });
+
+  it('코드만 받았으면 완료가 아니다: 남은 일(OBS에 넣기)을 말하고 연결하기로 보낸다', () => {
+    // 2026-11-18~19 새 회원 넷이 코드를 받았고 OBS에 넣은 사람은 없었다 — 그때는 이 줄이 완료였다
+    expect(pluginStep({ ...base, pluginPaired: false })).toMatchObject({
+      done: false,
+      unknown: false,
+      desc: '코드를 OBS의 PokeClip 창에 넣으면 연결돼요',
+      action: { label: '연결하기', href: '/settings/plugin' },
+    });
+  });
+
+  it('코드도 받지 않았으면 코드가 아니라 설치부터 권한다', () => {
+    const step = pluginStep({ ...base, streamKeyIssued: false, pluginPaired: false });
+    expect(step).toMatchObject({
+      done: false,
+      desc: '플러그인을 설치하고 연동 코드로 연결해요',
+      action: { label: '설치하기', href: '/settings/plugin' },
+    });
+    expect(step.action!.label).not.toMatch(/코드/);
+  });
+
+  it('상태를 못 읽었으면 확인 중: 버튼을 내밀지 않게 unknown', () => {
+    expect(pluginStep({ ...base, streamKeyIssued: null, pluginPaired: null })).toMatchObject({
+      done: false,
+      unknown: true,
+    });
+  });
+});
+
 describe('isWaitingForBroadcast: 방송 채널은 둘 중 하나 (C8)', () => {
-  it('SOOP만 연동 + 코드 발급 → 방송만 남았다', () => {
+  it('SOOP만 연동 + 플러그인 연결 → 방송만 남았다', () => {
     expect(isWaitingForBroadcast({ ...base, soop: soopOn })).toBe(true);
   });
 
-  it('치지직만 연동 + 코드 발급 → 방송만 남았다', () => {
+  it('치지직만 연동 + 플러그인 연결 → 방송만 남았다', () => {
     expect(isWaitingForBroadcast({ ...base, chzzk: chzzkOn })).toBe(true);
   });
 
-  it('둘 다 미연동이거나 코드가 없으면 아니다', () => {
+  it('둘 다 미연동이거나 플러그인을 연결하지 않았으면 아니다', () => {
     expect(isWaitingForBroadcast(base)).toBe(false);
-    expect(isWaitingForBroadcast({ ...base, soop: soopOn, streamKeyIssued: false })).toBe(false);
+    expect(isWaitingForBroadcast({ ...base, soop: soopOn, pluginPaired: false })).toBe(false);
+  });
+
+  it('코드 발급만으로는 아니다 — 플러그인 없는 회원에게 「이제 방송만 켜면 돼요」라고 했다 (POK-608)', () => {
+    expect(
+      isWaitingForBroadcast({
+        ...base,
+        chzzk: chzzkOn,
+        streamKeyIssued: true,
+        pluginPaired: false,
+      }),
+    ).toBe(false);
   });
 });

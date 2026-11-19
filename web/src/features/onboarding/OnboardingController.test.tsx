@@ -114,7 +114,7 @@ describe('OnboardingController', () => {
     expect(push).toHaveBeenCalledWith('/settings/channels');
   });
 
-  it('2단계의 연동 코드 발급 CTA는 플러그인 설정으로 간다 (DoD)', async () => {
+  it('2단계의 플러그인 설치하기 CTA는 플러그인 설정으로 간다 (DoD)', async () => {
     renderWithHome();
 
     fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
@@ -122,7 +122,7 @@ describe('OnboardingController', () => {
 
     expect(screen.getByRole('dialog', { name: /시작 가이드 2\/5/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '연동 코드 발급' }));
+    fireEvent.click(screen.getByRole('button', { name: '플러그인 설치하기' }));
     expect(push).toHaveBeenCalledWith('/settings/plugin');
   });
 
@@ -137,7 +137,7 @@ describe('OnboardingController', () => {
     fireEvent.click(await screen.findByRole('button', { name: '둘러보기 시작' }));
     expect(screen.getByRole('button', { name: '채널 연동하기' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: '다음' }));
-    expect(screen.getByRole('button', { name: '연동 코드 발급' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '플러그인 설치하기' })).toBeDisabled();
     expect(push).not.toHaveBeenCalled();
   });
 

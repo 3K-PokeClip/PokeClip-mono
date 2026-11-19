@@ -51,7 +51,9 @@ async function settle() {
 }
 
 async function clickIssue() {
-  fireEvent.click(await screen.findByRole('button', { name: '코드 발급' }));
+  // 연결한 적 없는 회원은 연결 순서 카드에서 받는다 — 2번을 눌러야 3번 「코드 받기」가 열린다(POK-609)
+  fireEvent.click(await screen.findByRole('button', { name: '다시 켰어요' }));
+  fireEvent.click(screen.getByRole('button', { name: '코드 받기' }));
 }
 
 beforeEach(() => {
@@ -127,6 +129,7 @@ describe('코드 발급 중 세션 변경 (POK-424)', () => {
     release(issued());
 
     expect(await screen.findByText(CODE)).toBeInTheDocument();
-    expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+    // 코드를 띄운 것까지가 발급의 일이다 — 온보딩 2단계는 코드가 OBS에 들어가야 올라간다(POK-608)
+    expect(useOnboardingStore.getState().pluginLinked).toBe(false);
   });
 });
