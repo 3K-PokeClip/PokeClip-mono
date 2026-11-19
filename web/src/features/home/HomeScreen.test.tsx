@@ -255,8 +255,10 @@ describe('HomeScreen', () => {
       // 방송 채널은 플랫폼을 가리지 않는다 — 치지직만 말하지 않는다
       expect(screen.getByText('방송 채널 연동')).toBeInTheDocument();
       expect(screen.getByText('방송 플랫폼을 연결하면 방송을 알아서 찾아요')).toBeInTheDocument();
-      // 방송 채널·플러그인은 순서가 없다 — 지금 단계가 아니어도 버튼이 있다
-      expect(screen.getByRole('link', { name: '코드 받기' })).toHaveAttribute(
+      // 방송 채널·플러그인은 순서가 없다 — 지금 단계가 아니어도 버튼이 있다.
+      // 버튼은 코드가 아니라 설치로 이끈다: 「코드 받기」였을 때 플러그인 없이 코드부터 받고 떠났다(POK-609)
+      expect(screen.queryByRole('link', { name: '코드 받기' })).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: '설치하기' })).toHaveAttribute(
         'href',
         '/settings/plugin',
       );
@@ -265,10 +267,14 @@ describe('HomeScreen', () => {
       expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
     });
 
-    it('방송 채널·연동 코드가 끝났으면 방송을 기다리고, 시작 가이드 체크에도 올린다', async () => {
+    it('방송 채널·플러그인 연결이 끝났으면 방송을 기다리고, 시작 가이드 체크에도 올린다', async () => {
       serve({
         chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
-        streamKey: { issued: true, createdAt: '2026-10-20T00:00:00Z' },
+        streamKey: {
+          issued: true,
+          createdAt: '2026-10-20T00:00:00Z',
+          lastPairedAt: '2026-10-20T00:05:00Z',
+        },
       });
       renderWithProviders(<HomeScreen />);
 
@@ -290,10 +296,32 @@ describe('HomeScreen', () => {
       });
     });
 
+    it('코드만 받고 OBS에 넣지 않았으면 「이제 방송만 켜면 돼요」라고 하지 않는다 (POK-608)', async () => {
+      // 예전에는 코드 발급만으로 2단계를 켰다 — 그 값이 브라우저에 남아 있어도 서버 값대로 내린다
+      useOnboardingStore.setState({ pluginLinked: true });
+      serve({
+        chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
+        // 키는 첫 코드 발급 때 생긴다: 연결 시각(lastPairedAt)이 없으면 플러그인에 넣은 적이 없다
+        streamKey: { issued: true, createdAt: '2026-10-20T00:00:00Z' },
+      });
+      renderWithProviders(<HomeScreen />);
+
+      expect(
+        await screen.findByRole('heading', { level: 1, name: '첫 클립까지 3단계 남았어요' }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('기다리는 중')).not.toBeInTheDocument();
+      expect(screen.getByText('코드를 OBS의 PokeClip 창에 넣으면 연결돼요')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: '연결하기' })).toHaveAttribute(
+        'href',
+        '/settings/plugin',
+      );
+      await waitFor(() => expect(useOnboardingStore.getState().pluginLinked).toBe(false));
+    });
+
     it('SOOP만 연동해도 방송만 남았다고 하고 시작 가이드 1단계를 세운다 (POK-396)', async () => {
       serve({
         soop: { linked: true, status: 'ACTIVE', nickname: '숲너구리' },
-        streamKey: { issued: true },
+        streamKey: { issued: true, lastPairedAt: '2026-10-20T00:05:00Z' },
       });
       renderWithProviders(<HomeScreen />);
 
@@ -571,7 +599,7 @@ describe('HomeScreen', () => {
     expect(screen.queryByRole('heading', { name: '만료 임박 VOD' })).not.toBeInTheDocument();
   });
 
-  it('연결 상태 — 연결됨은 표시만, 끊긴 연동은 다시 연결, 코드 전이면 코드 받기', async () => {
+  it('연결 상태 — 연결됨은 표시만, 끊긴 연동은 다시 연결, 플러그인 전이면 설치하기', async () => {
     serve({
       past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
       chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
@@ -584,7 +612,7 @@ describe('HomeScreen', () => {
     const rows = within(aside).getAllByRole('listitem');
     // 줄 이름은 플랫폼을 가리지 않고, 연결된 플랫폼은 설명 앞에 붙는다(치지직·SOOP·씨미)
     expect(rows[0]).toHaveTextContent('방송 채널치지직 · 재환의 방송 연결됨');
-    expect(within(rows[1]!).getByRole('link', { name: '코드 받기' })).toHaveAttribute(
+    expect(within(rows[1]!).getByRole('link', { name: '설치하기' })).toHaveAttribute(
       'href',
       '/settings/plugin',
     );
@@ -609,7 +637,7 @@ describe('HomeScreen', () => {
     expect(youtube).not.toHaveTextContent('연결됨');
   });
 
-  it('OBS 플러그인은 코드를 발급했어도 「연결됨」이라 하지 않는다 — 웹은 연결 상태를 모른다(#298 계약)', async () => {
+  it('OBS 플러그인은 코드를 발급했어도 「연결됨」이라 하지 않는다 — 발급은 OBS에 넣었다는 증거가 아니다(#298 계약)', async () => {
     serve({
       past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
       chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
@@ -620,9 +648,31 @@ describe('HomeScreen', () => {
 
     const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
     const plugin = within(aside).getAllByRole('listitem')[1]!;
-    await within(plugin).findByText('코드 발급됨');
-    expect(plugin).toHaveTextContent('연결 확인은 OBS 독에서 해요');
+    // 남은 일과 갈 곳을 준다 — 예전의 무채색 「코드 발급됨」은 다 끝난 것처럼 읽혔다(POK-608)
+    expect(await within(plugin).findByRole('link', { name: '연결하기' })).toHaveAttribute(
+      'href',
+      '/settings/plugin',
+    );
+    expect(plugin).toHaveTextContent('코드를 OBS에 넣으면 연결돼요');
     expect(plugin).not.toHaveTextContent('연결됨');
+    expect(within(aside).queryByText('준비 완료')).not.toBeInTheDocument();
+    expect(within(aside).getByText('확인 필요')).toBeInTheDocument();
+  });
+
+  it('OBS 플러그인은 서버가 연결 시각을 줄 때만 「연결됨」이다 (POK-608)', async () => {
+    serve({
+      past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
+      chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
+      youtube: { linked: true, channelName: '재환 클립', status: 'ACTIVE' },
+      streamKey: { issued: true, lastPairedAt: '2026-10-20T00:05:00Z' },
+    });
+    renderWithProviders(<HomeScreen />);
+
+    const aside = await screen.findByRole('complementary', { name: '연결 상태·팁' });
+    const plugin = within(aside).getAllByRole('listitem')[1]!;
+    await within(plugin).findByText('연결됨');
+    expect(plugin).toHaveTextContent('연동 코드로 연결했어요');
+    expect(within(plugin).queryByRole('link')).not.toBeInTheDocument();
     expect(within(aside).getByText('준비 완료')).toBeInTheDocument();
   });
 
@@ -675,7 +725,7 @@ describe('HomeScreen', () => {
     expect(channelRow).toHaveTextContent('확인 중…');
     expect(within(channelRow).queryByRole('link')).not.toBeInTheDocument();
     // 상태를 아는 플러그인 단계가 지금 할 일이 된다
-    expect(within(hero).getByRole('link', { name: '코드 받기' })).toHaveAttribute(
+    expect(within(hero).getByRole('link', { name: '설치하기' })).toHaveAttribute(
       'href',
       '/settings/plugin',
     );
@@ -1354,7 +1404,7 @@ describe('HomeScreen: 남의 채널(POK-390)', () => {
     );
   }
 
-  it('설정 가이드의 연동·코드 받기 버튼이 비활성이고 링크가 아니다: 인사·단계는 그대로', async () => {
+  it('설정 가이드의 연동·설치하기 버튼이 비활성이고 링크가 아니다: 인사·단계는 그대로', async () => {
     serve();
     asEditor();
 
@@ -1362,10 +1412,10 @@ describe('HomeScreen: 남의 채널(POK-390)', () => {
     expect(within(hero).getByText('방송 채널 연동')).toBeInTheDocument();
     expect(within(hero).queryByRole('link')).not.toBeInTheDocument();
     expect(within(hero).getByRole('button', { name: '채널 연동' })).toBeDisabled();
-    expect(within(hero).getByRole('button', { name: '코드 받기' })).toBeDisabled();
+    expect(within(hero).getByRole('button', { name: '설치하기' })).toBeDisabled();
   });
 
-  it('연결 상태 카드는 그대로 보이고 다시 연결·코드 받기 버튼만 비활성이다', async () => {
+  it('연결 상태 카드는 그대로 보이고 다시 연결·설치하기 버튼만 비활성이다', async () => {
     serve({
       past: [pastRow('past-1', new Date(Date.now() - 86_400_000))],
       chzzk: { linked: true, channelName: '재환의 방송', status: 'ACTIVE' },
@@ -1382,7 +1432,7 @@ describe('HomeScreen: 남의 채널(POK-390)', () => {
     // aside 전체가 아니라 연결 상태 줄만 본다: 같은 aside의 포키의 팁은 무작위로 링크를 가진다
     for (const row of rows.slice(0, 3))
       expect(within(row).queryByRole('link')).not.toBeInTheDocument();
-    expect(within(rows[1]!).getByRole('button', { name: '코드 받기' })).toBeDisabled();
+    expect(within(rows[1]!).getByRole('button', { name: '설치하기' })).toBeDisabled();
     expect(within(rows[2]!).getByRole('button', { name: '다시 연결' })).toBeDisabled();
   });
 });

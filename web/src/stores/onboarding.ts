@@ -32,7 +32,11 @@ interface OnboardingState extends OnboardingFlags {
   skipTour: () => void;
   completeTour: () => void;
   setChannelLinked: (linked: boolean) => void;
-  markPluginLinked: () => void;
+  /**
+   * 플러그인에 연동 코드를 넣었나(서버의 연결 시각, POK-608). 코드 발급만으로는 올리지 않는다 —
+   * 플러그인 없이 코드만 받은 회원에게 2단계 완료 체크가 붙었다. 서버가 「아직」이라고 하면 내린다.
+   */
+  setPluginLinked: (linked: boolean) => void;
 }
 
 function readStoredFlags(): Partial<OnboardingFlags> {
@@ -90,7 +94,7 @@ export const useOnboardingStore = create<OnboardingState>()((set, get) => {
     skipTour: () => update({ tourDone: true, tourStep: null }),
     completeTour: () => update({ tourDone: true, tourStep: null }),
     setChannelLinked: (linked) => update({ channelLinked: linked }),
-    markPluginLinked: () => update({ pluginLinked: true }),
+    setPluginLinked: (linked) => update({ pluginLinked: linked }),
   };
 });
 

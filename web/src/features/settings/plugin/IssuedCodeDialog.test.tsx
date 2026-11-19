@@ -2,19 +2,24 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { IssuedCodeDialog } from '@/features/settings/plugin/IssuedCodeDialog';
 
-// 화면 결합 흐름(발급→모달 표시→닫기)은 PluginSettingsScreen.test.tsx가 맡고,
-// 여기는 모달 자체의 두 상태(코드 표시 / 만료)를 직접 검증한다.
+// 화면 결합 흐름(발급→모달 표시→닫기, 연결을 지켜보다 바뀌기)은 PluginSettingsScreen.test.tsx가 맡고,
+// 여기는 모달 자체의 세 상태(코드 표시 / 만료 / 연결됨)를 직접 검증한다.
 
 // 마감은 클라 시계 앵커(epoch ms) — 훅이 응답 수신 순간 + TTL로 만들어 넘기는 값 (리뷰 #74)
 function deadlineIn(minutes: number) {
   return Date.now() + minutes * 60 * 1000;
 }
 
+/** 띄워 둘 코드 — 발급한 순간엔 연결한 적이 없었다(pairedBefore 없음) */
+function codeUntil(deadline: number) {
+  return { code: 'KQ4M-7X2P', deadline, pairedBefore: undefined };
+}
+
 describe('IssuedCodeDialog', () => {
   it('코드 원문·카운트다운·1회 표시 경고를 함께 보여준다', () => {
     render(
       <IssuedCodeDialog
-        issued={{ code: 'KQ4M-7X2P', deadline: deadlineIn(10) }}
+        issued={codeUntil(deadlineIn(10))}
         onClose={() => {}}
         onIssueNew={() => {}}
       />,
@@ -35,7 +40,7 @@ describe('IssuedCodeDialog', () => {
     try {
       render(
         <IssuedCodeDialog
-          issued={{ code: 'KQ4M-7X2P', deadline: deadlineIn(10) }}
+          issued={codeUntil(deadlineIn(10))}
           onClose={() => {}}
           onIssueNew={() => {}}
         />,
@@ -61,7 +66,7 @@ describe('IssuedCodeDialog', () => {
     const onClose = vi.fn();
     render(
       <IssuedCodeDialog
-        issued={{ code: 'KQ4M-7X2P', deadline: deadlineIn(10) }}
+        issued={codeUntil(deadlineIn(10))}
         onClose={onClose}
         onIssueNew={() => {}}
       />,
@@ -75,7 +80,7 @@ describe('IssuedCodeDialog', () => {
     const onIssueNew = vi.fn();
     render(
       <IssuedCodeDialog
-        issued={{ code: 'KQ4M-7X2P', deadline: Date.now() - 1_000 }}
+        issued={codeUntil(Date.now() - 1_000)}
         onClose={() => {}}
         onIssueNew={onIssueNew}
       />,
@@ -88,5 +93,58 @@ describe('IssuedCodeDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '새 코드 발급' }));
     expect(onIssueNew).toHaveBeenCalledTimes(1);
+  });
+
+  it('코드를 띄워 둔 동안은 넣으면 이 창이 알려 준다고 안내한다 (POK-608)', () => {
+    render(
+      <IssuedCodeDialog
+        issued={codeUntil(deadlineIn(10))}
+        onClose={() => {}}
+        onIssueNew={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('OBS에 코드를 넣으면 이 창이 바로 알려 드려요')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: '플러그인이 연결됐어요' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('코드가 OBS에 들어가면 원문·카운트다운을 치우고 연결됐다고 알린다 (POK-608)', () => {
+    const onClose = vi.fn();
+    render(
+      <IssuedCodeDialog
+        issued={codeUntil(deadlineIn(10))}
+        paired
+        onClose={onClose}
+        onIssueNew={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: '플러그인이 연결됐어요' })).toBeInTheDocument();
+    // 상태 변화라 낭독돼야 한다 — 회원은 OBS를 보다 돌아왔다
+    expect(screen.getByRole('status')).toHaveTextContent('OBS에서 코드를 확인했어요');
+    // 쓰인 코드는 더 보일 이유가 없다
+    expect(screen.queryByText('KQ4M-7X2P')).not.toBeInTheDocument();
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument();
+    expect(screen.queryByText(/10분 동안만/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '확인' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('만료 시각이 지난 뒤에 연결을 봐도 만료가 아니라 연결됐다고 한다 — 쓰인 코드는 만료될 수 없다', () => {
+    render(
+      <IssuedCodeDialog
+        issued={codeUntil(Date.now() - 1_000)}
+        paired
+        onClose={() => {}}
+        onIssueNew={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: '플러그인이 연결됐어요' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '코드가 만료됐어요' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '새 코드 발급' })).not.toBeInTheDocument();
   });
 });

@@ -7,14 +7,14 @@ import type { HomeLinks } from './useHomeMockState';
 
 // 홈 오른쪽 — 연결 상태(POK-378). 발행 현황·만료 임박은 실데이터가 자주 비어 이 카드로 바꿨다.
 // 연동 창구(방송 채널·유튜브·스트림키)는 늘 답을 주므로 비는 일이 없다. 카드당 상태색 하나 — 「연결됨」만 강조색, 나머지는 무채색 버튼.
-// OBS 플러그인은 「연결됨」이라 하지 않는다 — 웹은 플러그인의 지금 연결 상태를 모르고 `issued`는 키 발급 여부일 뿐이다
-// (web/README 「플러그인 화면 계약」, #298). 발급했으면 무채색 「코드 발급됨」만 적고 연결 확인은 OBS 독에 맡긴다.
-// 플러그인 → 서버 신호(연결 시각 등)가 생기면 그때 「연결됨」으로 올린다.
+// OBS 플러그인의 「연결됨」은 서버의 연결 시각(코드가 OBS에 들어간 때)이 있을 때만이다(POK-608) — `issued`는 키 발급
+// 여부일 뿐이라(web/README 「플러그인 화면 계약」, #298) 코드만 받은 회원은 「연결됨」이 아니라 남은 일과 버튼을 본다.
+// 지금도 붙어 있는지는 웹이 모른다(플러그인이 연결을 끊어도 서버에 신호가 없다) — 그 확인은 OBS 독의 몫이다.
 // 방송 채널은 치지직·SOOP을 한 줄(「방송 채널」)에 함께 센다(POK-396, 사용자 결정): 둘 중 하나라도 연동이면 연결됨이고
 // 연결된 플랫폼을 설명 앞에 붙인다. 씨미 창구가 생기면 같은 줄에 더한다.
 
-/** ok=연결됨(서버가 확인) · ready=할 일은 끝났지만 연결은 웹이 모른다 · off=할 일 남음 · unknown=못 읽음 */
-type RowState = 'ok' | 'ready' | 'off' | 'unknown';
+/** ok=연결됨(서버가 확인) · off=할 일 남음 · unknown=못 읽음 */
+type RowState = 'ok' | 'off' | 'unknown';
 
 interface Row {
   key: string;
@@ -23,8 +23,6 @@ interface Row {
   /** 설명에 채널 이름·닉네임이 들어 있다 — 세션 녹화에서 설명을 가린다(POK-572) */
   masked?: boolean;
   state: RowState;
-  /** ready일 때 오른쪽에 무채색으로 적는 말 */
-  readyLabel?: string;
   action?: { label: string; href: string };
 }
 
@@ -69,23 +67,28 @@ function rowsOf(links: HomeLinks): Row[] {
     };
   };
   const plugin: Row =
-    links.streamKeyIssued === null
+    links.pluginPaired === null
       ? { key: 'plugin', name: 'OBS 플러그인', detail: '확인 중…', state: 'unknown' }
-      : links.streamKeyIssued
-        ? {
-            key: 'plugin',
-            name: 'OBS 플러그인',
-            detail: '연결 확인은 OBS 독에서 해요',
-            state: 'ready',
-            readyLabel: '코드 발급됨',
-          }
-        : {
-            key: 'plugin',
-            name: 'OBS 플러그인',
-            detail: '코드 발급 전',
-            state: 'off',
-            action: { label: '코드 받기', href: '/settings/plugin' },
-          };
+      : links.pluginPaired
+        ? { key: 'plugin', name: 'OBS 플러그인', detail: '연동 코드로 연결했어요', state: 'ok' }
+        : links.streamKeyIssued
+          ? {
+              // 코드는 받았지만 연결 시각이 없다 — 「연결 안 됨」이라 단정하지 않고 남은 일을 말한다
+              // (연결 시각 칸이 생기기 전에 붙인 계정도 여기로 온다)
+              key: 'plugin',
+              name: 'OBS 플러그인',
+              detail: '코드를 OBS에 넣으면 연결돼요',
+              state: 'off',
+              action: { label: '연결하기', href: '/settings/plugin' },
+            }
+          : {
+              key: 'plugin',
+              name: 'OBS 플러그인',
+              detail: '연결 전',
+              state: 'off',
+              // 「코드 받기」였다 — 설치가 먼저다(POK-609). 버튼 폭이 84u로 고정이라 줄 이름(OBS 플러그인)에 기대 짧게 쓴다
+              action: { label: '설치하기', href: '/settings/plugin' },
+            };
   return [broadcastChannel(links, channel), plugin, channel('youtube', '유튜브', links.youtube)];
 }
 
@@ -140,8 +143,8 @@ export function ConnectionCard({
   actionsDisabled?: boolean;
 }) {
   const rows = rowsOf(links);
-  // 플러그인은 연결을 모르므로 「모두 연결됨」이 아니라 「준비 완료」라 한다
-  const note = rows.every((r) => r.state === 'ok' || r.state === 'ready')
+  // 셋 다 서버가 확인한 연결이다. 그래도 「모두 연결됨」이 아니라 「준비 완료」라 한다 — 플러그인이 지금 붙어 있는지는 모른다
+  const note = rows.every((r) => r.state === 'ok')
     ? '준비 완료'
     : rows.some((r) => r.state === 'off')
       ? '확인 필요'
@@ -169,8 +172,6 @@ export function ConnectionCard({
               <span className={styles.connOk}>
                 <Check aria-hidden /> 연결됨
               </span>
-            ) : r.state === 'ready' ? (
-              <span className={styles.connReady}>{r.readyLabel}</span>
             ) : r.action && actionsDisabled ? (
               <Button variant="outline" size="sm" disabled className={styles.connAction}>
                 {r.action.label}
