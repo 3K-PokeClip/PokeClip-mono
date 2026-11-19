@@ -112,12 +112,18 @@ public class StreamKeyService {
      * 다음 방송에서 저절로 낫게 한다. 이미 있으면 건드리지 않는다: 이 칸은 「코드가 쓰인 시각」이고 웹은 그 값이
      * 새 코드의 발급 뒤인지로 연결을 알아챈다. 칸이 채워지면 이 줄은 다시 돌지 않는다(키당 한 번).
      *
+     * <p>🔴 <b>지금 시각이 아니라 키를 만든 시각으로 채운다.</b> 언제 코드를 넣었는지는 모른다 — 확실한 것은
+     * 「이 키가 생긴 뒤 언젠가」뿐이다. 지금 시각으로 채우면, 회원이 새 코드를 받아 창을 띄워 둔 사이 이미 키를 가진
+     * OBS가 방송을 켤 때 그 값이 새 코드의 발급 뒤라 웹이 넣지도 않은 코드를 「연결됐어요」로 읽는다(PR #539 2차
+     * 리뷰). 키를 만든 시각은 그 키로 받은 어떤 코드보다 앞서 그럴 일이 없다. 대가로 카드의 「마지막 연결」 날짜가
+     * 실제보다 이를 수 있다.
+     *
      * <p>🔴 <b>실패해도 확인 결과는 그대로 돌려준다.</b> 이 메서드가 던지면 Media는 「Auth 장애」로 읽고 송출을
      * 거절한다 — 화면 안내용 시각 하나 때문에 방송이 막히면 안 된다. 남기기만 한다.
      */
     private void backfillPaired(StreamKey key) {
         try {
-            streamKeyRepository.markPairedIfUnset(key.getId(), Instant.now());
+            streamKeyRepository.markPairedIfUnset(key.getId(), key.getCreatedAt());
         } catch (RuntimeException e) {
             log.warn("auth.streamkey.backfill_paired_failed userId={} causeType={}",
                     key.getUserId(), e.getClass().getSimpleName());

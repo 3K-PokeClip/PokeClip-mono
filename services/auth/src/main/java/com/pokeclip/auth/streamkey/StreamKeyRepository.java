@@ -39,23 +39,29 @@ public interface StreamKeyRepository extends JpaRepository<StreamKey, Long> {
      * 교환 안에서 부르면 코드 행(markUsed)을 쥔 채 키 행을 기다리는데, 탈퇴는 키 행(revokeAlive)을 쥔 채
      * 코드 행(consumeAliveOfUser)을 기다려 둘이 엇갈린다(deadlock). 커밋 뒤 호출에서는 바깥 트랜잭션에
      * 참여하지 않도록 REQUIRES_NEW여야 한다(스프링 TransactionSynchronization#afterCommit 계약).
+     *
+     * <p>🔴 <b>앞으로만 간다</b> — {@code now}는 교환 요청이 들어온 시각이고 커밋 뒤 기록은 순서가 뒤집힐 수 있다.
+     * 같은 키로 거의 동시에 교환 둘이 들어와 늦게 시작한 쪽이 먼저 적으면, 조건 없이 덮을 때 앞선 시각이 남아
+     * 웹이 지켜보던 코드의 발급 시각보다 앞서 연결을 놓친다(PR #539 리뷰). 더 늦은 값일 때만 바꾼다.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update StreamKey k set k.lastPairedAt = :now "
-            + "where k.streamidHash = :streamidHash and k.revokedAt is null")
+            + "where k.streamidHash = :streamidHash and k.revokedAt is null "
+            + "and (k.lastPairedAt is null or k.lastPairedAt < :now)")
     int markPaired(@Param("streamidHash") String streamidHash, @Param("now") Instant now);
 
     /**
      * Media가 송출을 받으려 이 키를 확인(resolve)했을 때, 연결 시각이 비어 있으면 채운다(POK-607).
      * V120 전에 코드를 넣은 회원을 다음 방송에서 저절로 「연결함」으로 올린다. 이미 있으면 0행이다 —
      * 이 칸은 「코드가 쓰인 시각」이라 송출할 때마다 덮지 않는다. resolve는 트랜잭션이 없어 여기서 연다.
+     * 채우는 값은 호출부가 정한다(키를 만든 시각 — {@code StreamKeyService.resolve}).
      */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("update StreamKey k set k.lastPairedAt = :now "
+    @Query("update StreamKey k set k.lastPairedAt = :at "
             + "where k.id = :id and k.revokedAt is null and k.lastPairedAt is null")
-    int markPairedIfUnset(@Param("id") Long id, @Param("now") Instant now);
+    int markPairedIfUnset(@Param("id") Long id, @Param("at") Instant at);
 
     /**
      * 이 회원의 <b>키 전부(폐기된 것 포함)</b>가 가리키는 비밀값 자리. 탈퇴의 커밋 뒤 정리가 쓴다.

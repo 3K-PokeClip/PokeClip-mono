@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -136,6 +137,41 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         exchange(first, "10.0.0.2")
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.reason").value("PAIRING_CODE_ALREADY_USED"));
+    }
+
+    /**
+     * 🔴 연결 시각 기록이 실패해도 교환은 성공이다 — 커밋 뒤에 던지면 코드는 이미 쓰였는데 플러그인은 500을 받아 일회용
+     * 코드만 잃는다(2차 리뷰: 이 약속을 재는 테스트가 없었다). 칸에 값을 못 넣게 하는 CHECK를 잠깐 걸어 진짜로 실패시킨다.
+     */
+    @Test
+    void 연결_시각_기록이_실패해도_교환은_200이다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        jdbc.execute("ALTER TABLE stream_keys ADD CONSTRAINT test_block_last_paired "
+                + "CHECK (last_paired_at IS NULL) NOT VALID");
+        try {
+            exchange(code, "10.0.0.1")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.passphrase").exists());
+        } finally {
+            jdbc.execute("ALTER TABLE stream_keys DROP CONSTRAINT test_block_last_paired");
+        }
+    }
+
+    /** 커밋 뒤 기록은 순서가 뒤집힐 수 있다 — 늦게 도착한 앞선 시각이 더 늦은 연결 시각을 덮지 않는다(2차 리뷰). */
+    @Test
+    void 연결_시각은_앞으로만_간다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        Instant later = Instant.parse("2026-11-19T05:00:00Z");
+        streamKeyService.markPaired(material, later);
+
+        streamKeyService.markPaired(material, later.minusSeconds(1));
+
+        java.sql.Timestamp at = jdbc.queryForObject(
+                "SELECT last_paired_at FROM stream_keys WHERE user_id = ? AND revoked_at IS NULL",
+                java.sql.Timestamp.class, user.getId());
+        assertThat(at.toInstant()).isEqualTo(later);
     }
 
     @Test
