@@ -208,6 +208,7 @@ bash infra/terraform/scripts/test/network_vpce_runbook_test.sh
 bash infra/terraform/scripts/test/workers_watch_runbook_test.sh
 bash infra/terraform/scripts/test/prod_artifacts_runbook_test.sh
 bash infra/terraform/scripts/test/prod_teardown_workers_allow_test.sh
+bash infra/terraform/scripts/test/workers_suspend_runbook_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
   infra/terraform/scripts/test/fakebin/aws \
   infra/terraform/scripts/test/kvs_fakebin/* \

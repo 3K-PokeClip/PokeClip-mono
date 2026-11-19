@@ -3158,12 +3158,17 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         값 넣기로 가지 않고 kty 에게 넘깁니다 — 조절이 정지되지 않은 일꾼은
         대기가 보이면 깨우기가 1 로 되살립니다. workers README 「긴급 정지와
         상태 어긋남」 의 첫 명령 실패 처리와 같은 꼴입니다. AccessDenied 를 다시
-        시도하지 않는 것은 이 절 머리의 규칙 그대로입니다.
+        시도하지 않는 것은 이 절 머리의 규칙 그대로입니다. 조절 정지는
+        `AWS_MAX_ATTEMPTS=1` 로 CLI 재시도를 끕니다. 재시도가 같은 호출을
+        CloudTrail 에 여러 번 남기면 「일꾼 복원」 의 호출 대조(`auto` 는 한
+        번씩)가 거짓으로 회부하기 때문입니다. 일시 오류도 재시도하지 않고 위
+        실패 처리로 갑니다.
 
         ```shell
         stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf '%s %s auto\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
-        aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+        AWS_MAX_ATTEMPTS=1 aws application-autoscaling register-scalable-target \
+          --region ap-northeast-2 \
           --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
           --resource-id "service/pokeclip-prod/pokeclip-prod-<키>" \
           --min-capacity 0 --max-capacity 1 \
@@ -3235,7 +3240,10 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     `None` 은 건너뜁니다. 모두 통과해야 값을 넣습니다. 파일이 없거나
     비었거나, 상태가 그 밖의 값(빈 값 · `DRAINING` 등)이면 멈춤입니다.
     하나라도 종료 1(상한 · 읽기 실패 · 세 값 불일치)이어도 멈춤 · kty
-    회부입니다.
+    회부입니다. 「조절 정지 실패」 의 멈춤 줄이나 이 확인의 실패로 회전을
+    중단하면, 이미 멈춘 키(`workers-stopped-at.txt` 에 있는 키)는 아래 「일꾼
+    복원」 으로 되돌립니다 — 앱 서버를 재배포하지 않았으므로 그 앞 조건(완료
+    조건 ①)은 지금 상태로 봅니다.
     describe-tasks 는 한 번에 ARN 100 개까지 받습니다 — 모은 수가 100 을
     넘으면 API 오류로 종료 1 이 되어 같은 회부로 갑니다(일꾼은 원하는 수
     1 이라 반복 재기동이 아니면 넘지 않습니다).

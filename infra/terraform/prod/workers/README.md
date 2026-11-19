@@ -245,9 +245,14 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
     멈춘 일꾼은 `False True False`).
 
     그 밖의 판정은 apply 단위가 아니라 **서비스마다** 갈립니다. `terraform
-    apply` 를 돌리기 바로 앞에 아래 읽기로 서비스별 실행 수를 적고, 그 수로
-    서비스마다 갈래를 고릅니다. 0대 갈래가 될 일꾼은 이 읽기 전에 깨우기를
-    멈춥니다(아래 0대 갈래). apply 뒤에도 같은 읽기로 판정합니다. 줄은
+    apply` 를 돌리기 바로 앞에 아래 읽기로 서비스별 실행 수 · 원하는 수를
+    적고, 그 둘로 서비스마다 갈래를 고릅니다. plan 때의 수(「apply 직전
+    읽기」 6)는 그사이 자동 조절이 바꿨을 수 있어 쓰지 않습니다. 태스크
+    정의가 바뀌는 서비스(6 의 동작 `update`)는 원하는 수가 1 이면 실행 수와
+    상관없이 롤링 갈래(감시 먼저), 실행 수 · 원하는 수가 `0 0` 이면 0대
+    갈래, 그 밖이면 apply 하지 않고 kty 에게 넘깁니다. 0대 갈래는 이 읽기
+    뒤 apply 전에 깨우기를 멈추고 이 읽기를 다시 합니다(아래 0대 갈래).
+    apply 뒤에도 같은 읽기로 판정합니다. 줄은
     `<서비스> <배포 수> <rolloutState> <실행 수> <원하는 수>` 입니다.
 
     ```shell
@@ -287,8 +292,8 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
         넘게 비어 있었으면 재우기가 apply 뒤 곧 원하는 수를 0 으로 내리는 것이
         정상입니다(시각은 보장되지 않음). 0대 도달 자체는 완료 실측이
         봅니다.
-    *   **롤링 갈래**(태스크 정의가 바뀌고 apply 앞 실행 수 1 — 이미지 교체,
-        또는 서비스가 새로 생기는 첫 배치): 그 서비스의 실행 수 1 · 배포 하나
+    *   **롤링 갈래**(태스크 정의가 바뀌고 apply 앞 원하는 수 1 — 실행 수와
+        상관없음 · 이미지 교체, 또는 서비스가 새로 생기는 첫 배치): 그 서비스의 실행 수 1 · 배포 하나
         COMPLETED · `*.worker_started`(render 는 render · thumbnail 줄,
         upload 는 upload 줄)를 봅니다. `worker_started` 만으로는 기동을
         판정하지 않습니다 — 아래 「수신 · 진행 판정」 의 **로그 판정**(기동 뒤
@@ -299,43 +304,92 @@ plan · apply · 단계 직전 점검은 kty 로컬 터미널에서 합니다(�
         와 로그 판정의 수신 정상)가 이미 나왔는지로 판정합니다. 나왔으면
         통과이고, 나오지 않았으면 그 서비스를 아래 「기동 확인」 으로
         넘깁니다.
-    *   **0대 갈래**(태스크 정의가 바뀌고 apply 앞 실행 수 0): 원하는 수 0 인
-        배포가 태스크 없이 끝나고, 새 이미지의 기동은 그 서비스만 아래 「기동
-        확인」 이 판정합니다. 기동 확인이 끝나기 전에 주문이 오면 깨우기가 새
-        판을 띄워 감시 없이 실주문을 처음 처리하므로, apply 앞에 깨우기를
-        멈추고 기동 확인이 끝나면 되돌립니다.
-        1.  **깨우기 정지**(쓰기 — 실행 직전 **kty 승인**): 「apply 직전
-            읽기」 6 의 그 서비스 줄이 `update 0 0` 이고 7 의 기록이
-            `False False False` 인 일꾼에만, 위 apply 앞 읽기 전에 겁니다.
-            세 값을 함께 넘기고 깨우기만 `true`, 나머지 둘은 기록값(`false`)
-            그대로 둡니다. 7 의 출력이 빈(확장 대상이 없는) 일꾼에는 돌리지
-            않습니다 — 태그 없는 대상이 생깁니다(「긴급 정지와 상태
-            어긋남」). 기록이 `True True True`(긴급 정지)면 깨우기가 이미
-            멈춰 있어 걸지 않고, 그 밖(일부만 `True`)이면 apply 하지 않고
-            kty 에게 넘깁니다.
+    *   **0대 갈래**(태스크 정의가 바뀌고 apply 앞 읽기의 실행 수 · 원하는
+        수가 `0 0`): 원하는 수 0 인 배포가 태스크 없이 끝나고, 새 이미지의
+        기동은 그 서비스만 아래 「기동 확인」 이 판정합니다. 기동 확인이
+        끝나기 전에 주문이 오면 깨우기가 새 판을 띄워 감시 없이 실주문을 처음
+        처리하므로, apply 앞에 깨우기를 멈추고 기동 확인이 끝나면 되돌립니다.
+        1.  **깨우기 정지**(쓰기 — 실행 직전 **kty 승인**): apply 앞 읽기
+            뒤, apply 전에 그 일꾼마다 아래 블록을 돌립니다. 블록은 쓰기
+            직전에 원하는 수 · 실행 수와 조절 정지 세 값을 다시 읽어 정확히
+            `0 0 False False False` 일 때만 씁니다 — 세 값을 함께 넘기고
+            깨우기만 `true`, 나머지 둘은 읽은 값(`false`) 그대로입니다. 마지막
+            줄이 갈래를 냅니다.
+            *   `깨우기 정지 걸림` → 블록을 한 번 더 돌려 다음 줄을 보고,
+                apply 앞 읽기도 다시 합니다.
+            *   `깨우기 정지 걸려 있음`(`0 0 False True False`) → apply 로
+                갑니다.
+            *   `기존 정지`(`0 0 True True True` — 긴급 정지) → 걸지
+                않습니다. 깨우기가 이미 멈춰 있습니다. 「긴급 정지와 상태
+                어긋남」 의 정지 기록(정지 · 시각 · 사유)을 확인해 kty 에게
+                보고하고, 그 일꾼은 apply 뒤 「기동 확인」 1 의 기존 정지
+                갈래로 끝납니다.
+            *   `롤링`(원하는 수 1 — 방금 깨어남) → 쓰지 않고 롤링 갈래로
+                봅니다(감시 먼저).
+            *   `멈춤:`(그 밖 — 내려가는 중 · 일부만 `True` · 확장 대상 없음
+                `None` · 조회 실패 · 쓰기 실패) → apply 하지 않고 kty 에게
+                넘깁니다. 확장 대상이 없을 때 쓰지 않는 것은 태그 없는 대상이
+                생기기 때문입니다(「긴급 정지와 상태 어긋남」). 쓰기 실패면
+                깨우기 정지가 걸렸을 수 있다는 것도 알립니다.
 
             ```shell
             k=upload
-            aws application-autoscaling register-scalable-target --region ap-northeast-2 \
-              --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
-              --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
-              --min-capacity 0 --max-capacity 1 \
-              --suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=false \
-              >/dev/null
+            counts="$(aws ecs describe-services --region ap-northeast-2 \
+              --cluster pokeclip-prod --services "pokeclip-prod-${k}" \
+              --query 'services[0].[desiredCount,runningCount]' --output text)" &&
+              flags="$(aws application-autoscaling describe-scalable-targets \
+                --region ap-northeast-2 --service-namespace ecs \
+                --resource-ids "service/pokeclip-prod/pokeclip-prod-${k}" \
+                --query 'ScalableTargets[0].SuspendedState.[DynamicScalingInSuspended,DynamicScalingOutSuspended,ScheduledScalingSuspended]' \
+                --output text)" &&
+              seen="$(printf '%s %s' "${counts}" "${flags}" | tr -s '\t ' ' ')" ||
+              seen='조회 실패'
+            printf '%s 지금 %s\n' "${k}" "${seen}"
+            case "${seen}" in
+              '0 0 False False False')
+                if aws application-autoscaling register-scalable-target \
+                  --region ap-northeast-2 --service-namespace ecs \
+                  --scalable-dimension ecs:service:DesiredCount \
+                  --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
+                  --min-capacity 0 --max-capacity 1 \
+                  --suspended-state DynamicScalingInSuspended=false,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=false \
+                  >/dev/null; then
+                  printf '%s 깨우기 정지 걸림 — 블록을 다시 돌려 확인\n' "${k}"
+                else
+                  printf '멈춤: %s 깨우기 정지 쓰기 실패(걸렸을 수 있음) — kty 회부\n' "${k}"
+                fi
+                ;;
+              '0 0 False True False')
+                printf '%s 깨우기 정지 걸려 있음 — apply 로\n' "${k}"
+                ;;
+              '0 0 True True True')
+                printf '%s 기존 정지 — 걸지 않음 · 정지 기록 확인 뒤 보고\n' "${k}"
+                ;;
+              '1 '*)
+                printf '%s 원하는 수 1 — 롤링 갈래(감시 먼저) · 쓰지 않음\n' "${k}"
+                ;;
+              *)
+                printf '멈춤: %s 쓰지 않음 — apply 하지 않고 kty 회부\n' "${k}"
+                ;;
+            esac
             ```
 
-            건 뒤 「자동 조절(0 ↔ 1)」 의 첫 읽기로 그 일꾼이
-            `False True False` 인지 봅니다. 명령이 실패했거나 다른 값이면
-            apply 하지 않고 kty 에게 넘깁니다 — 깨우기 정지가 걸렸을 수
-            있다는 것도 함께 알립니다.
+            **apply 하지 않게 되면 되돌립니다.** 깨우기 정지가 걸린 뒤 apply
+            하지 않거나(멈춤 · 승인 철회) apply 가 실패하면, 「자동 조절(0 ↔
+            1)」 의 첫 읽기가 그 일꾼에서 정확히 `False True False` 일 때만
+            「기동 확인」 6 의 블록으로 셋을 `false` 로 둡니다(쓰기 — 실행
+            직전 **kty 승인**). 다른 값이면 되돌리지 않고 kty 에게 넘깁니다.
+            apply 가 실패했으면 먼저 이 루트를 다시 plan 해 그 서비스가 아직
+            `update` 인지 봅니다. 사라졌으면 새 태스크 정의가 이미 들어간
+            것이라 되돌리지 않고 「기동 확인」 으로 갑니다.
         1.  **apply 뒤:** 위 읽기의 그 서비스 줄이 `<서비스> 1 COMPLETED 0 0`
             (배포 하나 · 완료 · 실행 수 0 · 원하는 수 0)인지 보고 「기동
-            확인」 을 합니다. 기동 확인 6 이 세 값을 기록값(`False False
-            False`)으로 되돌립니다. 기동 확인이 6 전에 멈추면(기동 확인 1 의
-            다른 값 · 5 의 긴급 정지 · kty 회부) 깨우기 정지가 남아 있다는
-            것을 함께 알립니다.
-        1.  **정지 직전에 깨어난 일꾼:** 깨우기 정지 뒤 apply 앞 읽기에서 그
-            서비스의 실행 수가 0 이 아니면 롤링 갈래로 판정합니다. 판정이
+            확인」 을 합니다. 기동 확인 6 이 세 값을 모두 `False` 로
+            되돌립니다. 기동 확인이 6 전에 멈추면(기동 확인 1 · 2 의 다른 값
+            · 5 의 긴급 정지 · kty 회부) 깨우기 정지가 남아 있다는 것을 함께
+            알립니다.
+        1.  **정지 직전에 깨어난 일꾼:** 깨우기 정지 뒤 다시 한 apply 앞
+            읽기에서 원하는 수가 1 이면 롤링 갈래로 판정합니다. 판정이
             끝나면 첫 읽기가 `False True False` 인지 보고 「기동 확인」 6 의
             블록으로 되돌립니다(쓰기 — 실행 직전 **kty 승인**). 다른 값이면
             되돌리지 않고 kty 에게 넘깁니다.
@@ -1566,11 +1620,12 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 
     ```shell
     k=render
-    aws application-autoscaling describe-scalable-targets --region ap-northeast-2 \
+    before="$(aws application-autoscaling describe-scalable-targets --region ap-northeast-2 \
       --service-namespace ecs \
       --resource-ids "service/pokeclip-prod/pokeclip-prod-${k}" \
       --query 'ScalableTargets[0].SuspendedState.[DynamicScalingInSuspended,DynamicScalingOutSuspended,ScheduledScalingSuspended]' \
-      --output text
+      --output text | tr -s '\t ' ' ')"
+    printf '%s 세 값 %s\n' "${k}" "${before}"
     aws ecs describe-services --region ap-northeast-2 --cluster pokeclip-prod \
       --services "pokeclip-prod-${k}" \
       --query 'services[0].[desiredCount,runningCount,pendingCount]' \
@@ -1581,20 +1636,36 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
     멈춘 일꾼이면 `False True False` 일 때만 다음으로 갑니다. 그 밖의
     값(`True True True` 의 긴급 정지 등 기존 정지)이면 기동 확인을 하지
     않습니다. 그 사실을 보고하고 끝냅니다 — 기존 정지를 풀거나 1대로 올리지
-    않습니다. 첫 줄이 비거나 `None` 이면 확장 대상이 없는 것이라 역시 하지
-    않고 kty 에게 넘깁니다.
+    않습니다. `세 값` 줄의 값이 비거나 `None` 이면 확장 대상이 없거나 읽지
+    못한 것이라 역시 하지 않고 kty 에게 넘깁니다. 1 이 남긴 `before` 를 2 가
+    쓰므로 1 · 2 는 같은 셸에서 돌립니다.
 1.  **재우기 · 깨우기 멈춤**(쓰기). 예약 조절은 기록값(`false`) 그대로
     적습니다. 수동으로 1 만 넣으면 `ALARM` 인 재우기 경보가 1분 안에 0 으로
     덮어씁니다. 깨우기도 멈춰 두면 3 의 감시를 띄우기 전에 주문이 와도
-    깨어나지 않습니다(0대 갈래는 이미 멈춘 값을 다시 적음).
+    깨어나지 않습니다(0대 갈래는 이미 멈춘 값을 다시 적음). 블록은 쓰기
+    직전에 세 값을 다시 읽어, 1 의 기록(`before`)과 정확히 같고 그 값이
+    `False False False` 나 `False True False` 일 때만 씁니다. 그 밖이면
+    쓰지 않고 `멈춤:` 줄을 냅니다 — 그사이 긴급 정지가 끼어들었을 수 있어
+    kty 에게 넘깁니다.
 
     ```shell
-    aws application-autoscaling register-scalable-target --region ap-northeast-2 \
-      --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
-      --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
-      --min-capacity 0 --max-capacity 1 \
-      --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=false \
-      >/dev/null
+    now="$(aws application-autoscaling describe-scalable-targets --region ap-northeast-2 \
+      --service-namespace ecs \
+      --resource-ids "service/pokeclip-prod/pokeclip-prod-${k}" \
+      --query 'ScalableTargets[0].SuspendedState.[DynamicScalingInSuspended,DynamicScalingOutSuspended,ScheduledScalingSuspended]' \
+      --output text | tr -s '\t ' ' ')"
+    if [ "${now}" = "${before}" ] &&
+      { [ "${now}" = 'False False False' ] || [ "${now}" = 'False True False' ]; }; then
+      aws application-autoscaling register-scalable-target --region ap-northeast-2 \
+        --service-namespace ecs --scalable-dimension ecs:service:DesiredCount \
+        --resource-id "service/pokeclip-prod/pokeclip-prod-${k}" \
+        --min-capacity 0 --max-capacity 1 \
+        --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=false \
+        >/dev/null
+    else
+      printf '멈춤: %s 의 세 값 「%s」 이 1 의 기록 「%s」 과 다르거나 대상이 아님 — 쓰지 않음 · kty 회부\n' \
+        "${k}" "${now}" "${before}"
+    fi
     ```
 
 1.  **1대로 올림**(쓰기). 그 전에 「첫 소비 감시」 를 띄웁니다.
@@ -1778,7 +1849,12 @@ aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
 `suspended_state` 무시는 mock 이 볼 수 없어 guard R16
 (`bash infra/terraform/scripts/guard.sh`)이 봅니다. 철거 런북의 삭제 허용
 정규식은 `bash infra/terraform/scripts/test/prod_teardown_workers_allow_test.sh`
-가 봅니다.
+가 봅니다. 조절 정지를 쓰는 블록(관문 ② 0대 갈래의 깨우기 정지 · 「기동
+확인」 1 · 2 · runtime-1a 토큰 회전의 일꾼 멈춤과 확인)은
+`bash infra/terraform/scripts/test/workers_suspend_runbook_test.sh` 가 문서
+글자 그대로 뽑아 가짜 aws 로 bash · zsh 에서 봅니다 — 쓰기 직전 재읽기가
+기대값일 때만 쓰는지, 그사이 긴급 정지가 끼어들면 쓰지 않는지, 조절 정지
+실패가 회전을 멈추는지.
 
 「수신 · 진행 판정」 의 셸 블록은
 `bash infra/terraform/scripts/test/workers_watch_runbook_test.sh` 가 README
