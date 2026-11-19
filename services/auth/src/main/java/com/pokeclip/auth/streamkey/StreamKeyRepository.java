@@ -47,6 +47,17 @@ public interface StreamKeyRepository extends JpaRepository<StreamKey, Long> {
     int markPaired(@Param("streamidHash") String streamidHash, @Param("now") Instant now);
 
     /**
+     * Media가 송출을 받으려 이 키를 확인(resolve)했을 때, 연결 시각이 비어 있으면 채운다(POK-607).
+     * V120 전에 코드를 넣은 회원을 다음 방송에서 저절로 「연결함」으로 올린다. 이미 있으면 0행이다 —
+     * 이 칸은 「코드가 쓰인 시각」이라 송출할 때마다 덮지 않는다. resolve는 트랜잭션이 없어 여기서 연다.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update StreamKey k set k.lastPairedAt = :now "
+            + "where k.id = :id and k.revokedAt is null and k.lastPairedAt is null")
+    int markPairedIfUnset(@Param("id") Long id, @Param("now") Instant now);
+
+    /**
      * 이 회원의 <b>키 전부(폐기된 것 포함)</b>가 가리키는 비밀값 자리. 탈퇴의 커밋 뒤 정리가 쓴다.
      *
      * <p>🔴 <b>살아있는 키 하나로는 부족하다</b>({@code findByUserIdAndRevokedAtIsNull}).

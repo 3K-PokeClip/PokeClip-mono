@@ -6,7 +6,8 @@
 --
 -- 교환이 성공한 순간을 살아있는 키에 적어, 웹이 「코드만 받았다」와 「코드를 OBS에 넣었다」를 가르게 한다.
 -- 기존 행은 NULL로 둔다 — 이 칸이 생기기 전의 교환은 어디에도 안 남아(pairing_codes는 만료 1시간 뒤 청소) 채울 근거가 없다.
+-- 대신 Media가 그 키로 송출을 확인(resolve)할 때 비어 있으면 채운다(StreamKeyService.resolve) — 다음 방송에서 저절로 채워진다.
 ALTER TABLE stream_keys ADD COLUMN last_paired_at TIMESTAMPTZ;
 
 COMMENT ON COLUMN stream_keys.last_paired_at IS
-    '연동 코드 교환이 마지막으로 성공한 시각. NULL이면 이 키로 연결한 적이 없다. 지금 연결돼 있다는 뜻은 아니다 — 플러그인이 연결을 끊어도 서버는 모른다 (POK-607)';
+    '연동 코드 교환이 마지막으로 성공한 시각(비어 있을 때 송출 확인이 처음 채우기도 한다). NULL이면 이 키로 연결한 적이 없다. 지금 연결돼 있다는 뜻은 아니다 — 플러그인이 연결을 끊어도 서버는 모른다 (POK-607)';

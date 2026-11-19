@@ -93,11 +93,35 @@ public class StreamKeyService {
     public ResolveResult resolve(String rawStreamId) {
         return StreamId.parse(rawStreamId)
                 .map(streamId -> streamKeyRepository.findByStreamidHash(Sha256.hex(streamId.token()))
-                        .map(key -> key.isRevoked()
-                                ? ResolveResult.rejected("REVOKED")
-                                : ResolveResult.of(key.getUserId(), materialOf(key).passphrase()))
+                        .map(key -> key.isRevoked() ? ResolveResult.rejected("REVOKED") : accept(key))
                         .orElseGet(() -> ResolveResult.rejected("NOT_FOUND")))
                 .orElseGet(() -> ResolveResult.rejected("MALFORMED"));
+    }
+
+    private ResolveResult accept(StreamKey key) {
+        ResolveResult result = ResolveResult.of(key.getUserId(), materialOf(key).passphrase());
+        if (key.getLastPairedAt() == null) {
+            backfillPaired(key);
+        }
+        return result;
+    }
+
+    /**
+     * Media가 이 키로 송출을 받으려 한다 — 플러그인이 키를 가졌다는 증거다. 연결 시각이 비어 있으면 채운다(POK-607,
+     * PR #539 리뷰). V120 전에 코드를 넣은 회원은 교환 기록이 없어 비어 있고, 웹은 그들을 「연결 전」으로 보인다 —
+     * 다음 방송에서 저절로 낫게 한다. 이미 있으면 건드리지 않는다: 이 칸은 「코드가 쓰인 시각」이고 웹은 그 값이
+     * 새 코드의 발급 뒤인지로 연결을 알아챈다. 칸이 채워지면 이 줄은 다시 돌지 않는다(키당 한 번).
+     *
+     * <p>🔴 <b>실패해도 확인 결과는 그대로 돌려준다.</b> 이 메서드가 던지면 Media는 「Auth 장애」로 읽고 송출을
+     * 거절한다 — 화면 안내용 시각 하나 때문에 방송이 막히면 안 된다. 남기기만 한다.
+     */
+    private void backfillPaired(StreamKey key) {
+        try {
+            streamKeyRepository.markPairedIfUnset(key.getId(), Instant.now());
+        } catch (RuntimeException e) {
+            log.warn("auth.streamkey.backfill_paired_failed userId={} causeType={}",
+                    key.getUserId(), e.getClass().getSimpleName());
+        }
     }
 
     /**

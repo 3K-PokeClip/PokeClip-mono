@@ -91,6 +91,55 @@ class StreamKeyResolveControllerTest extends IntegrationTestSupport {
      * "Auth 장애"(판단 불가)는 원인과 후속 조치가 다른데, 둘 다 4xx면 Go 쪽에서 구분이 안 된다.
      * Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경우 모두 그 새 연결을 거부한다.
      */
+    /**
+     * POK-607 · PR #539 리뷰: V120 전에 코드를 넣은 회원은 연결 시각이 비어 웹에 「연결 전」으로 보인다. Media가 그 키로
+     * 송출을 확인하면 플러그인이 키를 가진 것이니 비어 있을 때 채운다 — 다음 방송에서 저절로 낫는다.
+     */
+    @Test
+    void 연결_시각이_비어_있으면_송출_확인이_채운다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        assertThat(lastPairedAt(user)).isNull();
+
+        resolve(material.streamId().toSrtFormat()).andExpect(jsonPath("$.valid").value(true));
+
+        assertThat(lastPairedAt(user)).isNotNull();
+    }
+
+    /** 이 칸은 「코드가 쓰인 시각」이다 — 송출할 때마다 덮으면 웹이 새 코드의 연결로 잘못 읽는다. */
+    @Test
+    void 연결_시각이_있으면_송출_확인이_덮지_않는다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        Instant paired = Instant.parse("2026-11-01T00:00:00Z");
+        streamKeyService.markPaired(material, paired);
+
+        resolve(material.streamId().toSrtFormat()).andExpect(jsonPath("$.valid").value(true));
+
+        assertThat(lastPairedAt(user)).isEqualTo(paired);
+    }
+
+    @Test
+    void 폐기된_키는_송출_확인이_연결_시각을_채우지_않는다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        jdbc.update("UPDATE stream_keys SET revoked_at = now() WHERE user_id = ?", user.getId());
+
+        resolve(material.streamId().toSrtFormat()).andExpect(jsonPath("$.valid").value(false));
+
+        Integer marked = jdbc.queryForObject(
+                "SELECT count(*) FROM stream_keys WHERE user_id = ? AND last_paired_at IS NOT NULL",
+                Integer.class, user.getId());
+        assertThat(marked).isZero();
+    }
+
+    private Instant lastPairedAt(User user) {
+        java.sql.Timestamp at = jdbc.queryForObject(
+                "SELECT last_paired_at FROM stream_keys WHERE user_id = ? AND revoked_at IS NULL",
+                java.sql.Timestamp.class, user.getId());
+        return at == null ? null : at.toInstant();
+    }
+
     @Test
     void 없는_키도_HTTP_200에_valid_false로_돌려준다() throws Exception {
         String unknown = "#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish";
