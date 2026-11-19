@@ -4,6 +4,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -26,15 +28,23 @@ public interface StreamKeyRepository extends JpaRepository<StreamKey, Long> {
     int revokeAlive(@Param("userId") Long userId, @Param("now") Instant now);
 
     /**
-     * 살아있는 키에 「연동 코드가 쓰였다」를 적는다(POK-607).
+     * 교환이 돌려준 <b>그 키</b>에 「연동 코드가 쓰였다」를 적는다(POK-607).
      *
-     * <p>0행이면 그 사이 키가 폐기된 것이다(재발급·탈퇴와 겹쳤다). 교환은 이미 성공했고 이 시각은
-     * 화면 안내용이라 호출부는 0행을 실패로 다루지 않는다 — 폐기된 키에 「연결했다」를 남기지 않는 쪽이 맞다.
+     * <p>🔴 키를 회원이 아니라 streamid 해시로 고른다. 교환이 옛 키를 읽은 뒤 재발급(rotate)이 커밋되면
+     * 회원의 살아있는 키는 플러그인이 받지 못한 새 키다 — 회원으로 고르면 그 새 키에 「연결했다」가 찍혀,
+     * 송출할 수 없는 회원에게 웹이 연결됐다고 말한다. 폐기됐으면 0행이다(재발급·탈퇴와 겹쳤다).
+     * 교환은 이미 성공했고 이 시각은 화면 안내용이라 호출부는 0행을 실패로 다루지 않는다.
+     *
+     * <p>🔴 <b>자기 트랜잭션을 연다</b> — 교환이 커밋된 뒤에 부르기 때문이다({@code PairingCodeService.exchange}).
+     * 교환 안에서 부르면 코드 행(markUsed)을 쥔 채 키 행을 기다리는데, 탈퇴는 키 행(revokeAlive)을 쥔 채
+     * 코드 행(consumeAliveOfUser)을 기다려 둘이 엇갈린다(deadlock). 커밋 뒤 호출에서는 바깥 트랜잭션에
+     * 참여하지 않도록 REQUIRES_NEW여야 한다(스프링 TransactionSynchronization#afterCommit 계약).
      */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update StreamKey k set k.lastPairedAt = :now "
-            + "where k.userId = :userId and k.revokedAt is null")
-    int markPaired(@Param("userId") Long userId, @Param("now") Instant now);
+            + "where k.streamidHash = :streamidHash and k.revokedAt is null")
+    int markPaired(@Param("streamidHash") String streamidHash, @Param("now") Instant now);
 
     /**
      * 이 회원의 <b>키 전부(폐기된 것 포함)</b>가 가리키는 비밀값 자리. 탈퇴의 커밋 뒤 정리가 쓴다.

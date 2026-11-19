@@ -124,15 +124,14 @@ public class StreamKeyService {
     }
 
     /**
-     * 「이 회원이 연동 코드를 플러그인에 넣었다」를 살아있는 키에 적는다(POK-607).
-     * <b>교환이 성공한 자리에서만 부른다</b> — 발급에서 부르면 「코드만 받았다」와 다시 안 갈린다.
+     * 「이 자격증명이 플러그인에 넘어갔다」를 그 키에 적는다(POK-607).
+     * <b>교환이 성공하고 커밋된 뒤에만 부른다</b> — 발급에서 부르면 「코드만 받았다」와 다시 안 갈린다.
      *
-     * <p>부르는 쪽(교환)의 트랜잭션에 참여한다. 코드 소비와 한 단위라, 코드는 쓰였는데 시각이 안 남거나
-     * 그 반대가 되는 틈이 없다.
+     * <p>키는 회원이 아니라 넘겨준 자격증명(streamid 해시)으로 고른다 — 그 사이 재발급됐으면 0행이다.
+     * 트랜잭션은 저장소 메서드가 따로 연다(REQUIRES_NEW, {@code StreamKeyRepository.markPaired}).
      */
-    @Transactional
-    public void markPaired(Long userId, Instant at) {
-        streamKeyRepository.markPaired(userId, at);
+    public void markPaired(StreamKeyMaterial material, Instant at) {
+        streamKeyRepository.markPaired(Sha256.hex(material.streamToken()), at);
     }
 
     /**

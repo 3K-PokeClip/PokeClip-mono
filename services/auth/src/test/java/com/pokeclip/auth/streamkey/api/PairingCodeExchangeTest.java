@@ -17,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.UUID;
@@ -45,11 +46,12 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
     private final TokenService tokenService;
     private final MeterRegistry meterRegistry;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate transactionTemplate;
 
     PairingCodeExchangeTest(MockMvc mockMvc, StreamKeyService streamKeyService,
                             UserService userService, UserRepository userRepository,
                             TokenService tokenService, MeterRegistry meterRegistry,
-                            JdbcTemplate jdbc) {
+                            JdbcTemplate jdbc, TransactionTemplate transactionTemplate) {
         this.mockMvc = mockMvc;
         this.streamKeyService = streamKeyService;
         this.userService = userService;
@@ -57,6 +59,7 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         this.tokenService = tokenService;
         this.meterRegistry = meterRegistry;
         this.jdbc = jdbc;
+        this.transactionTemplate = transactionTemplate;
     }
 
     @BeforeEach
@@ -339,6 +342,49 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
 
         keyStatus(other).andExpect(jsonPath("$.lastPairedAt").exists());
         keyStatus(me).andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+    }
+
+    /**
+     * PR #539 리뷰: 교환과 탈퇴가 두 행을 반대 순서로 잠그면 PostgreSQL이 한쪽을 deadlock으로 끊는다.
+     * 탈퇴는 키 행(revokeAlive) → 코드 행(consumeAliveOfUser) 순서다. 그 사이에 교환이 들어오게 만든다 —
+     * 교환이 코드 행을 쥔 채 키 행을 기다리면(연결 시각을 교환 트랜잭션 안에서 적으면) 아래 「탈퇴」의
+     * 코드 행 UPDATE와 서로 기다려 한쪽이 예외로 끝난다. 연결 시각을 커밋 뒤에 적으면 교환은 코드 행을
+     * 놓은 뒤 키 행을 기다리므로 둘 다 끝난다.
+     */
+    @Test
+    void 탈퇴가_키_행을_쥔_사이에_교환해도_서로_막지_않는다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        CountDownLatch keyLocked = new CountDownLatch(1);
+
+        try (ExecutorService pool = Executors.newSingleThreadExecutor()) {
+            // 탈퇴(WithdrawalService.withdraw)와 같은 순서: 키 행을 잠그고, 잠시 뒤 코드 행을 잠근다
+            Future<Integer> withdrawal = pool.submit(() -> transactionTemplate.execute(tx -> {
+                jdbc.update("UPDATE stream_keys SET revoked_at = now() "
+                        + "WHERE user_id = ? AND revoked_at IS NULL", user.getId());
+                keyLocked.countDown();
+                try {
+                    // 교환이 코드 행을 잡고 키 행 앞에 설 시간을 준다
+                    Thread.sleep(700);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return jdbc.update("UPDATE pairing_codes SET used_at = now() "
+                        + "WHERE user_id = ? AND used_at IS NULL AND expires_at > now()", user.getId());
+            }));
+            keyLocked.await();
+
+            int exchangeStatus = exchange(code, "10.0.0.1").andReturn().getResponse().getStatus();
+
+            // deadlock이면 탈퇴 쪽이 DeadlockLoserDataAccessException으로, 또는 교환이 500으로 끝난다
+            assertThat(withdrawal.get()).as("탈퇴가 교환 때문에 끊겼다").isNotNull();
+            assertThat(exchangeStatus).as("교환이 탈퇴 때문에 끊겼다").isEqualTo(200);
+        }
+        // 탈퇴가 폐기한 키에는 「연결했다」가 남지 않는다
+        Integer marked = jdbc.queryForObject(
+                "SELECT count(*) FROM stream_keys WHERE user_id = ? AND last_paired_at IS NOT NULL",
+                Integer.class, user.getId());
+        assertThat(marked).isZero();
     }
 
     @Test

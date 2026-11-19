@@ -45,7 +45,7 @@ public class StreamKey {
      * {@code createdAt}만으로는 둘이 안 갈린다.
      *
      * <p>재발급(rotate)은 새 행을 만들어 다시 NULL이다. 옛 키를 받은 플러그인은 더는 못 붙으니 맞는 값이다.
-     * 값은 {@code StreamKeyRepository.markPaired}의 UPDATE로만 바뀐다 — 그래서 세터가 없다.
+     * 값은 {@code StreamKeyRepository}의 UPDATE로만 바뀐다 — 그래서 세터가 없다.
      */
     @Column(name = "last_paired_at")
     private Instant lastPairedAt;

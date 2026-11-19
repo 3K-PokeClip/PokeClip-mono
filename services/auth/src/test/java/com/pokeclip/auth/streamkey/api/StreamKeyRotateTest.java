@@ -71,6 +71,10 @@ class StreamKeyRotateTest extends IntegrationTestSupport {
     @AfterEach
     void tearDown() {
         clearChildren();
+        // 회원까지 비운다 — 남기면 다음 클래스가 같은 이메일(a@example.com)로 가입하다 「이미 가입된 이메일」로 막힌다.
+        // 메서드 순서는 JUnit이 이름 해시로 정해서, 회원을 안 만드는 테스트가 마지막에 돌던 동안에만 우연히 안 보였다
+        // (PR #539: 테스트를 하나 더하자 순서가 바뀌어 TokenServiceTest 10건이 setUp에서 터졌다)
+        userRepository.deleteAll();
     }
 
     private void clearChildren() {
@@ -151,13 +155,33 @@ class StreamKeyRotateTest extends IntegrationTestSupport {
     @Test
     void 재발급하면_연결_시각이_비워진다() throws Exception {
         User user = newUser();
-        streamKeyService.ensureKey(user.getId());
-        streamKeyService.markPaired(user.getId(), Instant.now());
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        streamKeyService.markPaired(material, Instant.now());
         mockMvc.perform(get("/api/stream-keys").header("Authorization", bearer(user)))
                 .andExpect(jsonPath("$.lastPairedAt").exists());
 
         mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
                 .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/stream-keys").header("Authorization", bearer(user)))
+                .andExpect(jsonPath("$.issued").value(true))
+                .andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+    }
+
+    /**
+     * 교환이 옛 키를 읽은 뒤 재발급이 커밋되는 경합(PR #539 리뷰). 연결 시각은 넘겨준 그 자격증명의 키에만 적는다 —
+     * 회원의 살아있는 키로 고르면 플러그인이 받지 못한 새 키에 「연결했다」가 찍혀, 송출할 수 없는 회원에게
+     * 웹이 연결됐다고 말한다.
+     */
+    @Test
+    void 재발급_뒤에_옛_자격증명으로_적어도_새_키에는_남지_않는다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial old = streamKeyService.ensureKey(user.getId());
+
+        mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
+                .andExpect(status().isOk());
+        // 교환이 재발급 전에 읽어 둔 자격증명으로 커밋 뒤 기록이 도는 순간
+        streamKeyService.markPaired(old, Instant.now());
 
         mockMvc.perform(get("/api/stream-keys").header("Authorization", bearer(user)))
                 .andExpect(jsonPath("$.issued").value(true))
