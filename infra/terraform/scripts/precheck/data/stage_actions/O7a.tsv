@@ -136,6 +136,13 @@ cloudwatch:ListMetrics	ap-northeast-2	*
 # getent ahostsv4 로 풀기(SSM).
 ssm:SendCommand	ap-northeast-2	*
 ssm:GetCommandInvocation	ap-northeast-2	*
+# 되돌리기 1단계 1 의 render 긴급 정지(workers README 「긴급 정지와 상태
+# 어긋남」 — POK-605): 확장 대상이 있는지 읽기(describe-scalable-targets)와
+# 있을 때의 자동 조절 정지(register-scalable-target — 세 값 true · min 0 ·
+# max 1 함께). 원하는 수 0 은 위 ecs:UpdateService 행이다. 리전 · 자원 꼴은
+# workers 묶음의 같은 동작 행과 같다.
+application-autoscaling:DescribeScalableTargets	ap-northeast-2	*
+application-autoscaling:RegisterScalableTarget	ap-northeast-2	*
 
 # 상태 버킷(계획 3절 백엔드 · use_lockfile — 읽기 · 쓰기 · 잠금 파일)
 s3:ListBucket	ap-northeast-2	*

@@ -3152,6 +3152,14 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         냅니다(쓰기 — **kty 승인**). 내리기 직전 시각을 키 · 갈래(`auto`)와
         함께 남깁니다(복원 때 CloudTrail 읽기의 시작 시각).
 
+        첫 명령(조절 정지)이 실패해도 블록은 둘째 명령까지 돌아 원하는
+        수를 0 으로 내립니다. 실패는 오류 종류와 상관없이(스로틀 · 일시 오류 ·
+        AccessDenied) 마지막 줄의 「멈춤」 으로 드러나고, 그때는 회전을 멈춰
+        값 넣기로 가지 않고 kty 에게 넘깁니다 — 조절이 정지되지 않은 일꾼은
+        대기가 보이면 깨우기가 1 로 되살립니다. workers README 「긴급 정지와
+        상태 어긋남」 의 첫 명령 실패 처리와 같은 꼴입니다. AccessDenied 를 다시
+        시도하지 않는 것은 이 절 머리의 규칙 그대로입니다.
+
         ```shell
         stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf '%s %s auto\n' "<키>" "${stopped_at}" >>"${work}/workers-stopped-at.txt"
@@ -3161,15 +3169,20 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
           --min-capacity 0 --max-capacity 1 \
           --suspended-state DynamicScalingInSuspended=true,DynamicScalingOutSuspended=true,ScheduledScalingSuspended=true \
           >/dev/null
+        suspend_rc=$?
         aws ecs update-service --region ap-northeast-2 --cluster pokeclip-prod \
           --service "pokeclip-prod-<키>" --desired-count 0 \
           --query service.serviceName --output text
+        [ "${suspend_rc}" = 0 ] ||
+          printf '멈춤: %s 의 조절 정지 실패(종료 %s) — 회전 중단 · kty 회부\n' \
+            "<키>" "${suspend_rc}"
         ```
 
     *   `<키> ACTIVE 1 True True True` → 운영 되돌림(자동 조절을 끄고 1대
         상시 — workers README 「되돌리기 · 내리기」)입니다. 떠 있으므로
-        멈춥니다. 조절은 이미 정지라 `record_tasks <키>` 뒤 원하는 수만 0 으로
-        내립니다(쓰기 — **kty 승인**). 시각은 갈래 `pinned` 로 남깁니다.
+        멈춥니다. 조절은 이미 정지라(아래 확인이 세 값을 다시 읽음)
+        `record_tasks <키>` 뒤 원하는 수만 0 으로 내립니다(쓰기 — **kty
+        승인**). 시각은 갈래 `pinned` 로 남깁니다.
 
         ```shell
         stopped_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -3182,8 +3195,8 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     *   `<키> ACTIVE 0 True True True` → 이미 멈춤(긴급 정지 등)입니다.
         원하는 수 · 세 값은 그대로 두고 `record_tasks <키>` 만 합니다. 정지
         직후면 태스크가 아직 내려가는 중일 수 있어(남은 render 가 옛 값으로
-        보고하다 401 → 메시지 삭제) 이 갈래도 아래 확인을 돌립니다. 복원
-        대상이 아닙니다.
+        보고하다 401 → 메시지 삭제) 이 갈래도 아래 확인(세 값 다시 읽기
+        포함)을 돌립니다. 복원 대상이 아닙니다.
     *   `<키> INACTIVE 0 …` → 서비스가 지워졌습니다(`prod/workers` 를 내린
         뒤 한동안 이 값입니다). `record_tasks <키>` 를 하고 아래 확인으로
         남은 태스크가 없는지만 봅니다. 복원 대상이 아닙니다.
@@ -3193,14 +3206,20 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
         중 등) · `ACTIVE` 인데 확장 대상이 없음(`None`) · 원하는 수가 0 · 1
         밖 · `DRAINING` 등입니다.
 
-    확인은 둘입니다(읽기 · 10초 간격 · 각 10분 상한). `wait_zero` 는 원하는
-    수 · 실행 수 · 대기 수가 모두 0 이 될 때까지(`ACTIVE` 만) 읽습니다.
+    확인은 셋입니다(읽기). `wait_zero` 는 원하는 수 · 실행 수 · 대기 수가
+    모두 0 이 될 때까지(`ACTIVE` 만 · 10초 간격 · 10분 상한) 읽습니다.
     `wait_stopped` 는 반복마다 그 family 의 원하는 상태 `RUNNING` ·
     `STOPPED` 태스크를 다시 모아 기록과 합치고, 그 전부가
     `lastStatus=STOPPED` 일 때까지 읽습니다. 기록 뒤에 떴다가 지금 내려가는
     중인 태스크도 이렇게 잡힙니다. 원하는 상태가 `RUNNING` 인 태스크는
     `lastStatus` 가 아직 `STOPPED` 가 아니므로 「모두 STOPPED」 는 「새
-    RUNNING 0」 을 함께 뜻합니다.
+    RUNNING 0」 을 함께 뜻합니다(10초 간격 · 10분 상한).
+    `check_suspended` 는 `ACTIVE` 키의 조절 정지 세 값을 한 번 다시 읽어
+    `True True True` 인지 봅니다. auto · pinned · 이미 멈춤 갈래 모두 이
+    값이어야 합니다 — auto 는 방금 건 정지이고, 나머지 둘은 기록 때의 값
+    그대로입니다. 원하는 수 · 태스크만 보면 유휴 일꾼은 조절이 살아 있어도
+    통과하므로, 값 넣기 바로 앞에서 세 값을 봅니다. 조회 실패 · 다른 값(빈
+    값 · `None` · 일부만 `True`)이면 종료 1 입니다.
 
     응답의 `failures`(태스크별 조회 실패)도 봅니다. 실패가 하나라도 있으면
     그 반복은 통과로 치지 않고 다음 반복에서 다시 읽습니다. 예외는 하나입니다.
@@ -3215,12 +3234,13 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     `workers-before.txt` 에서 기록이 `ACTIVE` · `INACTIVE` 인 키만 돌고
     `None` 은 건너뜁니다. 모두 통과해야 값을 넣습니다. 파일이 없거나
     비었거나, 상태가 그 밖의 값(빈 값 · `DRAINING` 등)이면 멈춤입니다.
-    하나라도 종료 1(상한 · 읽기 실패)이어도 멈춤 · kty 회부입니다.
+    하나라도 종료 1(상한 · 읽기 실패 · 세 값 불일치)이어도 멈춤 · kty
+    회부입니다.
     describe-tasks 는 한 번에 ARN 100 개까지 받습니다 — 모은 수가 100 을
     넘으면 API 오류로 종료 1 이 되어 같은 회부로 갑니다(일꾼은 원하는 수
     1 이라 반복 재기동이 아니면 넘지 않습니다).
 
-    두 함수의 인자는 키 하나입니다. `--query` 안의 백틱은 작은따옴표 안의
+    세 함수의 인자는 키 하나입니다. `--query` 안의 백틱은 작은따옴표 안의
     JMESPath 리터럴이고, `$(cat …)` 를 따옴표 없이 둔 것은 ARN(공백 없는 한
     낱말)을 하나씩 인자로 넘기려는 것입니다.
 
@@ -3278,6 +3298,20 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
       return 1
     }
 
+    check_suspended() {
+      local values
+      values="$(aws application-autoscaling describe-scalable-targets \
+        --region ap-northeast-2 --service-namespace ecs \
+        --resource-ids "service/pokeclip-prod/pokeclip-prod-$1" \
+        --query 'ScalableTargets[0].SuspendedState.[DynamicScalingInSuspended,DynamicScalingOutSuspended,ScheduledScalingSuspended]' \
+        --output text)" || return 1
+      values="$(printf '%s' "${values}" | tr -s '\t ' ' ')"
+      printf '%s 조절 정지 %s\n' "$1" "${values}"
+      [ "${values}" = 'True True True' ] && return 0
+      printf '멈춤: %s 의 조절 정지가 True True True 가 아님\n' "$1"
+      return 1
+    }
+
     ok=1
     [ -s "${work}/workers-before.txt" ] || {
       printf '멈춤: workers-before.txt 가 없거나 비었음\n'
@@ -3285,7 +3319,10 @@ plan 이 역할을 새로 만드는지 고치는지로 드러나고, 어느 쪽�
     }
     while read -r k state _; do
       case "${state}" in
-        ACTIVE) { wait_zero "${k}" && wait_stopped "${k}"; } || ok=0 ;;
+        ACTIVE)
+          { wait_zero "${k}" && wait_stopped "${k}" &&
+            check_suspended "${k}"; } || ok=0
+          ;;
         INACTIVE) wait_stopped "${k}" || ok=0 ;;
         None) ;;
         *)
