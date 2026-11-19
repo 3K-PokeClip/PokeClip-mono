@@ -335,11 +335,16 @@ readonly ACM_NAME='_3639ac514e785e898d2646601fa951d5.pokeclip.com'
 # 사전 승인)의 운영 동작 — 긴급 정지 쓰기와 apply 직전 읽기 · 감시 읽기다
 # (POK-408 r3 — 근거는 workers.tsv 의 그 덩어리 주석). runtime-1a 의 넷은
 # 회전의 일꾼 멈춤 · 확인 · 복원 ECS 동작이다(POK-408 — 근거는 runtime-1a.tsv
-# 의 그 덩어리 주석). O7a 의 스물셋은
+# 의 그 덩어리 주석). 그 뒤 workers 의 열여덟은 일꾼 자동 조절(POK-605 —
+# 확장 대상 · 정책 · 경보 · 서비스 연결 역할)의 provider 동작과 운영 읽기,
+# runtime-1a 의 넷은 회전이 자동 조절을 멈추고 풀고 확인하는 동작이다(근거는
+# 두 묶음 파일의 그 덩어리 주석). O7a 의 스물셋은
 # network 의 인터페이스 엔드포인트 · 엔드포인트 SG 를 만들고 되돌릴 때
 # provider 가 부르는 동작과, 확인 · 되돌리기 절차가 부르는 동작이다. 그 뒤의
 # 둘은 엔드포인트 생성의 Route 53 종속 동작(두 리전), 그 뒤 하나는 확인
-# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석). 맨 끝 O7f 의
+# 절차의 로그 검색이다(POK-408 — 근거는 O7a 묶음 파일의 주석). 그 뒤 O7a 의
+# 둘은 되돌리기 1단계 1 의 render 긴급 정지가 부르는 확장 대상 읽기 · 조절
+# 정지 쓰기다(POK-605 — 근거는 같은 파일의 그 덩어리 주석). 맨 끝 O7f 의
 # 셋은 /dvr 하한 함수(POK-525)의 provider 재조회 · 코드 갱신과 판정 B′ 의
 # test-function 이다(근거는 O7f 묶음 파일의 그 덩어리 주석).
 # shellcheck disable=SC2016 # ${ACCOUNT} 는 펼치지 않는 글자 그대로다.
@@ -391,6 +396,36 @@ STAGE_FOLLOWUP_ROWS=(
   $'runtime-1a\tecs:UpdateService\tap-northeast-2\t*'
   $'runtime-1a\tecs:ListTasks\tap-northeast-2\t*'
   $'runtime-1a\tecs:DescribeTasks\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:RegisterScalableTarget\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:DescribeScalableTargets\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:DeregisterScalableTarget\t'\
+$'ap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:PutScalingPolicy\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:DescribeScalingPolicies\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:DeleteScalingPolicy\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:TagResource\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:UntagResource\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:ListTagsForResource\tap-northeast-2\t*'
+  $'workers\tapplication-autoscaling:DescribeScalingActivities\t'\
+$'ap-northeast-2\t*'
+  $'workers\tcloudwatch:PutMetricAlarm\tap-northeast-2\t*'
+  $'workers\tcloudwatch:DescribeAlarms\tap-northeast-2\t*'
+  $'workers\tcloudwatch:DeleteAlarms\tap-northeast-2\t*'
+  $'workers\tcloudwatch:TagResource\tap-northeast-2\t*'
+  $'workers\tcloudwatch:UntagResource\tap-northeast-2\t*'
+  $'workers\tcloudwatch:ListTagsForResource\tap-northeast-2\t*'
+  $'workers\tcloudwatch:DescribeAlarmHistory\tap-northeast-2\t*'
+  $'workers\tiam:CreateServiceLinkedRole\tus-east-1\t'\
+'arn:aws:iam::${ACCOUNT}:role/aws-service-role/'\
+'ecs.application-autoscaling.amazonaws.com/'\
+'AWSServiceRoleForApplicationAutoScaling_ECSService'
+  $'runtime-1a\tapplication-autoscaling:RegisterScalableTarget\t'\
+$'ap-northeast-2\t*'
+  $'runtime-1a\tapplication-autoscaling:DescribeScalableTargets\t'\
+$'ap-northeast-2\t*'
+  $'runtime-1a\tapplication-autoscaling:DescribeScalingPolicies\t'\
+$'ap-northeast-2\t*'
+  $'runtime-1a\tcloudwatch:DescribeAlarms\tap-northeast-2\t*'
   $'O7a\tec2:CreateSecurityGroup\tap-northeast-2\t*'
   $'O7a\tec2:RevokeSecurityGroupEgress\tap-northeast-2\t*'
   $'O7a\tec2:DescribeSecurityGroups\tap-northeast-2\t*'
@@ -418,6 +453,10 @@ STAGE_FOLLOWUP_ROWS=(
   $'O7a\troute53:AssociateVPCWithHostedZone\tus-east-1\t*'
   $'O7a\troute53:AssociateVPCWithHostedZone\tap-northeast-2\t*'
   $'O7a\tlogs:FilterLogEvents\tap-northeast-2\t*'
+  $'O7a\tapplication-autoscaling:DescribeScalableTargets\t'\
+$'ap-northeast-2\t*'
+  $'O7a\tapplication-autoscaling:RegisterScalableTarget\t'\
+$'ap-northeast-2\t*'
   $'O7f\tcloudfront:GetFunction\tus-east-1\t*'
   $'O7f\tcloudfront:UpdateFunction\tus-east-1\t*'
   $'O7f\tcloudfront:TestFunction\tus-east-1\t*')

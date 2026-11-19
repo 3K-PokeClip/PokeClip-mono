@@ -1165,12 +1165,17 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
 
 ### 되돌리기 1단계 — private DNS 끄기
 
-1.  render 가 엔드포인트 이그레스로 떠 있으면 먼저 긴급 정지하고(workers
-    README 「긴급 정지와 상태 어긋남」), 기록한 태스크가 모두 `STOPPED` 인지
-    봅니다(runtime-1a 의 `wait_stopped` 와 같은 확인). render 이그레스엔 NAT
-    길이 없어 DNS 를 끄면 AWS 에 닿지 못합니다. PR 488 전이면 render 가 없어
-    건너뜁니다. 2단계 1 뒤에 부를 때도 render 가 이미 NAT 이그레스라
-    건너뜁니다.
+1.  render 가 엔드포인트 이그레스이면 실행 수와 무관하게(0대여도) 먼저 긴급
+    정지합니다(workers README 「긴급 정지와 상태 어긋남」 — 확장 대상이
+    있으면 두 명령(자동 조절 정지(세 값 true) 뒤 원하는 수 0), 없으면 그
+    절의 옛 꼴(원하는 수 0 하나)과 kty 회부). 정지할 셸에는 workers README
+    「일꾼 쓰기 함수」 블록을 먼저 붙여 넣어 둡니다. 그다음 기록한 태스크가 모두
+    `STOPPED` 인지 봅니다(runtime-1a 의 `wait_stopped` 와 같은 확인). render
+    이그레스엔 NAT 길이 없어 DNS 를 끄면 AWS 에 닿지 못합니다. render 는 큐에
+    주문이 보이면 0대에서 1대로 깨어나므로(POK-605), 0대라고 건너뛰면 DNS 를
+    끈 동안 깨어난 render 가 받지 못합니다. 건너뛰는 경우는 예전 그대로
+    둘입니다. PR 488 전이면 render 가 없어 건너뜁니다. 2단계 1 뒤에 부를
+    때도 render 가 이미 NAT 이그레스라 건너뜁니다.
 1.  **교정(2단계 삭제 관문 (나) 의 앞몫 — 트래픽이 있는 지금 합니다).**
     `vpce_endpoints` 를 돌린 뒤 지난 60분으로 교정합니다. 교정이 판정불가여도
     1단계는 멈추지 않습니다 — 2단계에서 DNS 를 끈 시각 직전 60분으로 다시
@@ -1257,10 +1262,14 @@ vpce_metric_judge() {  # vpce_metric_judge <시작 ISO> <끝 ISO> — 통과 0 �
     `render_egress_via_endpoints = false` 로 apply(render 이그레스가 NAT 로
     돌아가 엔드포인트 SG 참조가 사라짐)하거나 workers 를 철거합니다. 이 걸음은
     DNS 가 꺼진 동안에도 workers 계약 검사에 막히지 않습니다. workers apply 는
-    원하는 수 1 을 되살려 긴급 정지한 render 가 NAT 이그레스로 다시 뜹니다 —
-    다시 띄우기는 매번 kty 승인이며 이 걸음의 승인이 그것을 겸한다는 것을 승인
-    요청에 적습니다. 다시 띄우지 않으려면 apply 직후 긴급 정지를 함께
-    승인받습니다.
+    원하는 수와 자동 조절 정지 상태를 바꾸지 않습니다(POK-605). 그래서 확장
+    대상이 생긴 뒤 긴급 정지한 render(1단계 1 등)는 정지된 채 남고, 멈춤을
+    풀어야 깨어납니다. 다시 띄우기(멈춤 해제 — workers README 「긴급 정지와
+    상태 어긋남」)는 매번 kty 승인이며, 이 걸음과 따로 받습니다. 확장 대상이
+    없던 때의 옛 꼴 정지면 이 apply 가 대상을 만들고 깨우기가 그 정지를 풀 수
+    있어, workers README 「apply 직전 읽기」 6 · 7 이 그 apply 를 막고 kty
+    에게 넘깁니다. 정지하지 않은 render 는 이 apply 뒤 NAT 이그레스로 자동
+    조절을 그대로 받습니다.
 1.  **교정이 없으면 DNS 를 끄기 전에 합니다.** 1단계 2 의 교정 기록
     (`70-calibration.jsonl`)이 없으면 지금 트래픽이 있을 때 교정합니다.
     *   DNS 를 아직 끄지 않았으면 1단계 2 의 블록(지난 60분)으로 교정합니다.

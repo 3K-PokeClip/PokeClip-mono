@@ -201,7 +201,10 @@ resource "aws_ecs_service" "this" {
   cluster         = var.cluster_arn
   task_definition = aws_ecs_task_definition.this.arn
   launch_type     = "FARGATE"
-  desired_count   = 1
+  # 1 은 생성 초기값일 뿐이다. 그 뒤 원하는 수의 실물 정본은 ECS · 자동
+  # 조절(AAS)이다 — 자동 조절과 런북의 update-service 가 바꾸고, Terraform 은
+  # 감지하지도 되돌리지도 않는다(아래 lifecycle · guard R16 — POK-605).
+  desired_count = 1
 
   # null 이면 넘기지 않는다 — ECS 기본(최소 100 · 최대 200)이 그대로 산다.
   deployment_minimum_healthy_percent = var.deployment_minimum_healthy_percent
@@ -232,4 +235,8 @@ resource "aws_ecs_service" "this" {
 
   # 첫 태스크가 이미지 · 비밀을 읽기 전에 실행 역할 정책이 있게 한다.
   depends_on = [aws_iam_role_policy.execution]
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 }

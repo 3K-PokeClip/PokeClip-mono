@@ -207,6 +207,8 @@ bash infra/terraform/scripts/test/kvs_put_test.sh
 bash infra/terraform/scripts/test/network_vpce_runbook_test.sh
 bash infra/terraform/scripts/test/workers_watch_runbook_test.sh
 bash infra/terraform/scripts/test/prod_artifacts_runbook_test.sh
+bash infra/terraform/scripts/test/prod_teardown_workers_allow_test.sh
+bash infra/terraform/scripts/test/workers_suspend_runbook_test.sh
 shellcheck infra/terraform/scripts/test/*.sh \
   infra/terraform/scripts/test/fakebin/aws \
   infra/terraform/scripts/test/kvs_fakebin/* \
@@ -302,7 +304,7 @@ CI 의 한계는 다음과 같습니다.
 
 ## guard 규칙
 
-guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 부터 R15 는
+guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 부터 R16 은
 [conftest](https://www.conftest.dev/)(`--parser hcl2`)로 돌리는 Rego 정책
 `policy/guard/*.rego` 가 판정합니다. `scripts/guard.sh` 는 얇은 실행기입니다.
 파서가 볼 수 없는 R0 를 직접 보고, 파일마다 파싱이 되는지 먼저 가린 뒤, 트리
@@ -328,6 +330,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 부터
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
 | R14 | `prod/platform/`(루트 바로 아래 `.tf` 만) | 주소가 정확히 `terraform_data.public_routed_target_groups` 인 자원 없음(ECS 서비스가 공개 ALB 리스너 규칙을 기다리는 다리), 또는 그 자원의 `depends_on` 에 `module.public_alb` 참조가 없음(따옴표 문자열 · 다른 참조만 있음 포함). `terraform test` 는 의존 간선을 못 보므로 선언을 여기서 봄 — 서비스가 다리 출력을 받는지는 `prod/platform/tests/apply_order.tftest.hcl`, 실제 생성 순서는 apply 로그. 대상 경로에 `.tf` 가 없으면 건너뜀 |
 | R15 | `prod/edge/`(루트 바로 아래 `.tf` 만) | `data "aws_security_group" "vpc_origin_service"`(VPC origin 관리형 SG 조회)의 `depends_on` 이 정확히 `[terraform_data.vpc_origin_ready]` 가 아님(없음 · 빈 목록 · 따옴표 문자열 · `module.media` 등 다른 참조가 있음 포함). 기다리지 않으면 첫 apply 에서 SG 를 찾지 못하고, media 모듈 전체를 기다리면 VPC origin 밖 변경마다 인그레스 규칙 변경 예고가 plan 에 낀다. `terraform test` 는 의존 간선을 못 보므로 선언을 여기서 봄 — 고리의 `input` 이 VPC origin id 인지는 `prod/edge/tests/edge.tftest.hcl`. 조회가 없으면 건너뜀(같은 시험이 그 주소를 읽음) |
+| R16 | `modules/ecs_service/` · `prod/workers/` | `modules/ecs_service/` 의 `aws_ecs_service` 에 `lifecycle { ignore_changes }` 리터럴 원소 `desired_count` 가 없음 · `prod/workers/` 의 `aws_appautoscaling_target` 에 리터럴 원소 `suspended_state` 가 없음(lifecycle 없음 · 다른 속성만 · `all` · 따옴표 문자열 포함). 원하는 수와 조절 정지는 ECS · 자동 조절 · 운영자가 정한다 — 빠지면 0대일 때마다 plan 에 0 → 1 이 보이고 apply 가 일꾼을 되살리거나 긴급 정지를 푼다(POK-605). lifecycle 은 `terraform test`(mock)로 볼 수 없어 여기서 봄. 대상 경로에 그 유형 자원이 없으면 위반 없음 |
 
 `prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R10 · R11 ·
 R12 가 맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
