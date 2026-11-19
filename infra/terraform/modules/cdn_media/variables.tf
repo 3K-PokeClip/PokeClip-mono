@@ -90,7 +90,7 @@ variable "log_destination" {
 }
 
 variable "dvr_vod_ttl" {
-  description = "/dvr/* · /vod/* 캐시 정책 TTL 초(min · default · max). 원본 객체는 Cache-Control 을 늘 붙인다(조각 · init 1년 immutable · 되감기 목록 1초 · VOD 문서 3600초) — default 는 머리가 없을 때만 쓰이고, 머리 값은 min · max 안으로 잘린다."
+  description = "/dvr · /vod 캐시 정책 둘(조각 dvr_vod · 목록 dvr_vod_playlist)의 TTL 초(min · default · max). 원본 객체는 Cache-Control 을 늘 붙인다(조각 · init 1년 immutable · 되감기 목록 1초 · VOD 문서 3600초) — default 는 머리가 없을 때만 쓰이고, 머리 값은 min · max 안으로 잘린다."
   type = object({
     min     = number
     default = number
@@ -149,7 +149,7 @@ variable "edge_bounds_kvs_arn" {
 }
 
 variable "dvr_floor_enabled" {
-  description = "/dvr 하한 스위치(POK-525). 참이면 /dvr/* 비헤이비어에 dvr-floor 를 viewer-request 로 붙이고, 거짓이면 함수 없이 둔다. 함수 자원은 스위치와 무관하게 게시된다."
+  description = "/dvr 하한 스위치(POK-525). 참이면 /dvr/*.m3u8 · /dvr/* 비헤이비어에 dvr-floor 를 viewer-request 로 붙이고, 거짓이면 함수 없이 둔다. 함수 자원은 스위치와 무관하게 게시된다."
   type        = bool
   default     = false
   nullable    = false

@@ -1,0 +1,79 @@
+/* 휴대폰 크기 화면 안내 (POK-610) — 대시보드는 휴대폰 화면을 지원하지 않는다.
+ *
+ * 셸(사이드바·독)은 1440px 시안 기준이고 좁아져도 줄지 않아(--pc-shell-u 하한 1px) 휴대폰에서는 사이드바가 화면을
+ * 거의 덮는다. 깨진 화면을 그대로 보이는 대신 앱을 가리고 「PC나 태블릿에서 접속해 주세요」를 세운다
+ * (components/app-shell/SmallScreenNotice.tsx — 루트 레이아웃이 <body> 바로 아래에 둔다).
+ *
+ * 기준 — 「휴대폰 크기」
+ *   - 폭 600px 미만: 휴대폰 세로는 320~480px, 태블릿 세로는 가장 작은 것도 600px 이상이다(아이패드 미니 744px).
+ *     DS 중단점 md(768)를 쓰면 작은 태블릿 세로가 막힌다.
+ *   - 터치가 주 입력인 기기에서 높이 500px 미만: 가로로 눕힌 휴대폰(폭 667~956 · 높이 320~440). 폭만 보면 지나간다.
+ *     `pointer: coarse`를 붙여 PC에서 창 높이만 줄인 경우는 막지 않는다.
+ *
+ * 내리지 않고 가린다(display: none) — PC에서 창을 좁혔다 넓히거나 태블릿에서 화면을 나눴다 되돌려도 편집 중이던
+ * 내용이 그대로 남는다. JS로 앱을 내리면 그 순간 저장 안 한 편집이 사라진다. CSS뿐이라 첫 그림부터 맞고(하이드레이션
+ * 전에도) 깜빡이지 않는다. 대가는 가려진 앱이 뒤에서 계속 돈다는 것이다(주기 조회 등).
+ *
+ * `body > :not(...)`로 거는 까닭: 창·토스트·둘러보기는 포털로 <body> 바로 아래에 붙는다. 앱 뿌리 하나만 가리면
+ * 그것들이 안내 위로 비친다. !important는 자기 display를 가진 모듈 클래스·인라인 스타일을 이기려고 붙인다.
+ *
+ * 이 파일은 app/layout.tsx만 싣는다 — shell.css처럼 스토리북과 같이 실으면 좁은 화면 미리보기에서 스토리가 통째로
+ * 사라진다(스토리북에는 안내 요소가 없다). */
+
+.pc-small-screen {
+  display: none;
+}
+
+@media (max-width: 599px), (max-height: 499px) and (pointer: coarse) {
+  body > :not(.pc-small-screen) {
+    display: none !important;
+  }
+
+  .pc-small-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100dvh;
+    padding: calc(28 * var(--pc-u)) calc(24 * var(--pc-u));
+    text-align: center;
+    background: var(--pc-color-bg-canvas);
+    color: var(--pc-color-text-primary);
+  }
+
+  /* next/image의 width·height 속성은 px 고정이라 CSS로 크기를 잡는다 */
+  .pc-small-screen__poki {
+    width: calc(148 * var(--pc-u));
+    height: auto;
+    margin-bottom: calc(14 * var(--pc-u));
+  }
+
+  .pc-small-screen__title {
+    margin: 0;
+    font-size: calc(20 * var(--pc-u));
+    font-weight: 800;
+    line-height: 1.35;
+    letter-spacing: -0.02em;
+  }
+
+  .pc-small-screen__text {
+    margin: calc(8 * var(--pc-u)) 0 0;
+    font-size: calc(14 * var(--pc-u));
+    line-height: 1.6;
+    color: var(--pc-color-text-secondary);
+  }
+
+  .pc-small-screen__hint {
+    margin: calc(18 * var(--pc-u)) 0 0;
+    font-size: calc(12 * var(--pc-u));
+    color: var(--pc-color-text-muted);
+  }
+}
+
+/* 가로로 눕힌 휴대폰은 높이가 400px 안팎이다 — 그림을 줄여 한 화면에 들인다 */
+@media (max-height: 499px) {
+  .pc-small-screen__poki {
+    width: calc(84 * var(--pc-u));
+    margin-bottom: calc(8 * var(--pc-u));
+  }
+}

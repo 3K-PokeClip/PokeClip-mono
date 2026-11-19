@@ -1,5 +1,5 @@
-// dvr-floor 함수(/dvr/* viewer-request) 단위 시험. 의존성 없이 node 만으로
-// 돈다.
+// dvr-floor 함수(/dvr/*.m3u8 · /dvr/* viewer-request) 단위 시험. 의존성 없이
+// node 만으로 돈다.
 //
 //   node --test infra/terraform/modules/cdn_media/functions/test/*.test.mjs
 //

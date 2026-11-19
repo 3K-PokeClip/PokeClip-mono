@@ -13,7 +13,8 @@
 # - CloudFront Function 로그 그룹 넷은 /aws/cloudfront/function/<함수 이름>
 #   · us-east-1 · 보존 = WAF 차단 로그(30일)다.
 # - /dvr 하한 함수(POK-525)는 runtime 출력 edge_bounds_kvs_arn 을 연결하고,
-#   스위치 dvr_floor_enabled(기본 false)가 참일 때만 /dvr/* 에 붙는다.
+#   스위치 dvr_floor_enabled(기본 false)가 참일 때만 /dvr 비헤이비어
+#   둘(/dvr/*.m3u8 · /dvr/*)에 붙는다.
 # - VPC origin 서비스 SG 는 서울 별칭으로 이름 · network vpc_id 로 조회하고,
 #   내부 ALB SG 에 그 SG 출처 443 인그레스 하나를 둔다. 조회는 VPC origin
 #   하나만 기다려, VPC origin 밖 media 변경 plan 에서도 출처 SG 가 정해져 있다.
@@ -433,7 +434,8 @@ run "cloudfront_function_log_groups_keep_waf_retention" {
 
 # --- /dvr 하한 함수(POK-525) ---
 
-# 기본은 끔 — 함수는 게시돼도 /dvr/* 에 붙지 않는다(두 단 apply 의 1단).
+# 기본은 끔 — 함수는 게시돼도 /dvr/*.m3u8 · /dvr/* 에 붙지 않는다(두 단
+# apply 의 1단).
 run "dvr_floor_is_published_but_detached_by_default" {
   assert {
     condition = (
@@ -441,7 +443,7 @@ run "dvr_floor_is_published_but_detached_by_default" {
       module.media.dvr_floor_attached == false &&
       module.media.function_names.dvr_floor == "pokeclip-prod-dvr-floor"
     )
-    error_message = "dvr_floor_enabled 기본(false)에서 dvr-floor 가 /dvr/* 에 붙었거나 함수 이름이 pokeclip-prod-dvr-floor 가 아니다."
+    error_message = "dvr_floor_enabled 기본(false)에서 dvr-floor 가 /dvr 비헤이비어 둘(/dvr/*.m3u8 · /dvr/*)에 다 붙었거나 함수 이름이 pokeclip-prod-dvr-floor 가 아니다."
   }
 }
 
@@ -452,7 +454,7 @@ run "dvr_floor_switch_attaches_to_dvr" {
 
   assert {
     condition     = module.media.dvr_floor_attached == true
-    error_message = "dvr_floor_enabled = true 인데 media 모듈이 dvr-floor 를 /dvr/* 에 붙이지 않는다(스위치가 전달되지 않음)."
+    error_message = "dvr_floor_enabled = true 인데 media 모듈이 dvr-floor 를 /dvr 비헤이비어 둘(/dvr/*.m3u8 · /dvr/*)에 다 붙이지 않는다(스위치가 전달되지 않음)."
   }
 }
 

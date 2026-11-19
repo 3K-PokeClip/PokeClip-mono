@@ -1256,8 +1256,8 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
 *   **엣지 거절**(/dvr 하한 함수를 붙인 뒤 운영 중 — 시청자 404 ·
     `dvr_floor_blocks_list`. 판정 C′ 도중의 같은 관찰은 엣지 시험 런북의
     「보류 · 즉시 kty 보고」 이고 끌지는 kty 가 정함)
-    *   방법: `dvr_floor_enabled = false` 로 prod/edge apply 해 `/dvr/*` 에서
-        함수를 뗍니다(1순위 · 실행 직전 승인). plan 범위는
+    *   방법: `dvr_floor_enabled = false` 로 prod/edge apply 해 `/dvr/*.m3u8`
+        · `/dvr/*` 둘에서 함수를 뗍니다(1순위 · 실행 직전 승인). plan 범위는
         `update module.media.aws_cloudfront_distribution.this` 한 줄이고,
         함수 · 로그 그룹 · 경보는 남깁니다. 원인을 고친 뒤 다시 켭니다 —
         [엣지 시험 런북](edge-tests.md) 「/dvr 하한 시험(POK-525)」 의
@@ -1277,6 +1277,9 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         ```
 
         목록이 위 한 줄과 같을 때만, kty 실행 직전 승인 뒤 apply 합니다.
+        POK-601 이 develop 에 머지된 뒤 그 edge apply 전이면 목록에
+        `create module.media.aws_cloudfront_cache_policy.dvr_vod_playlist` 가
+        한 줄 더 나옵니다 — 그때는 그 두 줄이 기대 목록입니다.
 
         ```shell
         terraform -chdir=infra/terraform/prod/edge apply \
@@ -1284,8 +1287,9 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         ```
 
     *   apply 뒤 떼어졌는지는 [엣지 시험 런북](edge-tests.md) 「/dvr 하한
-        끄기」 의 확인 둘(배포 설정의 `/dvr/*` 연결 · 표지 요청)로 봅니다.
-        하한 값 · 회차와 무관해 회차가 닫힌 뒤에도 성립합니다.
+        끄기」 의 확인 둘(배포 설정의 `/dvr/*.m3u8` · `/dvr/*` 연결 · 표지
+        요청)로 봅니다. 하한 값 · 회차와 무관해 회차가 닫힌 뒤에도
+        성립합니다.
 
 *   **Writer 만 문제**(`edge_bounds_write_failing` 이 풀리지 않음 ·
     `dvr_floor_release_overdue` · `edge_bounds_degraded`)
@@ -1311,8 +1315,8 @@ Q1 · 트리거는 보지 않습니다. 그래서 `rolled-back` 뒤에도 「실
         `released_settling` 0 을 봅니다.
 *   원장 표 · KVS 그릇 · IAM 문은 어느 갈래에서도 지우지 않습니다.
 *   **해체 · KVS 그릇 교체는 지금 할 수단이 없습니다.** 스위치
-    (`dvr_floor_enabled = false`)는 `/dvr/*` 부착만 떼고, dvr-floor 함수의
-    KVS 연결은 남습니다.
+    (`dvr_floor_enabled = false`)는 `/dvr/*.m3u8` · `/dvr/*` 부착만 떼고,
+    dvr-floor 함수의 KVS 연결은 남습니다.
     연결이 남은 그릇의 교체 · 삭제는 DeleteKeyValueStore 가 쓰는 중인
     그릇으로 거절합니다(409 — [prod/edge](../prod/edge/README.md)
     「/dvr 하한(POK-525)」 · 함수 연결이 「쓰는 중」 에 드는지는 미실측).

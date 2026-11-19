@@ -50,7 +50,8 @@ export const TOUR_STEPS: readonly TourStep[] = [
     fallback: 'centered',
     title: 'OBS 플러그인 설치',
     body: 'PokeClip 플러그인을 설치하고 연동 코드 8자리를 입력하면 방송 화면·채팅이 실시간으로 연결돼요.',
-    cta: { label: '연동 코드 발급', href: '/settings/plugin' },
+    // 「연동 코드 발급」이었다 — 새 회원이 플러그인 없이 10분짜리 코드부터 받고 떠났다(POK-609)
+    cta: { label: '플러그인 설치하기', href: '/settings/plugin' },
   },
   {
     id: 'hero',

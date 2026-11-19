@@ -70,9 +70,9 @@ prod 엣지(CloudFront · 공개 ALB · NLB)를 운영 이름 그대로 시험�
     상자의 nginx 가 응답을 냅니다).
 *   **A2(KVS 값 입력 불가)**: 값이 필요 없는 뒤 단계만 합니다 — 엣지만
     시험 · 런타임 2단 · 정상 기동 확인 · 시험 키 · 루프백 헬스 · 쿠키 200 ·
-    T10 · T11 202 · T13. T13 의 `/dvr/*` · `/vod/*` 비헤이비어는 이 KVS
-    값과 무관합니다(`modules/cdn_media/main.tf` — `/dvr/*` 에 붙는 하한
-    함수는 다른 KVS(edge-bounds)를 읽습니다). `/live` 재생
+    T10 · T11 202 · T13. T13 의 `/dvr` · `/vod` 비헤이비어(목록 `*.m3u8` ·
+    조각)는 이 KVS 값과 무관합니다(`modules/cdn_media/main.tf` — `/dvr` 에
+    붙는 하한 함수는 다른 KVS(edge-bounds)를 읽습니다). `/live` 재생
     시험(T1 · T2 의 `/live` 사례 · T3 · T4 · T5 · T7 · T8a–T8d) · 7-R ·
     8단계는 값 입력 뒤입니다. 대안은 설계하지 않습니다(34차 Q2 — 막히면
     kty 회부).
@@ -819,6 +819,56 @@ T11 404 에서 판정합니다([prod/edge](../prod/edge/README.md) 「VPC origin
     *   실패 때 웹이 하는 일: 엣지 404 → 「아직 모름」 → 360초 뒤 녹화(VOD
         제안 없음) · JSON 아닌 200 · 403 · 5xx → `unavailable` → 20분 시한
         뒤 녹화입니다.
+*   **T13 목록 압축**(POK-601 — 그 판의 edge apply 뒤 한 번):
+    *   그 판의 edge apply 는 다른 edge apply 와 같이 plan 확인 · 실행 직전
+        승인 뒤입니다. 바뀌는 관리 자원 기대 목록은
+        `create module.media.aws_cloudfront_cache_policy.dvr_vod_playlist` ·
+        `update module.media.aws_cloudfront_distribution.this` 두 줄입니다.
+        /dvr 하한을 켠 뒤(2단 뒤)면 `-var dvr_floor_enabled=true` 를 함께
+        넘깁니다.
+    *   배포 변경 안에서는 목록 동작 둘(`/dvr/*.m3u8` · `/vod/*.m3u8`)이 표
+        중간에 끼어, `ordered_cache_behavior` 의 `/dvr/*.m3u8` 자리부터
+        끝까지(0 부터 세어 3–8번) 칸의 속성 여럿이 바뀌거나 새로 생긴 것처럼
+        보입니다. 칸이 밀린 것이라, 바뀐 속성 이름을 세지 말고 칸마다 새
+        동작 표(`modules/cdn_media/main.tf` 의 `ordered_behaviors`)의 같은
+        칸과 대조합니다. 함수 연결은 하한을 켠 뒤면 4번 칸(`/dvr/*`)의 dvr-floor
+        「추가」 만 보이고 「제거」 는 없습니다 — `function_association`
+        제거가 보이면 apply 하지 않고 멈춥니다(위 `-var` 를 빠뜨린 것).
+    *   apply 직후 목록 gzip 변형의 첫 요청은 엣지 · Origin Shield 에서
+        MISS 라 S3 GET 과 지연이 잠깐 늘 수 있습니다. 캐시 키에 인코딩이
+        들어가 새로 생긴 변형을 처음 채우는 것이고 회귀가 아닙니다.
+    *   되돌릴 때는 그 PR 의 머지 커밋을 revert 하고 prod/edge apply 를
+        합니다. 하한을 켠 뒤면 같은 `-var` 를 넘깁니다. 되돌린 plan 도 칸이
+        거꾸로 밀려, 함수 연결은 4번 칸(되돌린 뒤 `/vod/*`)의 dvr-floor
+        「제거」 하나만 정상입니다. 3번 칸(`/dvr/*`)에도 「제거」 가 보이면
+        `-var` 를 빠뜨린 것이라 apply 하지 않고 멈춥니다.
+    *   단계 권한 사전 판정 목록(O7f)에 `DeleteCachePolicy` 가 없어, 되돌린
+        apply 의 `dvr_vod_playlist` 삭제는 거부될 수 있습니다. 배포 변경이
+        정책 삭제보다 먼저라, 거부돼도 배포는 원래 동작 일곱으로 돌아가
+        시청자 쪽 되돌림은 끝납니다. 이때 apply 는 오류로 끝나고 정책이
+        상태에 남아, 권한을 더하는 PR 로 지우기 전까지 이후 edge plan 마다
+        `delete module.media.aws_cloudfront_cache_policy.dvr_vod_playlist`
+        한 줄이 더해집니다. 다른 절차의 기대 목록과 대조할 때 그 줄을
+        예외로 적고 kty 에게 보고합니다.
+    *   T13 의 clip 쿠키로 1KB 넘는 `/dvr/…/index.m3u8` 를
+        `-H 'Accept-Encoding: gzip' -o /dev/null -D -` 로 받아
+        `content-encoding: gzip` 이 있는지 봅니다. 같은 머리로 받은 조각
+        `.m4s` 1건에는 `content-encoding` 이 없어야 합니다(조각 동작은
+        압축하지 않습니다).
+    *   VOD 목록이 있으면 `/vod/…` 목록 1건도 같은 꼴로 봅니다(아직 없으면
+        「보류」).
+    *   1KB 미만이거나 `content-length` 가 없는 목록은 압축되지 않는 것이
+        정상입니다 — 통과 · 실패를 가르지 않고 길이와 함께 기록합니다.
+    *   실패(1KB 넘고 `content-length` 가 있는 목록에 `content-encoding:
+        gzip` 이 없음)면 이 차례로 봅니다 — 그 동작의 Compress
+        (`get-distribution` 의 `/dvr/*.m3u8` · `/vod/*.m3u8` 이 `true`) ·
+        캐시 정책의 gzip 허용(`EnableAcceptEncodingGzip` 이 `true`) · 응답
+        `content-length` · 크기 1KB 이상 · `content-type` 이
+        `application/vnd.apple.mpegurl`.
+    *   `/live` 목록은 압축되지 않습니다. POK-601 은 `/live/*.m3u8` 동작의
+        압축을 켜지 않습니다(kty 결정 (가)). 켜도 원본 MediaMTX 가 2KB 넘는
+        목록을 길이 없이 보내 CloudFront 가 압축하지 못하므로, 원본
+        압축(nginx)은 후속 POK-602 입니다.
 
 ## WAF 속도 제한
 
@@ -832,8 +882,8 @@ CLOUDFRONT WAF 의 속도 규칙 기본값 20000(5분 · IP 하나)은 추정입
 *   조정은 값만 바꾸는 edge apply 입니다(`waf_rate_limit` — 실행 직전 승인 ·
     plan 「WAF 규칙 값 변경만 · 그 밖 0」 확인).
 *   /dvr 하한을 켠 뒤(2단 뒤)면 `-var dvr_floor_enabled=true` 를 함께
-    넘깁니다. 빠뜨리면 plan 에 `/dvr/*` 연결 제거가 끼어듭니다
-    ([prod/edge](../prod/edge/README.md) 「/dvr 하한(POK-525)」). 하한
+    넘깁니다. 빠뜨리면 plan 에 `/dvr/*.m3u8` · `/dvr/*` 연결 제거가
+    끼어듭니다([prod/edge](../prod/edge/README.md) 「/dvr 하한(POK-525)」). 하한
     1단이 도중에 실패한 채면 「/dvr 하한 1단 도중 실패」 의 3 을 따릅니다.
 
 ## 비밀 · 쿠키 0건 확인
@@ -897,11 +947,11 @@ grep -rlE 'CloudFront-(Signature|Policy)=|Bearer ' "${evidence}" | wc -l   # 0
 ## /dvr 하한 시험(POK-525)
 
 /dvr 하한 함수 `pokeclip-prod-dvr-floor`(dvr-floor — 되감기 조각 가운데 그
-회차 하한보다 앞 seq 를 404 로 막는 `/dvr/*` CloudFront 함수)를 prod 에 켜는
+회차 하한보다 앞 seq 를 404 로 막는 `/dvr` CloudFront 함수)를 prod 에 켜는
 걸음과 시험입니다. 켜는 것은 두 단 apply 입니다. 1단은 함수를 게시만 하고
-(`dvr_floor_enabled = false`), 2단은 `/dvr/*` 에 붙입니다(`true`). 두 단
-사이에 함수만 시험하고(판정 B′ · K), 붙인 뒤 실제 엣지로 시험합니다(판정
-C′). 걸음마다 실행 직전에 kty 가 승인합니다. 근거는 계획 Ⓓ 3절(걸음
+(`dvr_floor_enabled = false`), 2단은 `/dvr/*.m3u8` · `/dvr/*` 에
+붙입니다(`true`). 두 단 사이에 함수만 시험하고(판정 B′ · K), 붙인 뒤 실제
+엣지로 시험합니다(판정 C′). 걸음마다 실행 직전에 kty 가 승인합니다. 근거는 계획 Ⓓ 3절(걸음
 6.0–6.6 · 롤백)과 [prod/edge](../prod/edge/README.md) 「/dvr 하한(POK-525)」
 입니다.
 
@@ -1058,8 +1108,8 @@ rm -r '<옛 셸의 것으로 확인한 경로 하나>'
     fi
     ```
 *   2단 뒤의 edge apply(표준 로그 끄기 · WAF 속도 조정 포함)는 모두
-    `-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에 `/dvr/*`
-    연결 제거가 끼어듭니다([prod/edge](../prod/edge/README.md)
+    `-var dvr_floor_enabled=true` 를 함께 넘깁니다. 빠뜨리면 plan 에
+    `/dvr/*.m3u8` · `/dvr/*` 연결 제거가 끼어듭니다([prod/edge](../prod/edge/README.md)
     「/dvr 하한(POK-525)」).
 
 ### /dvr 하한 apply
@@ -1126,8 +1176,8 @@ apply 는 배포가 Deployed 가 될 때까지 기다립니다(provider 기본
 ### /dvr 하한 1단 도중 실패
 
 1단 apply 가 도중에 멈추면 함수는 생겼는데 로그 그룹 · 경보 가운데 일부가
-없는 상태가 남습니다. 스위치가 꺼져 있어 함수가 `/dvr/*` 에 붙지 않았으므로
-시청자 영향은 없습니다 — 서두르지 않습니다.
+없는 상태가 남습니다. 스위치가 꺼져 있어 함수가 `/dvr/*.m3u8` · `/dvr/*` 에
+붙지 않았으므로 시청자 영향은 없습니다 — 서두르지 않습니다.
 
 1.  오류 원문의 자원 주소 · 오류 코드를 kty 에게 보고합니다. 값 · ARN 원문은
     옮기지 않습니다.
@@ -1140,9 +1190,9 @@ apply 는 배포가 Deployed 가 될 때까지 기다립니다(provider 기본
     *   함수 로그 그룹의 `ResourceAlreadyExistsException` — 함수가 그룹보다
         먼저 로그를 낸 것입니다. [prod/edge](../prod/edge/README.md)
         「적용 순서(O7f)」 의 import(키 `dvr_floor`) 뒤 1단을 다시 plan 합니다.
-        이 갈래는 dvr-floor 에서 미실측입니다. 1단에서는 함수가 `/dvr/*` 에
-        붙지 않고 `test-function` 도 CloudWatch 로 로그를 보내지 않아(아래
-        「판정 K」), 그룹보다 먼저 로그가 날 길이 확인된 것은 없습니다.
+        이 갈래는 dvr-floor 에서 미실측입니다. 1단에서는 함수가
+        `/dvr/*.m3u8` · `/dvr/*` 에 붙지 않고 `test-function` 도
+        CloudWatch 로 로그를 보내지 않아(아래 「판정 K」), 그룹보다 먼저 로그가 날 길이 확인된 것은 없습니다.
         README 의 기제(붙은 함수가 그룹보다 먼저 로그를 냄)를 따른
         대비입니다.
     *   그 밖(코드 · 설정 결함) — **고친 PR**(1순위)을 머지한 뒤 1단을 다시
@@ -1592,9 +1642,9 @@ kty 가 정하고, 정하면 「/dvr 하한 끄기」(실행 직전 승인 · pl
     통과 — 아래 「`e14-vod` 의 기대 줄」). dvr-floor 는 요청을 그대로 넘기거나
     404 만 내고 403 을 만드는 줄이 없습니다
     (`modules/cdn_media/functions/dvr-floor.js` 59–86 · 151–152). 스위치
-    `dvr_floor_enabled` 는 `/dvr/*` 의 함수 연결 하나만 바꿉니다
-    (`modules/cdn_media/main.tf` 20 · 63). 서명(키 그룹) · OAC · 버킷 · WAF
-    와 `/live/*` 비헤이비어(같은 파일 37–51 — 함수는 live-auth)는 스위치와
+    `dvr_floor_enabled` 는 `/dvr/*.m3u8` · `/dvr/*` 의 함수 연결만 바꿉니다
+    (`modules/cdn_media/main.tf` 20 · 76 · 87). 서명(키 그룹) · OAC · 버킷 ·
+    WAF 와 `/live` 비헤이비어(같은 파일 46–62 — 함수는 live-auth)는 스위치와
     무관합니다.
 *   **5xx** — 원본의 일시 장애일 수도 있습니다. 지표의 FunctionExecutionErrors
     합(아래 「지표 관측」)과 같은 요청을 다시 보내 재현되는지를 보고 재료로
@@ -1787,7 +1837,8 @@ normalization」 · 2026-11-11 원문 확인 · 함수 쪽은 실험대 (4) 의 
 하한 조각으로 시험해도 판정은 같습니다.
 
 *   조작 경로 다섯(`e14-vod` 의 `/vod/…/../..` 포함)은 모두 정규화하면
-    `/dvr/…` 라 dvr-floor 가 붙은 `/dvr/*` 비헤이비어로 갑니다. 함수는 원문의
+    `/dvr/…` 라 dvr-floor 가 붙은 /dvr 비헤이비어(`/dvr/*.m3u8` · `/dvr/*`
+    둘 다 붙음)로 갑니다. 함수는 원문의
     표지(`%` · `//` · `.` · `..`)로 seq 를 보기 전에 거절합니다(MALFORMED 404 —
     `modules/cdn_media/functions/dvr-floor.js` 의 `hasUnsafePath`). 이 거절은
     seq 와 무관합니다. 다만 `e14-vod` 는 서명 검사로 함수 앞에서 엣지 `403`
@@ -1844,7 +1895,7 @@ grep -c ' 000 ' "${e14_out}"                                  # 0
 | 라벨 | 통과 |
 |---|---|
 | `e14-direct` · `e14-direct2` | 둘 다 `200` · `xcache` 가 함수 생성이 아님(앞뒤 양성 대조 — 하한 조각이 있고 쿠키가 블록 끝까지 유효함. 하나라도 아니면 E14 시험 무효 — 보류 · 즉시 kty 보고) |
-| `e14-dotdot` · `e14-dot` · `e14-pct2e` · `e14-dslash` | `404` · `xcache=FunctionGeneratedResponse from cloudfront`(함수 MALFORMED 404 — 경로 조작이 함수를 비키지 못함 · E14). 네 경로 모두 정규화본이 `/dvr/*` 라 dvr-floor 가 붙은 비헤이비어로 갑니다(AWS 문서 근거). 함수가 원문 표지를 거절하는 것은 실험대 (4) 의 R9 입니다 |
+| `e14-dotdot` · `e14-dot` · `e14-pct2e` · `e14-dslash` | `404` · `xcache=FunctionGeneratedResponse from cloudfront`(함수 MALFORMED 404 — 경로 조작이 함수를 비키지 못함 · E14). 네 경로 모두 정규화본이 `/dvr/…` 라 dvr-floor 가 붙은 /dvr 비헤이비어(`/dvr/*.m3u8` · `/dvr/*` 둘 다 붙음)로 갑니다(AWS 문서 근거). 함수가 원문 표지를 거절하는 것은 실험대 (4) 의 R9 입니다 |
 | `e14-vod` | 둘 가운데 하나 — 함수 MALFORMED `404`(위와 같은 줄), 또는 엣지 `403` · `server=CloudFront` · `xcache` 가 함수 생성이 아님(엣지에서 멈춤 — 원본 도달 아님 · 우회 아님). 아래 「`e14-vod` 의 기대 줄」 |
 
 앞뒤 양성 대조가 둘 다 `200` 인데 조작 경로 다섯 가운데 `200` 이 있으면
@@ -1878,7 +1929,7 @@ POK-525). 403 을 낸 까닭(서명 대조로 봄)은 단정하지 않습니다.
     읽고 CORS 로 막히지 않는가」 만 기록합니다. 콘솔 스크립트가 응답 머리
     `x-cache` 를 읽을 수 있는지는 확인하지 않았습니다 — `media_cors` 정책에
     `Access-Control-Expose-Headers` 설정이 없습니다
-    (`modules/cdn_media/policies.tf` 201–216). 그래서 이 결과로 함수 생성
+    (`modules/cdn_media/policies.tf` 230–245). 그래서 이 결과로 함수 생성
     여부를 가르지 않습니다.
 *   `cache: 'no-store'` 로 브라우저 캐시를 거치지 않습니다. 조각은
     `Cache-Control: public, max-age=31536000, immutable`
@@ -2096,14 +2147,16 @@ find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'pokeclip-dvr.*' | wc -l |
 
 ### /dvr 하한 끄기
 
-1순위 롤백입니다. `dvr_floor_enabled = false` 로 edge apply 해 `/dvr/*` 에서
-함수를 뗍니다. 함수 · 로그 그룹 · 경보 · KVS 키는 그대로 둡니다(Writer 는
-계속 하한을 쓰지만 읽는 쪽이 없습니다). 실행 직전에 승인받습니다. 승인
+1순위 롤백입니다. `dvr_floor_enabled = false` 로 edge apply 해
+`/dvr/*.m3u8` · `/dvr/*` 에서 함수를 뗍니다. 함수 · 로그 그룹 · 경보 · KVS
+키는 그대로 둡니다(Writer 는 계속 하한을 쓰지만 읽는 쪽이 없습니다). 실행 직전에 승인받습니다. 승인
 범위는 apply 와 그 뒤 확인 둘이고, 확인용 쿠키 발급(`POST` — `c_issue`) ·
 표지 요청도 그 범위에 듭니다.
 
 ```shell
 # 기대: update module.media.aws_cloudfront_distribution.this 한 줄
+# (POK-601 머지 뒤 그 edge apply 전이면 create module.media.
+#  aws_cloudfront_cache_policy.dvr_vod_playlist 가 더해진 두 줄)
 edge_plan false dvr-off
 ```
 
@@ -2117,17 +2170,17 @@ terraform -chdir=infra/terraform/prod/edge apply "${evidence}/dvr-off.plan"
 apply 가 끝나면(Deployed) 두 가지로 확인합니다. 둘 다 하한 값 · 회차 국면과
 무관해, C′ 전이든 회차가 닫힌 며칠 뒤든 같은 꼴로 성립합니다.
 
-1.  **배포 설정**: media 배포의 `/dvr/*` 비헤이비어에 dvr-floor 연결이
-    없는지 봅니다. 배포 ID 는 edge 출력 `media_distribution_arn` 의 끝
-    (`distribution/` 뒤)입니다. 읽기는 `cloudfront:GetDistribution`
-    (단계 데이터 `O7f` 21행)입니다. ARN 원문은 출력하지 않습니다.
+1.  **배포 설정**: media 배포의 `/dvr` 비헤이비어 둘(`/dvr/*.m3u8` ·
+    `/dvr/*`)에 dvr-floor 연결이 없는지 봅니다. 배포 ID 는 edge 출력
+    `media_distribution_arn` 의 끝(`distribution/` 뒤)입니다. 읽기는
+    `cloudfront:GetDistribution`(단계 데이터 `O7f` 21행)입니다. ARN 원문은 출력하지 않습니다.
 
     ```shell
     media_arn="$(terraform -chdir=infra/terraform/prod/edge \
       output -raw media_distribution_arn)"
     aws cloudfront get-distribution --id "${media_arn##*/}" --output json |
       jq -r '[.Distribution.DistributionConfig.CacheBehaviors.Items[]
-          | select(.PathPattern == "/dvr/*")] as $b
+          | select(.PathPattern | startswith("/dvr/"))] as $b
         | [$b[].FunctionAssociations.Items // [] | .[]
           | select(.FunctionARN
             | endswith(":function/pokeclip-prod-dvr-floor"))] as $f
@@ -2135,9 +2188,22 @@ apply 가 끝나면(Deployed) 두 가지로 확인합니다. 둘 다 하한 값 
       tee -a "${evidence}/dvr-off.txt"
     ```
 
-    통과 줄은 `behaviors=1 dvr_floor=0` 입니다. `behaviors=0` 이면
-    비헤이비어를 못 찾은 것이라 확인 무효이고 kty 에게 보고합니다.
-    `dvr_floor=1` 이면 떼어지지 않은 것입니다.
+    통과 줄은 apply 한 체크아웃의 동작 표로 정합니다. apply 가 끝나면
+    배포의 동작은 체크아웃과 같아지므로, 확인 대상인 배포가 아니라
+    체크아웃에서 기대값을 먼저 읽습니다.
+
+    ```shell
+    grep -c '"/dvr/\*\.m3u8"' infra/terraform/modules/cdn_media/main.tf
+    ```
+
+    *   `1`(POK-601 이 든 체크아웃 — `/dvr/*.m3u8` · `/dvr/*` 둘):
+        `behaviors=2 dvr_floor=0`.
+    *   `0`(그 전이거나 POK-601 을 되돌린 체크아웃 — `/dvr/*` 하나):
+        `behaviors=1 dvr_floor=0`.
+
+    그 통과 줄과 `behaviors` 가 다르면 비헤이비어를 다 찾지 못했거나
+    배포가 체크아웃과 다른 것이라 확인 무효이고 kty 에게 보고합니다.
+    `dvr_floor` 가 0 이 아니면 떼어지지 않은 것입니다.
 
 1.  **표지 요청**: 함수가 실제로 요청을 받지 않는지 봅니다. 경로에 `.`
     성분이 있는 조각 요청은 붙은 함수라면 키 조회 전에 MALFORMED 404 로
@@ -2294,6 +2360,7 @@ Budgets 경보가 오면 kty 가 원천을 찾습니다. 표준 로그 급증이
 | T12 ⓑ 200 JSON | | | | |
 | T11 202 | | | | |
 | T13 | | | | |
+| T13 목록 압축 | | | | |
 | /dvr 하한 B′ | | | | |
 | /dvr 하한 K | | | | |
 | /dvr 하한 C′ | | | | |

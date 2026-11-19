@@ -122,9 +122,8 @@ function OsSteps({ os }: { os: PluginOs }) {
         </span>
         <div className={styles.downloadStepBody}>
           <p className={styles.downloadStepTitle}>OBS 「독 › PokeClip」에 연동 코드를 넣습니다</p>
-          <p className={styles.downloadStepHint}>
-            연동 코드는 이 화면 위 「연동 코드」에서 발급해요
-          </p>
+          {/* 받는 자리가 회원마다 다르다 — 연결한 적 없으면 연결 순서 카드의 3번, 연결했으면 「연동 코드」 카드의 재발급 */}
+          <p className={styles.downloadStepHint}>연동 코드는 이 창을 닫은 화면에서 받아요</p>
         </div>
       </li>
     </ol>

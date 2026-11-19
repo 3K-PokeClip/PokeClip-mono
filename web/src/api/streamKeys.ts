@@ -7,9 +7,16 @@ import { apiFetch } from './client';
 // 키 회전(rotate)은 프론트 흐름에서 쓰지 않는다 — 재발급도 같은 키의 새 코드 발급이다.
 
 export interface StreamKeyStatus {
+  /** 키 발급 여부 — 연결 여부가 아니다. 키는 첫 코드 발급 때 생긴다(서버 ensureKey). */
   issued: boolean;
   /** 발급 시각(ISO) — 키가 없으면 필드 자체가 없다. */
   createdAt?: string;
+  /**
+   * 연동 코드를 플러그인에 넣은 마지막 시각(ISO, POK-607) — 한 번도 넣지 않았으면 필드 자체가 없다.
+   * 「코드만 받았다」와 「코드를 OBS에 넣었다」를 가르는 유일한 근거다. 「지금 연결돼 있다」는 아니다 —
+   * 플러그인이 독에서 연결을 끊어도 서버는 모른다. 이 칸이 생기기 전(2026-11)에 연결한 계정도 비어 있다.
+   */
+  lastPairedAt?: string;
 }
 
 export interface IssuedPairingCode {

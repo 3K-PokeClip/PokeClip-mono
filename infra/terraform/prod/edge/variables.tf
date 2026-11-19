@@ -61,10 +61,10 @@ variable "enable_standard_logs" {
   nullable    = false
 }
 
-# 끔이면 dvr-floor 함수는 게시만 되고 /dvr/* 에 붙지 않는다. 켜기 전 선행 —
+# 끔이면 dvr-floor 함수는 게시만 되고 /dvr 비헤이비어에 붙지 않는다. 켜기 전 선행 —
 # README 「/dvr 하한(POK-525)」.
 variable "dvr_floor_enabled" {
-  description = "/dvr 하한 스위치 — 참이면 media 배포 /dvr/* 에 dvr-floor 함수를 viewer-request 로 붙인다. 거짓이면 함수는 게시만 된다(두 단 apply 의 1단)."
+  description = "/dvr 하한 스위치 — 참이면 media 배포 /dvr/*.m3u8 · /dvr/* 에 dvr-floor 함수를 viewer-request 로 붙인다. 거짓이면 함수는 게시만 된다(두 단 apply 의 1단)."
   type        = bool
   default     = false
   nullable    = false

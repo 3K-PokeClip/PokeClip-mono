@@ -101,7 +101,7 @@ export function AudioTrackNamesCard() {
               </label>
             ))}
           </div>
-          <div className={styles.confirmActions}>
+          <div className={`${styles.confirmActions} ${styles.trackActions}`}>
             <Button variant="solid" size="sm" loading={saving} onClick={save}>
               이름 저장
             </Button>
@@ -126,7 +126,7 @@ function TrackNamesSkeleton() {
           </div>
         ))}
       </div>
-      <div className={styles.confirmActions} aria-hidden="true">
+      <div className={`${styles.confirmActions} ${styles.trackActions}`} aria-hidden="true">
         <Skeleton width={u(76)} height={u(32)} radius="md" />
       </div>
     </LoadingRegion>

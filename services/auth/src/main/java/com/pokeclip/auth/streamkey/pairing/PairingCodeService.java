@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -51,6 +53,10 @@ public class PairingCodeService {
         // 내려줄 키가 있어야 한다. 발급의 유일한 입구가 ensureKey다.
         streamKeyService.ensureKey(userId);
 
+        // 전에 받은 코드는 지금 만료시킨다 — 살아있는 코드를 회원당 하나로 둔다(PairingCodeRepository.expireAliveOfUser).
+        // 잠금 순서는 키 → 코드로, 탈퇴(revokeAlive → consumeAliveOfUser)와 같다. 교환은 코드 행만 잡는다.
+        pairingCodeRepository.expireAliveOfUser(userId, now);
+
         String code = CrockfordBase32.random(random, CODE_LENGTH);
         Instant expiresAt = now.plus(TTL);
         pairingCodeRepository.save(PairingCode.of(userId, Sha256.hex(code), expiresAt, now));
@@ -85,6 +91,22 @@ public class PairingCodeService {
         Long userId = pairingCodeRepository.findByCodeHash(codeHash).orElseThrow().getUserId();
         // POK-72: 키가 이미 있으면 같은 것을 준다. ensureKey가 그것을 보장한다.
         StreamKeyMaterial material = streamKeyService.ensureKey(userId);
+        // 웹이 「코드만 받았다」와 「코드를 OBS에 넣었다」를 가르는 유일한 근거다(POK-607) — 키는 첫 발급 때
+        // 생기므로 키 유무로는 안 갈린다.
+        //
+        // 🔴 이 트랜잭션 안에서 적지 않고 커밋 뒤에 적는다. 이 트랜잭션은 markUsed로 코드 행을 쥐고 있어,
+        // 여기서 키 행까지 잠그면 반대 순서(키 행 → 코드 행)로 잠그는 탈퇴(WithdrawalService.withdraw)와
+        // 엇갈려 PostgreSQL이 한쪽을 deadlock으로 끊는다. 탈퇴 쪽 주석이 「교환은 코드 행만 잠근다」에
+        // 기대고 있으니, 교환이 키 행을 잠그는 코드를 이 트랜잭션에 다시 넣지 않는다.
+        // 시각은 화면 안내용이라 커밋 뒤에 실패해도 교환은 그대로 성공이다 — 남기기만 한다.
+        afterCommit(() -> {
+            try {
+                streamKeyService.markPaired(material, now);
+            } catch (RuntimeException e) {
+                log.warn("auth.pairing.mark_paired_failed userId={} causeType={}",
+                        userId, e.getClass().getSimpleName());
+            }
+        });
 
         log.info("auth.pairing.code_exchanged userId={}", userId);
         return material;
@@ -134,6 +156,16 @@ public class PairingCodeService {
                                 "만료된 코드다"))
                 .orElseGet(() -> new StreamKeyException(StreamKeyFailure.PAIRING_CODE_NOT_FOUND,
                         "모르는 코드다"));
+    }
+
+    /** StreamKeyService.rotate의 afterCommit과 같은 꼴이다 — 커밋 뒤 콜백 안의 DB 일은 REQUIRES_NEW여야 한다. */
+    private void afterCommit(Runnable action) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     /** 사람이 읽는 자리에서만 XXXX-XXXX로 끊는다. 해시는 끊기 전 값으로 만든다. */

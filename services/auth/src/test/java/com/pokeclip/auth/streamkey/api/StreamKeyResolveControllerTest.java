@@ -87,6 +87,82 @@ class StreamKeyResolveControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * POK-607 · PR #539 리뷰: V120 전에 코드를 넣은 회원은 연결 시각이 비어 웹에 「연결 전」으로 보인다. Media가 그 키로
+     * 송출을 확인하면 플러그인이 키를 가진 것이니 비어 있을 때 채운다 — 다음 방송에서 저절로 낫는다.
+     *
+     * <p>값은 지금이 아니라 키를 만든 시각이다(2차 리뷰). 지금으로 채우면 회원이 새 코드 창을 띄운 사이 방송이 켜질 때
+     * 그 값이 새 코드의 발급 뒤라 웹이 넣지도 않은 코드를 「연결됐어요」로 읽는다.
+     */
+    @Test
+    void 연결_시각이_비어_있으면_송출_확인이_키를_만든_시각으로_채운다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        assertThat(lastPairedAt(user)).isNull();
+        Instant createdAt = jdbc.queryForObject(
+                "SELECT created_at FROM stream_keys WHERE user_id = ? AND revoked_at IS NULL",
+                java.sql.Timestamp.class, user.getId()).toInstant();
+
+        resolve(material.streamId().toSrtFormat()).andExpect(jsonPath("$.valid").value(true));
+
+        assertThat(lastPairedAt(user)).isEqualTo(createdAt);
+    }
+
+    /**
+     * 🔴 채우기가 실패해도 확인 결과는 그대로다 — 던지면 Media가 「Auth 장애」로 읽고 송출을 거절한다(2차 리뷰: 이 약속을
+     * 재는 테스트가 없었다). 칸에 값을 못 넣게 하는 CHECK를 잠깐 걸어 UPDATE를 진짜로 실패시킨다.
+     */
+    @Test
+    void 연결_시각_채우기가_실패해도_송출_확인은_valid다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        jdbc.execute("ALTER TABLE stream_keys ADD CONSTRAINT test_block_last_paired "
+                + "CHECK (last_paired_at IS NULL) NOT VALID");
+        try {
+            resolve(material.streamId().toSrtFormat())
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.valid").value(true))
+                    .andExpect(jsonPath("$.passphrase").value(material.passphrase()));
+        } finally {
+            jdbc.execute("ALTER TABLE stream_keys DROP CONSTRAINT test_block_last_paired");
+        }
+        assertThat(lastPairedAt(user)).isNull();
+    }
+
+    /** 이 칸은 「코드가 쓰인 시각」이다 — 송출할 때마다 덮으면 웹이 새 코드의 연결로 잘못 읽는다. */
+    @Test
+    void 연결_시각이_있으면_송출_확인이_덮지_않는다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        Instant paired = Instant.parse("2026-11-01T00:00:00Z");
+        streamKeyService.markPaired(material, paired);
+
+        resolve(material.streamId().toSrtFormat()).andExpect(jsonPath("$.valid").value(true));
+
+        assertThat(lastPairedAt(user)).isEqualTo(paired);
+    }
+
+    @Test
+    void 폐기된_키는_송출_확인이_연결_시각을_채우지_않는다() throws Exception {
+        User user = newUser();
+        StreamKeyMaterial material = streamKeyService.ensureKey(user.getId());
+        jdbc.update("UPDATE stream_keys SET revoked_at = now() WHERE user_id = ?", user.getId());
+
+        resolve(material.streamId().toSrtFormat()).andExpect(jsonPath("$.valid").value(false));
+
+        Integer marked = jdbc.queryForObject(
+                "SELECT count(*) FROM stream_keys WHERE user_id = ? AND last_paired_at IS NOT NULL",
+                Integer.class, user.getId());
+        assertThat(marked).isZero();
+    }
+
+    private Instant lastPairedAt(User user) {
+        java.sql.Timestamp at = jdbc.queryForObject(
+                "SELECT last_paired_at FROM stream_keys WHERE user_id = ? AND revoked_at IS NULL",
+                java.sql.Timestamp.class, user.getId());
+        return at == null ? null : at.toInstant();
+    }
+
+    /**
      * 계약의 핵심. valid:false도 200이다 — Media 입장에서 "키가 틀림"(연결 거절)과
      * "Auth 장애"(판단 불가)는 원인과 후속 조치가 다른데, 둘 다 4xx면 Go 쪽에서 구분이 안 된다.
      * Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경우 모두 그 새 연결을 거부한다.
