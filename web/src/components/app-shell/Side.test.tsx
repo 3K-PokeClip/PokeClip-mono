@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Side } from '@/components/app-shell/Side';
@@ -20,12 +20,17 @@ beforeEach(() => {
   useSidebarStore.setState({ collapsed: false });
 });
 
+/** 메뉴 항목 링크만 — 맨 위 로고의 홈 링크(POK-611)는 메뉴가 아니라 뺀다 */
+function menuLinks() {
+  return screen.getAllByRole('navigation').flatMap((nav) => within(nav).queryAllByRole('link'));
+}
+
 describe('Side — 설정', () => {
   it('설정 메뉴 7개 중 구독 · 결제만 빼고 링크이고 현재 경로를 활성으로 표시한다', () => {
     nav.pathname = '/settings/plugin';
     renderWithProviders(<Side menu="settings" />);
 
-    const links = screen.getAllByRole('link');
+    const links = menuLinks();
     expect(links).toHaveLength(6);
     expect(links[0]).toHaveAttribute('href', '/settings/channels');
     expect(links[0]).not.toHaveAttribute('aria-current');
@@ -65,6 +70,58 @@ describe('Side — 설정', () => {
       'aria-expanded',
       'false',
     );
+  });
+});
+
+describe('Side: 로고는 홈으로 가는 링크 (POK-611)', () => {
+  const homeLink = () => screen.getByRole('link', { name: 'PokeClip 홈으로' });
+
+  it('펼친 사이드바에서는 심볼과 워드마크가 한 링크로 홈에 간다', () => {
+    nav.pathname = '/settings/plugin';
+    renderWithProviders(<Side menu="settings" />);
+
+    const link = homeLink();
+    expect(link).toHaveAttribute('href', '/home');
+    // 심볼(그림)과 「PokeClip」 글자가 같은 링크 안이다 — 둘 중 어디를 눌러도 간다
+    expect(link.querySelector('svg')).not.toBeNull();
+    expect(within(link).getByText('PokeClip')).toBeInTheDocument();
+    // 탭으로 닿고, 눌렀을 때 이동을 막지 않는다
+    expect(link).not.toHaveAttribute('tabindex');
+    expect(link).not.toHaveAttribute('aria-disabled');
+    expect(fireEvent.click(link)).toBe(true);
+  });
+
+  it('접힌 사이드바에서는 링크가 꺼진다 — 그 자리는 펼치기 버튼이다', async () => {
+    nav.pathname = '/settings/plugin';
+    const user = userEvent.setup();
+    renderWithProviders(<Side menu="settings" />);
+    const expanded = homeLink();
+
+    await user.click(screen.getByRole('button', { name: '사이드바 접기' }));
+
+    const link = homeLink();
+    // 요소는 그대로다 — 갈아 끼우면 심볼·워드마크가 다시 붙어 접히는 움직임이 끊긴다
+    expect(link).toBe(expanded);
+    // 탭 순서에서 빠지고(초점이 가면 로고가 햄버거로 바뀐다), 눌러도 가지 않는다
+    expect(link).toHaveAttribute('tabindex', '-1');
+    expect(link).toHaveAttribute('aria-disabled', 'true');
+    expect(fireEvent.click(link)).toBe(false);
+
+    // 다시 펼치면 돌아온다
+    await user.click(screen.getByRole('button', { name: '사이드바 펼치기' }));
+    expect(homeLink()).not.toHaveAttribute('tabindex');
+    expect(fireEvent.click(homeLink())).toBe(true);
+  });
+
+  it('방송·클립 사이드바에도 있다 — 메뉴와 상관없이 같은 껍데기다', () => {
+    nav.pathname = '/broadcast/livenow';
+    const { unmount } = renderWithProviders(<Side menu="broadcast" />);
+    expect(homeLink()).toHaveAttribute('href', '/home');
+    unmount();
+
+    nav.pathname = '/clips/library';
+    renderWithProviders(<Side menu="clips" />);
+    expect(homeLink()).toHaveAttribute('href', '/home');
   });
 });
 
@@ -116,7 +173,7 @@ describe('Side — 클립', () => {
     nav.pathname = '/clips/library';
     renderWithProviders(<Side menu="clips" />);
 
-    const links = screen.getAllByRole('link');
+    const links = menuLinks();
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute('href', '/clips/library');
     expect(links[0]).toHaveAttribute('aria-current', 'page');

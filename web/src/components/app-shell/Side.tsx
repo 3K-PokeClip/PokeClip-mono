@@ -147,10 +147,27 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
   return (
     <aside className={styles.sidebar} data-collapsed={collapsed}>
       <div className={styles.brand}>
-        <span className={styles.brandMark}>
-          <BrandSymbol size={28} className={styles.brandLogo} />
-        </span>
-        <span className={styles.brandName}>PokeClip</span>
+        {/* 펼친 사이드바에서는 심볼과 워드마크가 홈으로 간다(POK-611). 접히면 이 자리는 펼치기 버튼이 덮으므로(아래
+            brandToggle) 링크를 끈다: 탭 순서에서 빼고 포인터도 받지 않는다(.brandLink). 링크에 초점이 가면
+            `.brand:has(:focus-visible)`이 로고를 햄버거로 바꿔, 홈 링크에 초점이 있는데 펼치기 그림이 보이게 된다.
+            접힐 때 요소를 빼지 않고 속성만 바꾸는 까닭 — 감싸는 요소가 바뀌면 심볼·워드마크가 다시 붙어
+            접히는 움직임이 끊긴다 */}
+        <Link
+          href="/home"
+          className={styles.brandLink}
+          aria-label="PokeClip 홈으로"
+          aria-disabled={collapsed || undefined}
+          tabIndex={collapsed ? -1 : undefined}
+          onClick={(e) => {
+            // 보조 기술은 포인터·탭 순서와 무관하게 누를 수 있다 — 접힌 동안은 거기서도 가지 않는다
+            if (collapsed) e.preventDefault();
+          }}
+        >
+          <span className={styles.brandMark}>
+            <BrandSymbol size={28} className={styles.brandLogo} />
+          </span>
+          <span className={styles.brandName}>PokeClip</span>
+        </Link>
         <span className={styles.brandToggle}>
           <IconButton
             variant="ghost"
