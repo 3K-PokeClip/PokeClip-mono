@@ -26,6 +26,17 @@ public interface StreamKeyRepository extends JpaRepository<StreamKey, Long> {
     int revokeAlive(@Param("userId") Long userId, @Param("now") Instant now);
 
     /**
+     * 살아있는 키에 「연동 코드가 쓰였다」를 적는다(POK-607).
+     *
+     * <p>0행이면 그 사이 키가 폐기된 것이다(재발급·탈퇴와 겹쳤다). 교환은 이미 성공했고 이 시각은
+     * 화면 안내용이라 호출부는 0행을 실패로 다루지 않는다 — 폐기된 키에 「연결했다」를 남기지 않는 쪽이 맞다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update StreamKey k set k.lastPairedAt = :now "
+            + "where k.userId = :userId and k.revokedAt is null")
+    int markPaired(@Param("userId") Long userId, @Param("now") Instant now);
+
+    /**
      * 이 회원의 <b>키 전부(폐기된 것 포함)</b>가 가리키는 비밀값 자리. 탈퇴의 커밋 뒤 정리가 쓴다.
      *
      * <p>🔴 <b>살아있는 키 하나로는 부족하다</b>({@code findByUserIdAndRevokedAtIsNull}).

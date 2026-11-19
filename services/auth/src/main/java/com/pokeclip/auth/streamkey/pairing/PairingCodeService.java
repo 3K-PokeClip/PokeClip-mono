@@ -85,6 +85,9 @@ public class PairingCodeService {
         Long userId = pairingCodeRepository.findByCodeHash(codeHash).orElseThrow().getUserId();
         // POK-72: 키가 이미 있으면 같은 것을 준다. ensureKey가 그것을 보장한다.
         StreamKeyMaterial material = streamKeyService.ensureKey(userId);
+        // 웹이 「코드만 받았다」와 「코드를 OBS에 넣었다」를 가르는 유일한 근거다(POK-607).
+        // 키는 첫 발급 때 생기므로 키 유무로는 안 갈린다. 위 markUsed와 같은 트랜잭션이다.
+        streamKeyService.markPaired(userId, now);
 
         log.info("auth.pairing.code_exchanged userId={}", userId);
         return material;

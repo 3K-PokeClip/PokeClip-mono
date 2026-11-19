@@ -18,6 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -28,6 +29,7 @@ import java.util.concurrent.Future;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -140,6 +142,26 @@ class StreamKeyRotateTest extends IntegrationTestSupport {
                 .hasSize(2)
                 .filteredOn(StreamKey::isRevoked)
                 .hasSize(1);
+    }
+
+    /**
+     * 재발급은 새 키다. 옛 키를 받은 플러그인은 더는 못 붙으니(위 REVOKED) 「연결했다」도 같이 사라져야 한다 —
+     * 남으면 웹이 송출이 안 되는 회원에게 연결됐다고 말한다(POK-607).
+     */
+    @Test
+    void 재발급하면_연결_시각이_비워진다() throws Exception {
+        User user = newUser();
+        streamKeyService.ensureKey(user.getId());
+        streamKeyService.markPaired(user.getId(), Instant.now());
+        mockMvc.perform(get("/api/stream-keys").header("Authorization", bearer(user)))
+                .andExpect(jsonPath("$.lastPairedAt").exists());
+
+        mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/stream-keys").header("Authorization", bearer(user)))
+                .andExpect(jsonPath("$.issued").value(true))
+                .andExpect(jsonPath("$.lastPairedAt").doesNotExist());
     }
 
     /** 조용히 새로 발급하면 "무효화가 일어났다"는 로그가 거짓이 된다. */

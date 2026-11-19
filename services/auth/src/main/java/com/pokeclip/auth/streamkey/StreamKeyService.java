@@ -124,6 +124,18 @@ public class StreamKeyService {
     }
 
     /**
+     * 「이 회원이 연동 코드를 플러그인에 넣었다」를 살아있는 키에 적는다(POK-607).
+     * <b>교환이 성공한 자리에서만 부른다</b> — 발급에서 부르면 「코드만 받았다」와 다시 안 갈린다.
+     *
+     * <p>부르는 쪽(교환)의 트랜잭션에 참여한다. 코드 소비와 한 단위라, 코드는 쓰였는데 시각이 안 남거나
+     * 그 반대가 되는 틈이 없다.
+     */
+    @Transactional
+    public void markPaired(Long userId, Instant at) {
+        streamKeyRepository.markPaired(userId, at);
+    }
+
+    /**
      * 키 행은 있는데 secret이 없으면 우리 저장소가 어긋난 것이다. 500으로 올린다 —
      * Media 입장에서 "키가 틀림"이 아니라 "판단 불가"이고, 둘은 원인과 후속 조치가 다르다.
      * RequestIdFilter의 request.failed ERROR가 상관 ID와 함께 잡는다.

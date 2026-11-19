@@ -28,6 +28,7 @@ import java.util.concurrent.Future;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -295,6 +296,51 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * POK-607: 웹이 「코드만 받았다」와 「코드를 OBS에 넣었다」를 가르는 유일한 근거다.
+     * 발급만으로 시각이 생기면(첫 단언) 플러그인 없는 회원이 연결된 것으로 보인다.
+     */
+    @Test
+    void 교환에_성공하면_상태_응답에_연결_시각이_실린다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        keyStatus(user).andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+
+        exchange(code, "10.0.0.1").andExpect(status().isOk());
+
+        keyStatus(user)
+                .andExpect(jsonPath("$.issued").value(true))
+                .andExpect(jsonPath("$.lastPairedAt").exists());
+    }
+
+    /** 거절된 시도는 연결이 아니다. 만료된 코드를 넣은 회원에게 웹이 「연결됐어요」라고 하면 안 된다. */
+    @Test
+    void 교환에_실패하면_연결_시각이_생기지_않는다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+        jdbc.update("UPDATE pairing_codes SET expires_at = now() - INTERVAL '1 minute'");
+
+        exchange(code, "10.0.0.1").andExpect(status().isGone());
+
+        keyStatus(user).andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+    }
+
+    /** UPDATE의 조건에서 회원이 빠지면 한 사람의 교환이 모든 키에 시각을 남긴다. */
+    @Test
+    void 남의_교환은_내_연결_시각을_만들지_않는다() throws Exception {
+        User me = newUser();
+        issueCode(me);
+        // 이메일이 같으면 둘째 회원이 안 만들어진다(이메일은 계정마다 하나다)
+        User other = userService.findOrCreate(
+                "sub-" + UUID.randomUUID(), "b@example.com", "남의 계정", null);
+        String othersCode = issueCode(other);
+
+        exchange(othersCode, "10.0.0.1").andExpect(status().isOk());
+
+        keyStatus(other).andExpect(jsonPath("$.lastPairedAt").exists());
+        keyStatus(me).andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+    }
+
     @Test
     void 로그인하지_않아도_교환할_수_있다() throws Exception {
         String code = issueCode(newUser());
@@ -311,6 +357,12 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
                 })
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"code\":\"" + code + "\"}"));
+    }
+
+    private ResultActions keyStatus(User user) throws Exception {
+        return mockMvc.perform(get("/api/stream-keys")
+                        .header("Authorization", "Bearer " + tokenService.issue(user).accessToken()))
+                .andExpect(status().isOk());
     }
 
     private String issueCode(User user) throws Exception {

@@ -81,6 +81,22 @@ class StreamKeyControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 키는 첫 코드 발급 때 생긴다. 그것만으로 「연결했다」고 답하면 플러그인을 깔지 않은 회원에게
+     * 웹이 준비 완료라고 말하게 된다(POK-607) — 연결 시각은 교환이 성공해야 생긴다
+     * ({@code PairingCodeExchangeTest.교환에_성공하면_상태_응답에_연결_시각이_실린다}).
+     */
+    @Test
+    void 키만_있고_코드를_쓴_적이_없으면_연결_시각이_없다() throws Exception {
+        User user = newUser();
+        streamKeyService.ensureKey(user.getId());
+
+        mockMvc.perform(get("/api/stream-keys").header("Authorization", bearer(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.issued").value(true))
+                .andExpect(jsonPath("$.lastPairedAt").doesNotExist());
+    }
+
+    /**
      * 응답에 긴 비밀이 절대 안 실린다. 편의로 streamid를 되돌려주는 변경이
      * 들어오면 여기서 걸린다 — 원문을 저장하지 않으므로 그런 변경은 곧
      * "원문을 저장하기 시작했다"는 뜻이다.
