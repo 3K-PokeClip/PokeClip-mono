@@ -1898,15 +1898,17 @@ worker_stop "${k}"
 *   **자동 조절 코드 되돌리기(POK-605 PR revert) — 내리지 않습니다:** 이
     루트는 남으므로 철거하지 않습니다. 머지 커밋을 `git revert -m 1 <머지
     커밋>` 으로 되돌려 머지한 뒤, 이 루트를 plan · apply 합니다(kty 승인).
-    요지는 확장 대상 둘 · 조절 정책 넷 · 경보 넷의 delete 와 원하는 수가 0 인
-    서비스의 1 로의 update 뿐입니다 — 서비스 · 역할 · 로그 그룹의 delete 가
-    보이면 멈추고 kty 에게 넘깁니다. 자동 조절 apply 전이면 revert 만 합니다.
-    revert 는 `modules/ecs_service` 의 원하는 수 무시도 되돌리므로, platform
-    도 plan 해 다섯 서비스의 원하는 수가 구성 값과 같은지(변경 0) 봅니다.
-    변경 0 이 아니면 멈추고 kty 에게 넘깁니다. plan 전에 두 일꾼을
-    `worker_now` 로 읽어, 긴급 정지 중(세 값 `True True True`)이면 그 0 → 1
-    은 정지 해제이므로 승인 요청에 그대로 적거나 멈춥니다. apply 뒤 두 일꾼의
-    원하는 수가 1 이고 다시 plan 해 변경 0 인지 봅니다.
+    plan 전에 두 일꾼을 `worker_now` 로 읽습니다 — revert 뒤 README 에는 「일꾼
+    쓰기 함수」 블록이 없으므로 revert 전 판(머지 커밋)의 블록을 붙여 넣습니다.
+    `0 <실행 수> True True True`(긴급 정지 중)이면 plan 의 0 → 1 은 정지
+    해제이므로 승인 요청에 그대로 적거나 멈춥니다. 요지는 확장 대상 둘 · 조절
+    정책 넷 · 경보 넷의 delete 와 원하는 수가 0 인 서비스의 1 로의 update
+    뿐입니다 — 서비스 · 역할 · 로그 그룹의 delete 가 보이면 멈추고 kty 에게
+    넘깁니다. 자동 조절 apply 전이면 revert 만 합니다. revert 는
+    `modules/ecs_service` 의 원하는 수 무시도 되돌리므로, platform 도 plan 해
+    다섯 서비스의 원하는 수가 구성 값과 같은지(변경 0) 봅니다. 변경 0 이
+    아니면 멈추고 kty 에게 넘깁니다. apply 뒤 두 일꾼의 원하는 수가 1 이고
+    다시 plan 해 변경 0 인지 봅니다.
 *   **루트 전체를 되돌릴 때(workers 루트를 처음 만든 PR revert) revert 전에
     내립니다** — 되돌리면 이 루트의 코드가 사라져 destroy 할 구성이
     없어집니다. PR 은 머지 커밋이라 `git revert -m 1 <머지 커밋>` 으로
