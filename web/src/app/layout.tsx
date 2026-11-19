@@ -1,9 +1,11 @@
 import '@/ui/styles/global.css';
 import './shell.css';
+import './small-screen.css';
 
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { getThemeInitScript } from '@/ui/theme/getThemeInitScript';
+import { SmallScreenNotice } from '@/components/app-shell/SmallScreenNotice';
 import { Providers } from './providers';
 
 export const metadata: Metadata = {
@@ -26,6 +28,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       {/* 브라우저 확장이 hydration 전에 body 속성을 주입하는 경우가 있어 속성 불일치만 억제 */}
       <body suppressHydrationWarning>
         <Providers>{children}</Providers>
+        {/* 휴대폰 크기 화면에서는 앱을 가리고 이 안내만 보인다(small-screen.css, POK-610). <body> 바로 아래여야 한다 —
+            CSS가 `body > :not(.pc-small-screen)`으로 나머지를 가리므로 감싸면 안내까지 가려진다 */}
+        <SmallScreenNotice />
       </body>
     </html>
   );
