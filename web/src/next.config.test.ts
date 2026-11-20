@@ -92,6 +92,12 @@ describe('next.config headers: Referrer-Policy (POK-482)', () => {
           { key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' },
         ],
       },
+      {
+        source: '/guide/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' },
+        ],
+      },
     ]);
   });
 
