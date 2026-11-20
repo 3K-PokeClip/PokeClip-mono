@@ -135,10 +135,8 @@ describe('PluginSettingsScreen', () => {
       // 다른 PC에 더 붙일 때의 다운로드는 맨 아래 배너다 — 연결 순서 카드는 없다
       expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'OBS 플러그인 연결' })).not.toBeInTheDocument();
-      // 설치 과정 영상(POK-615)은 연결한 회원에게도 있다(다른 PC에 깔 때 본다) — 배너는 그 아래, 여전히 맨 끝이다
-      const video = screen.getByRole('region', { name: '설치 과정 영상' });
-      const banner = screen.getByText(/다른 PC에 설치하나요/);
-      expect(video.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // 설치 과정 영상(POK-615)은 연결한 회원에게는 없다 — 영상 속 「다시 켰어요」 · 「코드 받기」가 이 화면엔 없다(PR #551 리뷰)
+      expect(screen.queryByRole('region', { name: '설치 과정 영상' })).not.toBeInTheDocument();
     });
 
     it('코드 원문은 화면 어디에도 다시 나오지 않는다 (ADR-019)', async () => {
