@@ -46,6 +46,7 @@
    눌린 바탕 칸 하나에 자물쇠 표식 · 까닭 · 지금 채널 · 전환 버튼. 카드 안 상태색은 자물쇠 표식 하나다 */
 .lockedCallout {
   display: flex;
+  flex-wrap: wrap; /* 좁으면 버튼이 글 아래로 내려간다 */
   align-items: center;
   gap: calc(12 * var(--pc-u));
   padding: calc(14 * var(--pc-u));
@@ -71,8 +72,9 @@
 }
 
 .lockedText {
-  flex: 1;
+  flex: 1 1 calc(180 * var(--pc-u));
   min-width: 0;
+  overflow-wrap: anywhere; /* 띄어쓰기 없는 긴 채널 이름도 끊는다 */
   display: grid;
   gap: calc(2 * var(--pc-u));
 }
