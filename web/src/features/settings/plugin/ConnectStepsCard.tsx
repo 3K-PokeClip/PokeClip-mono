@@ -17,12 +17,13 @@ import styles from './PluginSettingsScreen.module.css';
 // 거짓으로 눌러도 코드는 나온다. 막으려는 것은 속임이 아니라 읽지 않고 누르는 것이다.
 //
 // 진한 버튼은 지금 할 단계 하나에만 두고, 그 단계를 따라 옮긴다(2026-11-20 시안 A 「진한 버튼이 따라온다」, POK-613):
-// 처음엔 1번 「다운로드」, 다운로드를 누르면 2번 「다시 켰어요」, 다시 켰다고 하면 3번 「코드 받기」. 나머지는 테두리
+// 처음엔 1번 「다운로드」, 받기 창에서 설치 파일을 받으면 2번 「다시 켰어요」, 다시 켰다고 하면 3번 「코드 받기」. 나머지는 테두리
 // 버튼이다. 처음 판은 다운로드를 눌러도 진한 버튼이 「다운로드」에 남고 2번은 연한(soft) 버튼이라, 새 회원 둘이 다운로드만
 // 4~5번 누르고 2번을 버튼으로 알아보지 못한 채 떠났다(2026-11-20 17·18번 — 코드 발급 0).
 export function ConnectStepsCard({
   codeIssued,
   codeWaiting,
+  downloaded,
   busy,
   titleRef,
   onDownload,
@@ -36,6 +37,12 @@ export function ConnectStepsCard({
    * 주세요」는 실패처럼 읽혔다(PR #539 리뷰).
    */
   codeWaiting: boolean;
+  /**
+   * 받기 창 안의 설치 파일 링크를 누른 적이 있다 — 1번을 끝낸 것으로 세우고 진한 버튼을 2번으로 넘긴다.
+   * 창을 연 것만으로는 아니다. 받았는지·설치했는지는 웹이 모른다 — 다음 할 일을 진하게 세우는 표시로만 쓴다.
+   * 화면이 들고 있다 — 배너로 연 창에서 받아도 센다(PluginSettingsScreen)
+   */
+  downloaded: boolean;
   /** 창을 닫았는데 초점이 갈 곳이 없을 때 화면이 이 제목으로 초점을 옮긴다(PluginSettingsScreen) */
   titleRef?: Ref<HTMLHeadingElement>;
   /** 발급 진행 중 — 이중 클릭 방지. */
@@ -43,10 +50,7 @@ export function ConnectStepsCard({
   onDownload: () => void;
   onIssue: () => void;
 }) {
-  // 둘 다 이 화면을 떠나면 잊는다 — 다시 들어온 회원은 OBS가 지금도 켜져 있는지부터 다시 본다.
-  // 「다운로드를 눌렀다」도 회원이 다운로드 창을 연 것일 뿐이다(받았는지·설치했는지는 웹이 모른다). 진한 버튼을
-  // 다음 단계로 넘기는 표시로만 쓴다 — 창을 닫고 돌아왔을 때 다음 할 일이 진하게 서 있게.
-  const [downloaded, setDownloaded] = useState(false);
+  // 이 화면을 떠나면 잊는다 — 다시 들어온 회원은 OBS가 지금도 켜져 있는지부터 다시 본다
   const [restarted, setRestarted] = useState(false);
   // 지금 할 단계. 다시 켰다고 하면 설치는 끝난 것으로 본다(이미 설치하고 온 회원은 다운로드를 건너뛴다)
   const current = restarted ? 3 : downloaded ? 2 : 1;
@@ -84,10 +88,7 @@ export function ConnectStepsCard({
             className={styles.connectStepAction}
             iconStart={<Download size={14} aria-hidden />}
             aria-haspopup="dialog"
-            onClick={() => {
-              setDownloaded(true);
-              onDownload();
-            }}
+            onClick={onDownload}
           >
             {downloaded ? '다시 받기' : '다운로드'}
           </Button>

@@ -27,7 +27,14 @@ const HINT: Record<PluginOs, string> = {
   macos: '설치 파일(.pkg) · Apple Silicon·Intel 공용',
 };
 
-export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) {
+export function PluginDownloadPanel({
+  detectedOs,
+  onDownloadClick,
+}: {
+  detectedOs: DetectedOs;
+  /** 설치 파일 링크를 누른 순간 — 연결 순서 카드가 1번을 끝낸 것으로 세운다(POK-613). 받았는지는 여전히 모른다 */
+  onDownloadClick?: () => void;
+}) {
   // 감지는 첫 탭만 정한다 — 사용자가 고른 탭을 늦게 온 감지 결과가 덮지 않는다. 모르면 Windows
   const [chosen, setChosen] = useState<PluginOs | null>(null);
   const os: PluginOs = chosen ?? (detectedOs === 'macos' ? 'macos' : 'windows');
@@ -44,10 +51,10 @@ export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) 
           </Tabs.Trigger>
         </Tabs.List>
         <Tabs.Panel value="windows" className={styles.downloadTabPanel}>
-          <OsSteps os="windows" />
+          <OsSteps os="windows" onDownloadClick={onDownloadClick} />
         </Tabs.Panel>
         <Tabs.Panel value="macos" className={styles.downloadTabPanel}>
-          <OsSteps os="macos" />
+          <OsSteps os="macos" onDownloadClick={onDownloadClick} />
         </Tabs.Panel>
       </Tabs>
       <p className={styles.downloadMeta}>
@@ -58,7 +65,7 @@ export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) 
   );
 }
 
-function OsSteps({ os }: { os: PluginOs }) {
+function OsSteps({ os, onDownloadClick }: { os: PluginOs; onDownloadClick?: () => void }) {
   const { kind, url } = PLUGIN_DOWNLOADS[os];
 
   // role="list"는 겹쳐 보여도 지우지 않는다 — list-style: none인 목록은 Safari가 목록 의미를 벗겨,
@@ -77,7 +84,10 @@ function OsSteps({ os }: { os: PluginOs }) {
             size="md"
             fullWidth
             iconStart={<Download size={16} aria-hidden />}
-            onClick={() => track('plugin_download_clicked', { os, kind })}
+            onClick={() => {
+              track('plugin_download_clicked', { os, kind });
+              onDownloadClick?.();
+            }}
           >
             다운로드
             <VisuallyHidden>

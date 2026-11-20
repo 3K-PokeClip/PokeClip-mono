@@ -92,6 +92,11 @@ export function PluginSettingsScreen() {
   // 고정 주소라, 읽기가 오래 걸리거나 실패했다고 받을 길까지 막을 까닭이 없다(GET 한도 30초 + 재시도 1회면 1분).
   // 맨 아래 블록이라 늦게 온 「연결한 적 없음」에 거둬도 위쪽이 밀리지 않는다 — 그때는 순서 카드 1번이 받을 길이다
   const showBanner = paired || error || (loading && slow);
+  // 설치 파일 링크를 누른 적(POK-613) — 순서 카드가 1번을 끝낸 것으로 세우고 진한 버튼을 2번으로 넘긴다.
+  // 창을 연 것만으로는 세지 않는다 — 안내만 읽고 닫은 사람에게는 받은 파일이 없다. 화면이 들고 있는 까닭은 받기 창을
+  // 여는 길이 둘(순서 카드 1번 · 배너)이기 때문이다: 읽기가 늦어 배너로 먼저 받은 뒤 순서 카드가 붙어도 1번이 끝난
+  // 것으로 선다(PR #549 리뷰)
+  const [downloadClicked, setDownloadClicked] = useState(false);
   // 창을 연 것도 센다 — 받기 링크(plugin_download_clicked)까지 안 간 사람이 창은 봤는지 가른다
   const openDownload = (from: 'guide' | 'banner') => {
     setDownloadOpen(true);
@@ -110,6 +115,7 @@ export function PluginSettingsScreen() {
             titleRef={topCardTitleRef}
             codeIssued={code.issued}
             codeWaiting={codeWaiting}
+            downloaded={downloadClicked}
             busy={busy}
             onDownload={() => openDownload('guide')}
             onIssue={issue}
@@ -142,6 +148,7 @@ export function PluginSettingsScreen() {
         open={downloadOpen}
         onClose={() => setDownloadOpen(false)}
         detectedOs={detectedOs}
+        onDownloadClick={() => setDownloadClicked(true)}
       />
     </div>
   );

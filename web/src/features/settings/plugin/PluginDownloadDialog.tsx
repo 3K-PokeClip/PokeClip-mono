@@ -13,10 +13,13 @@ export function PluginDownloadDialog({
   open,
   onClose,
   detectedOs,
+  onDownloadClick,
 }: {
   open: boolean;
   onClose: () => void;
   detectedOs: DetectedOs;
+  /** 창 안의 설치 파일 링크를 누른 순간(PluginDownloadPanel) */
+  onDownloadClick?: () => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -34,7 +37,7 @@ export function PluginDownloadDialog({
           </IconButton>
         </div>
         <Dialog.Description>설치할 PC를 고르고 아래 순서대로 하세요.</Dialog.Description>
-        <PluginDownloadPanel detectedOs={detectedOs} />
+        <PluginDownloadPanel detectedOs={detectedOs} onDownloadClick={onDownloadClick} />
       </Dialog.Content>
     </Dialog>
   );

@@ -294,9 +294,18 @@ describe('PluginSettingsScreen', () => {
         'outline',
       );
 
-      // 다운로드 창을 열고 닫고 돌아오면: 1번은 끝난 것으로 서고, 진한 버튼은 2번으로 간다
+      // 창을 열었다 받지 않고 닫으면 그대로다 — 안내만 읽은 사람에게는 받은 파일이 없다(PR #549 리뷰)
       fireEvent.click(screen.getByRole('button', { name: '다운로드' }));
-      const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+      let dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+      fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(solid()).toEqual(['다운로드']);
+      expect(current()).toBe(0);
+
+      // 창에서 설치 파일을 받고 돌아오면: 1번은 끝난 것으로 서고, 진한 버튼은 2번으로 간다
+      fireEvent.click(screen.getByRole('button', { name: '다운로드' }));
+      dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+      fireEvent.click(within(dialog).getByRole('link', { name: /설치 파일/ }));
       fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(solid()).toEqual(['다시 켰어요']);
@@ -583,6 +592,39 @@ describe('PluginSettingsScreen', () => {
       expect(await screen.findByRole('region', { name: 'OBS 플러그인 연결' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '다운로드' })).toBeInTheDocument();
       expect(screen.queryByText(/다른 PC에 설치하나요/)).not.toBeInTheDocument();
+    });
+
+    it('읽기가 늦어 배너로 먼저 받았으면, 뒤늦게 붙은 순서 카드도 1번을 끝낸 것으로 세운다 (PR #549 리뷰)', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      let answer: (res: Response) => void = () => {};
+      stubFetch((url, init) => {
+        if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
+          return new Promise<Response>((resolve) => (answer = resolve));
+        return jsonResponse(404);
+      });
+      renderWithProviders(<PluginSettingsScreen />);
+      await act(async () => {
+        vi.advanceTimersByTime(STATUS_SLOW_MS);
+      });
+
+      // 배너 → 창 → 설치 파일. 순서 카드는 아직 없다
+      fireEvent.click(screen.getByRole('button', { name: '플러그인 다운로드' }));
+      const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+      fireEvent.click(within(dialog).getByRole('link', { name: /설치 파일/ }));
+      fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+      await act(async () => answer(jsonResponse(200, { issued: false })));
+      const card = await screen.findByRole('region', { name: 'OBS 플러그인 연결' });
+      expect(card.querySelector('li')).toHaveAttribute('data-state', 'done');
+      expect(within(card).getByRole('button', { name: '다시 받기' })).toHaveAttribute(
+        'data-variant',
+        'outline',
+      );
+      expect(within(card).getByRole('button', { name: '다시 켰어요' })).toHaveAttribute(
+        'data-variant',
+        'solid',
+      );
     });
 
     it('첫 조회가 실패했다가 다시 시도로 「연결한 적 없음」을 읽으면 순서 카드로 바뀐다', async () => {
