@@ -1,5 +1,5 @@
 import { QueryClient, focusManager } from '@tanstack/react-query';
-import { act, fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PAIRING_CODE_TTL_MS } from '@/api/streamKeys';
 import {
@@ -269,6 +269,79 @@ describe('PluginSettingsScreen', () => {
       expect(screen.queryByText(/다른 PC에 설치하나요/)).not.toBeInTheDocument();
       // 발급은 연결이 아니다 — 연결했다는 말이 어디에도 없다
       expect(document.body).not.toHaveTextContent(/연결했어요|연결됨|마지막 연결/);
+    });
+
+    it('진한 버튼은 지금 할 단계 하나에만 있고, 다운로드 → 다시 켰어요 → 코드 받기로 따라간다 (시안 A, POK-613)', async () => {
+      // 2026-11-20 17·18번: 다운로드를 눌러도 진한 버튼이 「다운로드」에 남고 2번은 연한 버튼이라, 다운로드만 4~5번 누르고 떠났다
+      stubStreamKeyFetch({ issued: false });
+      renderWithProviders(<PluginSettingsScreen />);
+
+      const card = await screen.findByRole('region', { name: 'OBS 플러그인 연결' });
+      const steps = () => Array.from(card.querySelectorAll('li'));
+      // 창이 떠 있으면 카드가 접근성 트리에서 빠지므로 역할 대신 DOM으로 센다
+      const solid = () =>
+        Array.from(card.querySelectorAll('button'))
+          .filter((b) => b.getAttribute('data-variant') === 'solid')
+          .map((b) => b.textContent);
+      const current = () => steps().findIndex((li) => li.getAttribute('aria-current') === 'step');
+
+      // 처음: 1번
+      expect(solid()).toEqual(['다운로드']);
+      expect(current()).toBe(0);
+      // 2번은 차례가 아니어도 테두리 버튼이다 — 연한(soft) 버튼은 카드 바탕과 거의 같아 버튼으로 안 보였다
+      expect(screen.getByRole('button', { name: '다시 켰어요' })).toHaveAttribute(
+        'data-variant',
+        'outline',
+      );
+
+      // 다운로드 창을 열고 닫고 돌아오면: 1번은 끝난 것으로 서고, 진한 버튼은 2번으로 간다
+      fireEvent.click(screen.getByRole('button', { name: '다운로드' }));
+      const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+      fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(solid()).toEqual(['다시 켰어요']);
+      expect(current()).toBe(1);
+      expect(steps()[0]).toHaveAttribute('data-state', 'done');
+      // 다시 받을 길은 남는다 — 같은 창을 연다
+      expect(screen.getByRole('button', { name: '다시 받기' })).toHaveAttribute(
+        'data-variant',
+        'outline',
+      );
+
+      // 다시 켰다고 하면: 3번 「코드 받기」
+      fireEvent.click(screen.getByRole('button', { name: '다시 켰어요' }));
+      expect(solid()).toEqual(['코드 받기']);
+      expect(current()).toBe(2);
+      expect(screen.getByRole('button', { name: '아직이에요' })).toHaveAttribute(
+        'data-variant',
+        'outline',
+      );
+
+      // 되돌리면 다시 2번이다 — 다운로드는 이미 눌렀다
+      fireEvent.click(screen.getByRole('button', { name: '아직이에요' }));
+      expect(solid()).toEqual(['다시 켰어요']);
+      expect(current()).toBe(1);
+    });
+
+    it('이미 설치하고 온 회원은 다운로드를 건너뛰고 2번을 눌러도 된다 — 그때 1번도 끝난 것으로 선다', async () => {
+      stubStreamKeyFetch({ issued: false });
+      renderWithProviders(<PluginSettingsScreen />);
+
+      const card = await screen.findByRole('region', { name: 'OBS 플러그인 연결' });
+      fireEvent.click(await screen.findByRole('button', { name: '다시 켰어요' }));
+
+      const steps = Array.from(card.querySelectorAll('li'));
+      expect(steps[0]).toHaveAttribute('data-state', 'done');
+      expect(steps[2]).toHaveAttribute('aria-current', 'step');
+      expect(screen.getByRole('button', { name: '코드 받기' })).toHaveAttribute(
+        'data-variant',
+        'solid',
+      );
+      // 받은 적이 없으니 1번 버튼 이름은 그대로다
+      expect(screen.getByRole('button', { name: '다운로드' })).toHaveAttribute(
+        'data-variant',
+        'outline',
+      );
     });
 
     it('1번 「다운로드」는 다운로드 창을 열고 guide로 센다', async () => {

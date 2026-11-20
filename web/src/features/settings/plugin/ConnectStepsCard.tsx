@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type Ref } from 'react';
-import { Check, Download } from 'lucide-react';
+import { ArrowRight, Check, Download } from 'lucide-react';
 import { Button } from '@/ui';
 import styles from './PluginSettingsScreen.module.css';
 
@@ -15,7 +15,11 @@ import styles from './PluginSettingsScreen.module.css';
 //
 // 「다시 켰어요」는 회원의 말일 뿐이다 — 웹은 설치도 OBS 실행도 모른다(web/README 「플러그인 화면 계약」).
 // 거짓으로 눌러도 코드는 나온다. 막으려는 것은 속임이 아니라 읽지 않고 누르는 것이다.
-// 진한 버튼은 지금 할 일 하나에만 둔다: 처음엔 설치, 다시 켰다고 하면 코드.
+//
+// 진한 버튼은 지금 할 단계 하나에만 두고, 그 단계를 따라 옮긴다(2026-11-20 시안 A 「진한 버튼이 따라온다」, POK-613):
+// 처음엔 1번 「다운로드」, 다운로드를 누르면 2번 「다시 켰어요」, 다시 켰다고 하면 3번 「코드 받기」. 나머지는 테두리
+// 버튼이다. 처음 판은 다운로드를 눌러도 진한 버튼이 「다운로드」에 남고 2번은 연한(soft) 버튼이라, 새 회원 둘이 다운로드만
+// 4~5번 누르고 2번을 버튼으로 알아보지 못한 채 떠났다(2026-11-20 17·18번 — 코드 발급 0).
 export function ConnectStepsCard({
   codeIssued,
   codeWaiting,
@@ -39,8 +43,14 @@ export function ConnectStepsCard({
   onDownload: () => void;
   onIssue: () => void;
 }) {
-  // 이 화면을 떠나면 잊는다 — 다시 들어온 회원은 OBS가 지금도 켜져 있는지부터 다시 본다
+  // 둘 다 이 화면을 떠나면 잊는다 — 다시 들어온 회원은 OBS가 지금도 켜져 있는지부터 다시 본다.
+  // 「다운로드를 눌렀다」도 회원이 다운로드 창을 연 것일 뿐이다(받았는지·설치했는지는 웹이 모른다). 진한 버튼을
+  // 다음 단계로 넘기는 표시로만 쓴다 — 창을 닫고 돌아왔을 때 다음 할 일이 진하게 서 있게.
+  const [downloaded, setDownloaded] = useState(false);
   const [restarted, setRestarted] = useState(false);
+  // 지금 할 단계. 다시 켰다고 하면 설치는 끝난 것으로 본다(이미 설치하고 온 회원은 다운로드를 건너뛴다)
+  const current = restarted ? 3 : downloaded ? 2 : 1;
+  const stepVariant = (step: 1 | 2 | 3) => (current === step ? 'solid' : 'outline');
 
   // role="list"는 겹쳐 보여도 지우지 않는다 — list-style: none인 목록은 Safari가 목록 의미를 벗긴다(PluginDownloadPanel과 같다)
   return (
@@ -56,27 +66,38 @@ export function ConnectStepsCard({
             : '아래 순서대로 하면 연결돼요'}
       </p>
       <ol role="list" className={styles.connectSteps}>
-        <li className={styles.connectStep}>
+        <li
+          className={styles.connectStep}
+          data-state={current > 1 ? 'done' : undefined}
+          aria-current={current === 1 ? 'step' : undefined}
+        >
           <span className={styles.connectStepNum} aria-hidden>
-            1
+            {current > 1 ? <Check /> : 1}
           </span>
           <div className={styles.connectStepBody}>
             <p className={styles.connectStepTitle}>플러그인을 설치해요</p>
             <p className={styles.connectStepHint}>OBS를 끄고, 받은 파일을 실행해요</p>
           </div>
           <Button
-            variant={restarted ? 'outline' : 'solid'}
+            variant={stepVariant(1)}
             size="sm"
             className={styles.connectStepAction}
             iconStart={<Download size={14} aria-hidden />}
             aria-haspopup="dialog"
-            onClick={onDownload}
+            onClick={() => {
+              setDownloaded(true);
+              onDownload();
+            }}
           >
-            다운로드
+            {downloaded ? '다시 받기' : '다운로드'}
           </Button>
         </li>
 
-        <li className={styles.connectStep} data-state={restarted ? 'done' : undefined}>
+        <li
+          className={styles.connectStep}
+          data-state={restarted ? 'done' : undefined}
+          aria-current={current === 2 ? 'step' : undefined}
+        >
           <span className={styles.connectStepNum} aria-hidden>
             {restarted ? <Check /> : 2}
           </span>
@@ -88,18 +109,24 @@ export function ConnectStepsCard({
             </p>
           </div>
           {/* 상태는 라벨이 말한다(「다시 켰어요」 → 누르면 「아직이에요」로 되돌리기) — 다시 누르면 3번이 도로 잠긴다.
-              aria-pressed를 같이 달면 「아직이에요, 눌림」처럼 상태를 두 번, 엇갈리게 읽는다(PR #539 리뷰) */}
+              aria-pressed를 같이 달면 「아직이에요, 눌림」처럼 상태를 두 번, 엇갈리게 읽는다(PR #539 리뷰).
+              차례가 아닐 때도 연한(soft) 버튼으로 두지 않는다 — 카드 바탕과 거의 같은 색이라 버튼으로 안 보였다(POK-613) */}
           <Button
-            variant="soft"
+            variant={stepVariant(2)}
             size="sm"
             className={styles.connectStepAction}
+            iconEnd={restarted ? undefined : <ArrowRight size={14} aria-hidden />}
             onClick={() => setRestarted((v) => !v)}
           >
             {restarted ? '아직이에요' : '다시 켰어요'}
           </Button>
         </li>
 
-        <li className={styles.connectStep} data-state={restarted ? undefined : 'locked'}>
+        <li
+          className={styles.connectStep}
+          data-state={restarted ? undefined : 'locked'}
+          aria-current={current === 3 ? 'step' : undefined}
+        >
           <span className={styles.connectStepNum} aria-hidden>
             3
           </span>
@@ -113,7 +140,7 @@ export function ConnectStepsCard({
           </div>
           {/* 요청 중엔 스피너만 — 라벨은 자리만 지켜 폭이 튀지 않는다(.busyButton). 접근 이름은 aria-label이 대신한다 */}
           <Button
-            variant={restarted ? 'solid' : 'outline'}
+            variant={stepVariant(3)}
             size="sm"
             className={`${styles.connectStepAction} ${styles.busyButton}`}
             disabled={!restarted}

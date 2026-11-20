@@ -182,6 +182,13 @@
   color: var(--pc-color-accent-text);
 }
 
+/* 지금 할 단계 — 번호 원을 채워 진한 버튼과 같은 줄임을 보인다(POK-613). 카드 안 강조색은 여전히 하나다 */
+.connectStep[aria-current='step'] .connectStepNum {
+  background: var(--pc-color-accent);
+  border-color: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+}
+
 /* 아직 못 하는 단계 — 글을 흐리게(버튼은 disabled가 흐리게 한다) */
 .connectStep[data-state='locked'] .connectStepTitle,
 .connectStep[data-state='locked'] .connectStepHint {
