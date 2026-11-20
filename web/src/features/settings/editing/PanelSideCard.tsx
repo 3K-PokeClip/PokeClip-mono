@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import { Info } from 'lucide-react';
 import { RadioGroup, useToast } from '@/ui';
 import {
@@ -19,9 +20,18 @@ const SIDES: readonly { side: EditorPanelSide; label: string }[] = [
   { side: 'right', label: '오른쪽' },
 ];
 
+/** 누르거나 키를 친 뒤 이 안에 온 값 바뀜만 「고름」으로 본다 — 그 밖은 초점이 돌아온 것이다 */
+const INTENT_WINDOW_MS = 1000;
+
 export function PanelSideCard() {
   const { toast } = useToast();
   const side = useStoredPanelSide();
+  // DS RadioGroup은 항목이 초점만 받아도 그 값을 고른다(roving). 탭으로 돌아와 브라우저가 옛 라디오에 초점을 돌려주면
+  // 다른 탭(편집기)에서 바꾼 값을 옛 값으로 덮어썼다(PR #550 리뷰) — 방금 누르거나 키를 친 때만 저장한다
+  const intentAt = useRef(0);
+  const markIntent = () => {
+    intentAt.current = Date.now();
+  };
 
   return (
     <section className={styles.card} aria-labelledby="panel-side-title">
@@ -36,8 +46,14 @@ export function PanelSideCard() {
         className={styles.sideOptions}
         orientation="horizontal"
         value={side}
+        // 캡처 단계에서 적는다 — 라디오 자신의 click · keydown(초점 이동)이 값을 바꾸기 전에 먼저 돈다.
+        // click도 적는다: 타일을 1초 넘게 누르고 있다 떼면 pointerdown만으로는 창이 지난다
+        onPointerDownCapture={markIntent}
+        onClickCapture={markIntent}
+        onKeyDownCapture={markIntent}
         onValueChange={(next) => {
           if (next === side) return;
+          if (Date.now() - intentAt.current > INTENT_WINDOW_MS) return;
           if (!storePanelSide(next as EditorPanelSide)) {
             toast({ tone: 'error', title: '이 브라우저에 저장하지 못했어요' });
           }

@@ -93,6 +93,40 @@ describe('EditingSettingsScreen — 도구 패널 위치', () => {
     expect(radio('왼쪽')).toBeChecked();
   });
 
+  it('다른 탭이 바꾼 뒤 옛 라디오에 초점이 돌아와도 저장값을 덮어쓰지 않는다 (PR #550 리뷰)', () => {
+    stubTracks();
+    renderWithProviders(<EditingSettingsScreen />);
+    fireEvent.click(radio('오른쪽'));
+    expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBe('right');
+
+    // 옆 탭의 편집기가 왼쪽으로 옮겼다 — 이 탭의 초점은 「오른쪽」 라디오에 남아 있다
+    act(() => {
+      window.localStorage.setItem(PANEL_SIDE_KEY, 'left');
+      window.dispatchEvent(new StorageEvent('storage', { key: PANEL_SIDE_KEY, newValue: 'left' }));
+    });
+    expect(radio('왼쪽')).toBeChecked();
+
+    // 몇 초 뒤 탭으로 돌아오면 브라우저가 「오른쪽」 라디오에 초점을 돌려준다(DS RadioGroup은 초점만으로 고른다)
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 5_000);
+    fireEvent.focus(radio('오른쪽'));
+    clock.mockRestore();
+
+    expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBe('left');
+    expect(radio('왼쪽')).toBeChecked();
+  });
+
+  it('키보드 화살표로도 고르고 바로 저장한다', () => {
+    stubTracks();
+    renderWithProviders(<EditingSettingsScreen />);
+    act(() => radio('왼쪽').focus());
+
+    fireEvent.keyDown(radio('왼쪽'), { key: 'ArrowRight' });
+
+    expect(radio('오른쪽')).toBeChecked();
+    expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBe('right');
+  });
+
   it('저장된 값이 깨져 있으면 기본(왼쪽)으로 본다', () => {
     window.localStorage.setItem(PANEL_SIDE_KEY, 'middle');
     stubTracks();
