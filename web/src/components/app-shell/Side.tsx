@@ -185,44 +185,47 @@ export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) 
           </IconButton>
         </span>
       </div>
-      {MENUS[menu].map((group, i) => (
-        <div key={group.title}>
-          {i > 0 && <div className={styles.divider} />}
-          <div className={styles.groupTitle}>{group.title}</div>
-          <nav className={styles.nav} aria-label={group.title}>
-            {group.items.map(({ key, label, Icon, href, ownerOnly }) => {
-              const badge = badges?.[key];
-              const content = (
-                <>
-                  {/* 크기는 CSS(.itemIcon)가 셸 배율로 정한다 — size prop은 덮어써져 무의미 */}
-                  <Icon aria-hidden className={styles.itemIcon} />
-                  <span className={styles.label}>{label}</span>
-                  {badge ? <span className={styles.badge}>{badge}</span> : null}
-                </>
-              );
-              if (!href || (ownerOnly && othersChannel)) {
-                return (
-                  <span key={key} className={styles.item} aria-disabled="true">
-                    {content}
-                  </span>
+      {/* 메뉴 묶음만 스크롤된다 — 낮은 창에서도 아래 채널 전환 · 알림이 사이드바 밖으로 밀리지 않게(PR #550 리뷰) */}
+      <div className={styles.menus}>
+        {MENUS[menu].map((group, i) => (
+          <div key={group.title}>
+            {i > 0 && <div className={styles.divider} />}
+            <div className={styles.groupTitle}>{group.title}</div>
+            <nav className={styles.nav} aria-label={group.title}>
+              {group.items.map(({ key, label, Icon, href, ownerOnly }) => {
+                const badge = badges?.[key];
+                const content = (
+                  <>
+                    {/* 크기는 CSS(.itemIcon)가 셸 배율로 정한다 — size prop은 덮어써져 무의미 */}
+                    <Icon aria-hidden className={styles.itemIcon} />
+                    <span className={styles.label}>{label}</span>
+                    {badge ? <span className={styles.badge}>{badge}</span> : null}
+                  </>
                 );
-              }
-              // 하위 경로 판정은 독과 같은 규칙을 쓴다 — 복사본을 만들면 조용히 갈라진다
-              const active = isDockHrefActive(pathname, href);
-              return (
-                <Link
-                  key={key}
-                  href={href}
-                  className={styles.item}
-                  aria-current={active ? 'page' : undefined}
-                >
-                  {content}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-      ))}
+                if (!href || (ownerOnly && othersChannel)) {
+                  return (
+                    <span key={key} className={styles.item} aria-disabled="true">
+                      {content}
+                    </span>
+                  );
+                }
+                // 하위 경로 판정은 독과 같은 규칙을 쓴다 — 복사본을 만들면 조용히 갈라진다
+                const active = isDockHrefActive(pathname, href);
+                return (
+                  <Link
+                    key={key}
+                    href={href}
+                    className={styles.item}
+                    aria-current={active ? 'page' : undefined}
+                  >
+                    {content}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
+        ))}
+      </div>
       <div ref={userBlockRef} className={styles.userBlock}>
         {/* 프로필이 곧 채널 스위처다(시안 1u). 트리거는 아바타+이름까지만: 알림 버튼까지 넣으면 버튼 안 버튼이 된다.
             펼친 사이드바에서는 위로, 접힌 레일에서는 오른쪽으로 연다(시안 ①②). 위로 열 때는 버튼이 아니라 이 블록에
