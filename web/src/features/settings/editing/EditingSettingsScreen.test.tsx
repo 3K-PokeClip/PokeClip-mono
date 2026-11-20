@@ -3,6 +3,7 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChannelRelationContext } from '@/features/channel/ChannelScope';
 import { useSwitchCurtain } from '@/features/channel/switchCurtain';
+import { DEFAULT_EDITOR_PANEL_SIDE, storePanelSide } from '@/lib/editorPanelSide';
 import { useAuthStore } from '@/stores/auth';
 import { useChannelStore } from '@/stores/channel';
 import { byTextContent } from '@/test/byTextContent';
@@ -44,6 +45,12 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // 저장 실패 시험이 중간에 깨져도 다음 시험에 남기지 않는다(PR #550 2차 리뷰) — setItem spy를 풀고, 실패 때 기억한
+  // 이번 접속 값(모듈 상태)은 저장 성공으로 비운다. 저장소 자체는 beforeEach가 비운다
+  vi.restoreAllMocks();
+  act(() => {
+    storePanelSide(DEFAULT_EDITOR_PANEL_SIDE);
+  });
 });
 
 describe('EditingSettingsScreen — 도구 패널 위치', () => {
@@ -137,12 +144,8 @@ describe('EditingSettingsScreen — 도구 패널 위치', () => {
     expect(await screen.findByText('이 브라우저에 저장하지 못했어요')).toBeInTheDocument();
     expect(screen.getByText('이번 접속 동안만 적용돼요')).toBeInTheDocument();
     expect(radio('오른쪽')).toBeChecked();
+    expect(setItem).toHaveBeenCalled();
     expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBeNull();
-
-    // 뒷정리 — 저장이 되면 실패 때 고른 값은 사라진다(모듈 상태라 다음 시험에 남기지 않는다)
-    setItem.mockRestore();
-    fireEvent.click(radio('왼쪽'));
-    expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBe('left');
   });
 
   it('저장된 값이 깨져 있으면 기본(왼쪽)으로 본다', () => {
