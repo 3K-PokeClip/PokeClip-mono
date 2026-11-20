@@ -6,6 +6,7 @@ import { VisuallyHidden } from '@/ui';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { ConnectStepsCard } from './ConnectStepsCard';
 import { DownloadBanner } from './DownloadBanner';
+import { InstallVideoCard } from './InstallVideoCard';
 import { IssuedCodeDialog } from './IssuedCodeDialog';
 import { PairingCodeCard } from './PairingCodeCard';
 import { PluginDownloadDialog } from './PluginDownloadDialog';
@@ -135,6 +136,9 @@ export function PluginSettingsScreen() {
             onRetry={retryStatus}
           />
         )}
+        {/* 설치 과정 영상(POK-615) — 연결 여부와 상관없이 늘 있다. 배너보다 위다: 배너는 늦게 온 「연결한 적 없음」에
+            거둬도 위쪽이 밀리지 않게 맨 아래 블록이어야 한다 */}
+        <InstallVideoCard />
         {showBanner && <DownloadBanner onOpen={() => openDownload('banner')} />}
       </div>
       {/* 늘 있는 상태 칸 — 창을 닫은 뒤 이 화면에서 본 연결을 읽어 준다(위 pairedAnnouncement) */}
