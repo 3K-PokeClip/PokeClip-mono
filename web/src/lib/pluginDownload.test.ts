@@ -8,7 +8,7 @@ describe('pluginDownload: 고정 주소', () => {
   });
 
   it('obs-plugin-v<판> 태그의 다운로드 경로에 buildspec 판으로 지은 파일 이름이다', () => {
-    const dl = `https://github.com/3K-PokeClip/PokeClip-mono/releases/download/obs-plugin-v${PLUGIN_VERSION}`;
+    const dl = `https://github.com/3K-PokeClip/pokeclip-obs-releases/releases/download/obs-plugin-v${PLUGIN_VERSION}`;
     expect(PLUGIN_DOWNLOADS.windows).toEqual({
       kind: 'installer',
       url: `${dl}/pokeclip-obs-${PLUGIN_VERSION}-windows-x64-installer.exe`,

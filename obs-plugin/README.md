@@ -84,9 +84,14 @@ pnpm build       # tsc + vite build → ../data/ui
 
 | 무엇 | 어디서 | 보관 |
 |---|---|---|
-| 배포판 | [GitHub Releases](https://github.com/3K-PokeClip/PokeClip-mono/releases) — 태그마다 zip·macOS 산출물·`SHA256SUMS.txt` | 계속 |
+| 배포판 | [GitHub Releases](https://github.com/3K-PokeClip/pokeclip-obs-releases/releases) — 태그마다 zip·macOS 산출물·`SHA256SUMS.txt` | 계속 |
 | develop에 머지된 판 | Actions › `obs-plugin-ci` › develop 실행의 아티팩트 `pokeclip-obs-{windows-x64,macos-universal}-<커밋>` | 30일 |
 | PR·기능 브랜치 판 | 같은 워크플로의 PR·브랜치 실행 아티팩트 | 14일 |
+
+배포판은 설치 파일 전용 공개 저장소 `3K-PokeClip/pokeclip-obs-releases` 에 둔다(mono 가 비공개라
+mono Release 파일은 로그인 없이 받을 수 없다 — 2026-11-20). `obs-plugin-release` 워크플로는 아직
+mono 에 Release 를 만든다 — 새 판은 그 Release 의 파일을 같은 태그 · 같은 이름으로 공개 저장소에
+손으로 올린 뒤 웹 `PLUGIN_VERSION` 을 올린다.
 
 Chrome이 아티팩트를 「위험한 파일」로 막으면 `gh run download <실행 번호> --repo 3K-PokeClip/PokeClip-mono -n <아티팩트 이름> -D <폴더>`로 받는다(macOS 격리 속성도 붙지 않는다).
 
@@ -140,7 +145,7 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 
 ## 설치
 
-[GitHub Releases](https://github.com/3K-PokeClip/PokeClip-mono/releases)에서 설치 파일을 받는다. **OBS를 끈 뒤** 설치한다.
+[GitHub Releases](https://github.com/3K-PokeClip/pokeclip-obs-releases/releases)에서 설치 파일을 받는다. **OBS를 끈 뒤** 설치한다.
 
 | OS | 파일 | 설치되는 곳 | 제거 |
 |---|---|---|---|
