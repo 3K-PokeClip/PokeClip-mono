@@ -80,6 +80,30 @@ describe('PluginDownloadDialog: OS별 설치 파일 받기', () => {
     });
   });
 
+  it('가운데 버튼(휠)으로 눌러도 센다 — 오른쪽 버튼(메뉴)은 세지 않는다 (PR #549 2차 리뷰)', () => {
+    const onDownloadClick = vi.fn();
+    render(
+      <PluginDownloadDialog
+        open
+        onClose={vi.fn()}
+        detectedOs="windows"
+        onDownloadClick={onDownloadClick}
+      />,
+    );
+    const link = screen.getByRole('link', { name: /Windows 설치 파일/ });
+    // 가운데 버튼은 click이 아니라 auxclick을 낸다
+    fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(track).toHaveBeenCalledWith('plugin_download_clicked', {
+      os: 'windows',
+      kind: 'installer',
+    });
+    expect(onDownloadClick).toHaveBeenCalledTimes(1);
+
+    fireEvent(link, new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+    expect(onDownloadClick).toHaveBeenCalledTimes(1);
+    expect(track).toHaveBeenCalledTimes(1);
+  });
+
   it('닫기로 닫히고, 설치·연결 상태를 지어내지 않으며, 접근성 위반이 없다', async () => {
     const { onClose } = open('windows');
     const dialog = screen.getByRole('dialog');

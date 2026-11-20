@@ -182,6 +182,15 @@
   color: var(--pc-color-accent-text);
 }
 
+/* 지금 할 단계 — 번호 원을 채워 진한 버튼과 같은 줄임을 보인다(POK-613). 카드 안 강조색은 여전히 하나다 */
+.connectStep[aria-current='step'] .connectStepNum {
+  background: var(--pc-color-accent);
+  border-color: var(--pc-color-accent);
+  /* 다크의 text-on-accent(gray-50)는 이 바탕에 4.10:1이라 11u 글자에 모자란다 — 흰색은 4.68:1(PR #549 리뷰).
+     라이트의 text-on-accent도 흰색이라 두 테마가 같다. DS 진한 버튼의 같은 색 쌍은 토큰 일이라 여기서 안 건드린다 */
+  color: var(--pc-white); /* 테마 고정 */
+}
+
 /* 아직 못 하는 단계 — 글을 흐리게(버튼은 disabled가 흐리게 한다) */
 .connectStep[data-state='locked'] .connectStepTitle,
 .connectStep[data-state='locked'] .connectStepHint {
