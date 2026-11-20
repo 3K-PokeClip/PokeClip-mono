@@ -83,6 +83,25 @@ describe('editorPanelSide', () => {
     expect(result.current).toBe('right');
   });
 
+  it('저장에 실패한 탭도 다른 탭이 새로 저장하면 그 값을 따른다 — 옛 대체값이 가리지 않는다 (PR #550 2차 리뷰)', async () => {
+    const { storePanelSide, useStoredPanelSide } = await load();
+    const { result } = renderHook(() => useStoredPanelSide());
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    act(() => {
+      storePanelSide('right');
+    });
+    expect(result.current).toBe('right');
+
+    // 다른 탭이 공간을 비우고 왼쪽을 저장했다
+    act(() => {
+      window.localStorage.setItem(KEY, 'left');
+      window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: 'left' }));
+    });
+    expect(result.current).toBe('left');
+  });
+
   it('저장소를 읽지 못하면 기본(왼쪽)이다', async () => {
     const { readStoredPanelSide, useStoredPanelSide } = await load();
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {

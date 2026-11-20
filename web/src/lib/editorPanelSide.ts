@@ -16,7 +16,8 @@ export const DEFAULT_EDITOR_PANEL_SIDE: EditorPanelSide = 'left';
 const STORAGE_KEY = 'pc-editor-panel-side';
 
 // 마지막 저장이 실패했을 때(저장소가 막힌 브라우저) 이 탭에서 고른 쪽 — 저장소 값보다 앞선다. 그래서 거기서도 편집기 버튼과
-// 설정 카드는 이번 접속 동안 같이 옮겨진다(새로고침하면 사라진다). 저장이 한 번 성공하면 비운다
+// 설정 카드는 이번 접속 동안 같이 옮겨진다(새로고침하면 사라진다). 이 탭의 저장이 성공하거나, 다른 탭이 저장소를 바꾸면
+// (그쪽 저장은 됐다는 뜻이다) 비운다 — 다른 탭의 새 값을 옛 대체값이 가리지 않게(PR #550 2차 리뷰)
 let unsavedSide: EditorPanelSide | null = null;
 
 /** 저장된 쪽. 고른 적 없거나 저장소를 못 읽으면 null */
@@ -50,7 +51,9 @@ function subscribe(listener: () => void) {
   listeners.add(listener);
   // 다른 탭에서 바꾼 것(편집기를 옆 탭에 열어 두고 버튼으로 옮긴 경우)도 따라간다
   const onStorage = (event: StorageEvent) => {
-    if (event.key === STORAGE_KEY || event.key === null) listener();
+    if (event.key !== STORAGE_KEY && event.key !== null) return;
+    unsavedSide = null;
+    listener();
   };
   window.addEventListener('storage', onStorage);
   return () => {
