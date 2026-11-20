@@ -10,6 +10,7 @@ import { DownloadBanner } from './DownloadBanner';
 import { IssuedCodeDialog } from './IssuedCodeDialog';
 import { PairingCodeCard } from './PairingCodeCard';
 import { PluginDownloadDialog } from './PluginDownloadDialog';
+import { rememberPluginDownloadClicked, useRememberedPluginDownload } from './pluginDownloadMark';
 import { useDetectedOs } from './useDetectedOs';
 import { useStreamKeyState } from './useStreamKeyState';
 import styles from './PluginSettingsScreen.module.css';
@@ -95,8 +96,14 @@ export function PluginSettingsScreen() {
   // 설치 파일 링크를 누른 적(POK-613) — 순서 카드가 1번을 끝낸 것으로 세우고 진한 버튼을 2번으로 넘긴다.
   // 창을 연 것만으로는 세지 않는다 — 안내만 읽고 닫은 사람에게는 받은 파일이 없다. 화면이 들고 있는 까닭은 받기 창을
   // 여는 길이 둘(순서 카드 1번 · 배너)이기 때문이다: 읽기가 늦어 배너로 먼저 받은 뒤 순서 카드가 붙어도 1번이 끝난
-  // 것으로 선다(PR #549 리뷰)
+  // 것으로 선다(PR #549 리뷰). 이 탭에 기억해 두어 다른 메뉴에 다녀오거나 새로고침해도 남는다(pluginDownloadMark)
+  const rememberedDownload = useRememberedPluginDownload();
   const [downloadClicked, setDownloadClicked] = useState(false);
+  const downloaded = downloadClicked || rememberedDownload;
+  const markDownloadClicked = () => {
+    rememberPluginDownloadClicked();
+    setDownloadClicked(true);
+  };
   // 창을 연 것도 센다 — 받기 링크(plugin_download_clicked)까지 안 간 사람이 창은 봤는지 가른다
   const openDownload = (from: 'guide' | 'banner') => {
     setDownloadOpen(true);
@@ -115,7 +122,7 @@ export function PluginSettingsScreen() {
             titleRef={topCardTitleRef}
             codeIssued={code.issued}
             codeWaiting={codeWaiting}
-            downloaded={downloadClicked}
+            downloaded={downloaded}
             busy={busy}
             onDownload={() => openDownload('guide')}
             onIssue={issue}
@@ -148,7 +155,7 @@ export function PluginSettingsScreen() {
         open={downloadOpen}
         onClose={() => setDownloadOpen(false)}
         detectedOs={detectedOs}
-        onDownloadClick={() => setDownloadClicked(true)}
+        onDownloadClick={markDownloadClicked}
       />
     </div>
   );

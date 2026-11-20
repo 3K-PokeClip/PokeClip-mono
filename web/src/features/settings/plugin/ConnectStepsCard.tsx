@@ -40,7 +40,7 @@ export function ConnectStepsCard({
   /**
    * 받기 창 안의 설치 파일 링크를 누른 적이 있다 — 1번을 끝낸 것으로 세우고 진한 버튼을 2번으로 넘긴다.
    * 창을 연 것만으로는 아니다. 받았는지·설치했는지는 웹이 모른다 — 다음 할 일을 진하게 세우는 표시로만 쓴다.
-   * 화면이 들고 있다 — 배너로 연 창에서 받아도 센다(PluginSettingsScreen)
+   * 화면이 들고 이 탭에 기억한다 — 배너로 연 창에서 받아도, 다른 메뉴에 다녀와도 선다(PluginSettingsScreen)
    */
   downloaded: boolean;
   /** 창을 닫았는데 초점이 갈 곳이 없을 때 화면이 이 제목으로 초점을 옮긴다(PluginSettingsScreen) */

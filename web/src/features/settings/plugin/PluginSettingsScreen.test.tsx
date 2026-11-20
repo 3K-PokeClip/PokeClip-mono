@@ -98,6 +98,7 @@ async function issueFromSteps() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   track.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
   useOnboardingStore.setState({
@@ -330,6 +331,28 @@ describe('PluginSettingsScreen', () => {
       fireEvent.click(screen.getByRole('button', { name: '아직이에요' }));
       expect(solid()).toEqual(['다시 켰어요']);
       expect(current()).toBe(1);
+    });
+
+    it('설치 파일을 받은 것은 다른 메뉴에 다녀와도 이 탭이 기억한다 — 「다시 켰어요」는 잊는다 (PR #549 리뷰)', async () => {
+      stubStreamKeyFetch({ issued: false });
+      const first = renderWithProviders(<PluginSettingsScreen />);
+      fireEvent.click(await screen.findByRole('button', { name: '다운로드' }));
+      const dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+      fireEvent.click(within(dialog).getByRole('link', { name: /설치 파일/ }));
+      fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
+      fireEvent.click(await screen.findByRole('button', { name: '다시 켰어요' }));
+      first.unmount();
+
+      // 다시 들어오면: 1번은 끝난 그대로, OBS는 지금도 켜져 있는지부터 다시 본다(진한 버튼은 2번)
+      renderWithProviders(<PluginSettingsScreen />);
+      const card = await screen.findByRole('region', { name: 'OBS 플러그인 연결' });
+      expect(card.querySelector('li')).toHaveAttribute('data-state', 'done');
+      expect(within(card).getByRole('button', { name: '다시 받기' })).toBeInTheDocument();
+      expect(within(card).getByRole('button', { name: '다시 켰어요' })).toHaveAttribute(
+        'data-variant',
+        'solid',
+      );
+      expect(within(card).getByRole('button', { name: '코드 받기' })).toBeDisabled();
     });
 
     it('이미 설치하고 온 회원은 다운로드를 건너뛰고 2번을 눌러도 된다 — 그때 1번도 끝난 것으로 선다', async () => {
