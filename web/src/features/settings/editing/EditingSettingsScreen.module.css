@@ -146,10 +146,11 @@
   font-weight: 700;
 }
 
+/* text-muted는 고른 타일(accent-subtle) 위에서 다크 3.5:1이라 secondary로 둔다(PR #550 리뷰) */
 .sideOptionHint {
   font-size: calc(11.5 * var(--pc-u));
   font-weight: 400;
-  color: var(--pc-color-text-muted);
+  color: var(--pc-color-text-secondary);
 }
 
 /* 편집기 축소 그림 — 머리줄 · (레일 · 패널 · 미리보기) · 타임라인. 레일과 패널만 좌우가 바뀐다 */
