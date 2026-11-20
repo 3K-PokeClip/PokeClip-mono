@@ -126,6 +126,8 @@ describe('PluginSettingsScreen', () => {
       expect(screen.queryByRole('region', { name: '플러그인 연결 상태' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: '연결 진단' })).not.toBeInTheDocument();
       expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
+      // 오디오 트랙 이름은 설정 › 편집 환경으로 옮겼다(POK-614) — 플러그인 연결과 무관하다
+      expect(screen.queryByRole('heading', { name: '오디오 트랙 이름' })).not.toBeInTheDocument();
       // 아는 것은 「코드가 쓰인 시각」뿐이라 「연결됨」 배지가 아니라 「연결했어요 + 그 날짜」로 적는다(POK-608)
       expect(await screen.findByText('OBS 플러그인을 연결했어요')).toBeInTheDocument();
       expect(screen.getByText(PAIRED_LINE)).toBeInTheDocument();
