@@ -106,11 +106,9 @@ describe('EditingSettingsScreen — 도구 패널 위치', () => {
     });
     expect(radio('왼쪽')).toBeChecked();
 
-    // 몇 초 뒤 탭으로 돌아오면 브라우저가 「오른쪽」 라디오에 초점을 돌려준다(DS RadioGroup은 초점만으로 고른다)
-    const now = Date.now();
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 5_000);
+    // 탭으로 돌아오면 브라우저가 「오른쪽」 라디오에 초점을 돌려준다 — 몇 초 뒤든 바로든 초점만으로는 고르지 않는다
+    fireEvent.blur(radio('오른쪽'));
     fireEvent.focus(radio('오른쪽'));
-    clock.mockRestore();
 
     expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBe('left');
     expect(radio('왼쪽')).toBeChecked();
