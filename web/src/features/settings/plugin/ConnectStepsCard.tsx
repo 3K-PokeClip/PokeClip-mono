@@ -54,7 +54,11 @@ export function ConnectStepsCard({
   const [restarted, setRestarted] = useState(false);
   // 지금 할 단계. 다시 켰다고 하면 설치는 끝난 것으로 본다(이미 설치하고 온 회원은 다운로드를 건너뛴다)
   const current = restarted ? 3 : downloaded ? 2 : 1;
-  const stepVariant = (step: 1 | 2 | 3) => (current === step ? 'solid' : 'outline');
+  // 받은 코드가 살아 있는 동안(codeWaiting) 3번의 할 일은 그 코드를 OBS에 넣는 것이다 — 카드에 진하게 세울 버튼이 없다.
+  // 「코드 받기」를 진하게 두면 그것을 따라 다시 눌러 새 코드를 받고, 복사해 둔 코드는 만료된다(교환 410, PR #549 리뷰).
+  // 3번은 지금 단계 그대로다(aria-current·채운 번호 원) — 버튼만 테두리로 내린다
+  const stepVariant = (step: 1 | 2 | 3) =>
+    current === step && !(step === 3 && codeWaiting) ? 'solid' : 'outline';
 
   // role="list"는 겹쳐 보여도 지우지 않는다 — list-style: none인 목록은 Safari가 목록 의미를 벗긴다(PluginDownloadPanel과 같다)
   return (

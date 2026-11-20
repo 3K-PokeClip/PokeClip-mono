@@ -843,9 +843,24 @@ describe('PluginSettingsScreen', () => {
       expect(
         await screen.findByText('받은 코드를 OBS의 PokeClip 창에 넣으면 여기서 바로 알려 드려요'),
       ).toBeInTheDocument();
+      // 코드가 살아 있는 동안 할 일은 OBS에 넣는 것이다 — 「코드 받기」를 진하게 두면 따라 눌러 받은 코드를 죽인다
+      // (PR #549 리뷰). 3번은 지금 단계 그대로다
+      const card = screen.getByRole('region', { name: 'OBS 플러그인 연결' });
+      const steps = card.querySelectorAll('li');
+      expect(steps[2]).toHaveAttribute('aria-current', 'step');
+      expect(within(card).getByRole('button', { name: '코드 받기' })).toHaveAttribute(
+        'data-variant',
+        'outline',
+      );
+      expect(card.querySelector('button[data-variant="solid"]')).toBeNull();
 
       await passTime(queryClient, PAIRING_CODE_TTL_MS + PAIRING_WATCH_MS);
       expect(await screen.findByText(/전에 받은 코드는 다시 볼 수 없어요/)).toBeInTheDocument();
+      // 만료되면 새로 받는 것이 할 일이다 — 다시 진하게 선다
+      expect(within(card).getByRole('button', { name: '코드 받기' })).toHaveAttribute(
+        'data-variant',
+        'solid',
+      );
       const asked = statusCalls(spy);
 
       await passTime(queryClient, PAIRING_WATCH_MS * 3);
