@@ -4,6 +4,7 @@ import { Info } from 'lucide-react';
 import { RadioGroup, useToast } from '@/ui';
 import {
   DEFAULT_EDITOR_PANEL_SIDE,
+  PANEL_SIDE_UNSAVED_TOAST,
   storePanelSide,
   useStoredPanelSide,
   type EditorPanelSide,
@@ -40,13 +41,7 @@ export function PanelSideCard() {
         // 돌아와도 덮어쓰지 않는다(PR #550 리뷰)
         onValueChange={(next) => {
           if (next === side) return;
-          if (!storePanelSide(next as EditorPanelSide)) {
-            toast({
-              tone: 'error',
-              title: '이 브라우저에 저장하지 못했어요',
-              description: '이번 접속 동안만 적용돼요',
-            });
-          }
+          if (!storePanelSide(next as EditorPanelSide)) toast(PANEL_SIDE_UNSAVED_TOAST);
         }}
         aria-labelledby="panel-side-title"
         aria-describedby="panel-side-desc panel-side-note"

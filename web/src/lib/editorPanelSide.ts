@@ -20,6 +20,13 @@ const STORAGE_KEY = 'pc-editor-panel-side';
 // (그쪽 저장은 됐다는 뜻이다) 비운다 — 다른 탭의 새 값을 옛 대체값이 가리지 않게(PR #550 2차 리뷰)
 let unsavedSide: EditorPanelSide | null = null;
 
+/** 저장에 실패했을 때 편집기 버튼과 설정 카드가 같이 띄우는 안내 */
+export const PANEL_SIDE_UNSAVED_TOAST = {
+  tone: 'error',
+  title: '이 브라우저에 저장하지 못했어요',
+  description: '이번 접속 동안만 적용돼요',
+} as const;
+
 /** 저장된 쪽. 고른 적 없거나 저장소를 못 읽으면 null */
 export function readStoredPanelSide(): EditorPanelSide | null {
   if (typeof window === 'undefined') return null;

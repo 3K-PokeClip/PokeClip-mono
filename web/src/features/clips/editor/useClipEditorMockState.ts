@@ -15,7 +15,12 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
-import { storePanelSide, useStoredPanelSide, type EditorPanelSide } from '@/lib/editorPanelSide';
+import {
+  PANEL_SIDE_UNSAVED_TOAST,
+  storePanelSide,
+  useStoredPanelSide,
+  type EditorPanelSide,
+} from '@/lib/editorPanelSide';
 import { useToast } from '@/ui';
 import {
   cropRectOf,
@@ -770,11 +775,11 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const [timelineHeight, setTimelineHeightState] = useState<number | null>(null);
   const [storedZoom, setStoredZoom] = useState(100);
   // 설정 › 편집 환경과 같은 값을 구독한다 — 설정(다른 탭 포함)에서 바꾸면 열린 편집기도 따라간다(PR #550 리뷰).
-  // 저장소가 막힌 브라우저에서도 이번 접속 동안은 옮겨진다(lib/editorPanelSide)
+  // 저장소가 막힌 브라우저에서도 이번 접속 동안은 옮겨진다(lib/editorPanelSide) — 설정 카드와 같은 안내를 띄운다(PR #550 2차 리뷰)
   const panelSide = useStoredPanelSide();
   const togglePanelSide = useCallback(() => {
-    storePanelSide(panelSide === 'right' ? 'left' : 'right');
-  }, [panelSide]);
+    if (!storePanelSide(panelSide === 'right' ? 'left' : 'right')) toast(PANEL_SIDE_UNSAVED_TOAST);
+  }, [panelSide, toast]);
 
   // 언마운트 뒤 남은 목업 타이머가 상태를 건드리지 않게 잡아 둔다
   const subtitleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

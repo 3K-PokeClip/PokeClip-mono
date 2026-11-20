@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { storePanelSide } from '@/lib/editorPanelSide';
 import { withToastProvider } from '@/test/testProviders';
@@ -192,6 +192,29 @@ describe('useClipEditorMockState', () => {
     const second = renderEditor();
     expect(second.result.current.panelSide).toBe('right');
     window.localStorage.removeItem('pc-editor-panel-side');
+  });
+
+  it('저장소가 막혀 패널 위치를 남기지 못하면 설정 카드와 같은 안내를 띄우고 이번 접속 동안만 옮긴다 (PR #550 2차 리뷰)', () => {
+    window.localStorage.removeItem('pc-editor-panel-side');
+    const { result } = renderEditor();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+    try {
+      act(() => result.current.togglePanelSide());
+
+      expect(result.current.panelSide).toBe('right');
+      // 이 묶음은 가짜 타이머라 findBy(시간 폴링)는 멈춘다 — 토스트는 act 안에서 바로 그려진다
+      expect(screen.getByText('이 브라우저에 저장하지 못했어요')).toBeInTheDocument();
+      expect(screen.getByText('이번 접속 동안만 적용돼요')).toBeInTheDocument();
+    } finally {
+      // 실패 때 기억한 이번 접속 값(모듈 상태)을 다음 시험에 남기지 않는다
+      setItem.mockRestore();
+      act(() => {
+        storePanelSide('left');
+      });
+      window.localStorage.removeItem('pc-editor-panel-side');
+    }
   });
 
   it('열린 편집기도 설정 › 편집 환경에서 바꾼 쪽을 따라간다 — 다른 탭에서 바꿔도 (PR #550 리뷰)', () => {
