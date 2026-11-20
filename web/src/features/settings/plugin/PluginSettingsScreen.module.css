@@ -97,7 +97,39 @@
   color: var(--pc-color-text-secondary);
 }
 
+/* ---------- 설치 과정 영상 (POK-615) ---------- */
+/* 카드 폭을 채우고 16:9를 지킨다. 표지가 뜨기 전에도 높이가 잡혀 아래 배너가 밀리지 않는다 */
+.installVideo {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+}
+
 /* ---------- 다운로드 배너 (디자인 1m 하단) ---------- */
+/* 영상 아래 「대본 보기」 — 좁은 화면에서 박힌 자막이 작아질 때 같은 문장을 글로 본다 */
+.installTranscript {
+  margin-top: calc(10 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.installTranscript summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--pc-color-text-secondary);
+}
+
+.installTranscript ol {
+  margin: calc(8 * var(--pc-u)) 0 0;
+  padding-left: calc(18 * var(--pc-u));
+  display: grid;
+  gap: calc(4 * var(--pc-u));
+  line-height: 1.6;
+}
+
 .downloadBanner {
   display: flex;
   align-items: center;

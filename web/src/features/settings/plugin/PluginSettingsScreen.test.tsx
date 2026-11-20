@@ -135,6 +135,8 @@ describe('PluginSettingsScreen', () => {
       // 다른 PC에 더 붙일 때의 다운로드는 맨 아래 배너다 — 연결 순서 카드는 없다
       expect(screen.getByText(/다른 PC에 설치하나요/)).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'OBS 플러그인 연결' })).not.toBeInTheDocument();
+      // 설치 과정 영상(POK-615)은 연결한 회원에게는 없다 — 영상 속 「다시 켰어요」 · 「코드 받기」가 이 화면엔 없다(PR #551 리뷰)
+      expect(screen.queryByRole('region', { name: '설치 과정 영상' })).not.toBeInTheDocument();
     });
 
     it('코드 원문은 화면 어디에도 다시 나오지 않는다 (ADR-019)', async () => {
@@ -258,6 +260,15 @@ describe('PluginSettingsScreen', () => {
       expect(undo).not.toHaveAttribute('aria-pressed');
       fireEvent.click(undo);
       expect(screen.getByRole('button', { name: '코드 받기' })).toBeDisabled();
+    });
+
+    it('연결한 적 없는 회원도 순서 카드 아래에서 설치 과정 영상을 본다 (POK-615)', async () => {
+      stubStreamKeyFetch({ issued: false });
+      renderWithProviders(<PluginSettingsScreen />);
+
+      const steps = await screen.findByRole('region', { name: 'OBS 플러그인 연결' });
+      const video = screen.getByRole('region', { name: '설치 과정 영상' });
+      expect(steps.compareDocumentPosition(video) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it('코드만 받고 떠났다 돌아온 회원도 순서 카드를 본다 — 전에 받은 코드는 다시 볼 수 없다고 말한다', async () => {

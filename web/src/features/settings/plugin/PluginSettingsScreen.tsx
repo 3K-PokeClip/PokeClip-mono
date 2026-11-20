@@ -6,6 +6,7 @@ import { VisuallyHidden } from '@/ui';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { ConnectStepsCard } from './ConnectStepsCard';
 import { DownloadBanner } from './DownloadBanner';
+import { InstallVideoCard } from './InstallVideoCard';
 import { IssuedCodeDialog } from './IssuedCodeDialog';
 import { PairingCodeCard } from './PairingCodeCard';
 import { PluginDownloadDialog } from './PluginDownloadDialog';
@@ -135,6 +136,9 @@ export function PluginSettingsScreen() {
             onRetry={retryStatus}
           />
         )}
+        {/* 설치 과정 영상(POK-615) — 연결한 적 없다고 읽은 회원에게만(순서 카드와 같은 조건). 영상은 「다시 켰어요」 →
+            「코드 받기」를 보여 주는데 연결한 회원 화면엔 그 버튼이 없다 — 다른 PC는 배너 · 「재발급」이 길이다(PR #551 리뷰) */}
+        {showSteps && <InstallVideoCard />}
         {showBanner && <DownloadBanner onOpen={() => openDownload('banner')} />}
       </div>
       {/* 늘 있는 상태 칸 — 창을 닫은 뒤 이 화면에서 본 연결을 읽어 준다(위 pairedAnnouncement) */}
