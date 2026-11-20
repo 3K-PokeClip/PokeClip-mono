@@ -284,16 +284,22 @@ describe('PluginSettingsScreen', () => {
         Array.from(card.querySelectorAll('button'))
           .filter((b) => b.getAttribute('data-variant') === 'solid')
           .map((b) => b.textContent);
-      const current = () => steps().findIndex((li) => li.getAttribute('aria-current') === 'step');
+      // 지금 단계는 언제나 하나다 — 첫 번째만 보면 둘이 붙어도 통과하므로 붙은 자리를 모두 센다(PR #549 리뷰)
+      const current = () =>
+        steps().flatMap((li, i) => (li.getAttribute('aria-current') === 'step' ? [i] : []));
+      // 「다시 켰어요」의 → 화살표(iconEnd). 버튼 안 아이콘은 이것뿐이다
+      const hasArrow = (name: string) =>
+        screen.getByRole('button', { name }).querySelector('svg') !== null;
 
       // 처음: 1번
       expect(solid()).toEqual(['다운로드']);
-      expect(current()).toBe(0);
+      expect(current()).toEqual([0]);
       // 2번은 차례가 아니어도 테두리 버튼이다 — 연한(soft) 버튼은 카드 바탕과 거의 같아 버튼으로 안 보였다
       expect(screen.getByRole('button', { name: '다시 켰어요' })).toHaveAttribute(
         'data-variant',
         'outline',
       );
+      expect(hasArrow('다시 켰어요')).toBe(true);
 
       // 창을 열었다 받지 않고 닫으면 그대로다 — 안내만 읽은 사람에게는 받은 파일이 없다(PR #549 리뷰)
       fireEvent.click(screen.getByRole('button', { name: '다운로드' }));
@@ -301,7 +307,7 @@ describe('PluginSettingsScreen', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(solid()).toEqual(['다운로드']);
-      expect(current()).toBe(0);
+      expect(current()).toEqual([0]);
 
       // 창에서 설치 파일을 받고 돌아오면: 1번은 끝난 것으로 서고, 진한 버튼은 2번으로 간다
       fireEvent.click(screen.getByRole('button', { name: '다운로드' }));
@@ -310,27 +316,33 @@ describe('PluginSettingsScreen', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       expect(solid()).toEqual(['다시 켰어요']);
-      expect(current()).toBe(1);
+      expect(current()).toEqual([1]);
       expect(steps()[0]).toHaveAttribute('data-state', 'done');
       // 다시 받을 길은 남는다 — 같은 창을 연다
-      expect(screen.getByRole('button', { name: '다시 받기' })).toHaveAttribute(
-        'data-variant',
-        'outline',
-      );
+      const again = screen.getByRole('button', { name: '다시 받기' });
+      expect(again).toHaveAttribute('data-variant', 'outline');
+      track.mockClear();
+      fireEvent.click(again);
+      dialog = await screen.findByRole('dialog', { name: '플러그인 다운로드' });
+      expect(track.mock.calls).toEqual([['plugin_download_opened', { from: 'guide' }]]);
+      fireEvent.click(within(dialog).getByRole('button', { name: '닫기' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
-      // 다시 켰다고 하면: 3번 「코드 받기」
+      // 다시 켰다고 하면: 3번 「코드 받기」. 되돌리기 버튼에는 화살표가 없다 — 앞으로 가는 버튼이 아니다
       fireEvent.click(screen.getByRole('button', { name: '다시 켰어요' }));
       expect(solid()).toEqual(['코드 받기']);
-      expect(current()).toBe(2);
+      expect(current()).toEqual([2]);
       expect(screen.getByRole('button', { name: '아직이에요' })).toHaveAttribute(
         'data-variant',
         'outline',
       );
+      expect(hasArrow('아직이에요')).toBe(false);
 
-      // 되돌리면 다시 2번이다 — 다운로드는 이미 눌렀다
+      // 되돌리면 다시 2번이다 — 다운로드는 이미 받았다
       fireEvent.click(screen.getByRole('button', { name: '아직이에요' }));
       expect(solid()).toEqual(['다시 켰어요']);
-      expect(current()).toBe(1);
+      expect(current()).toEqual([1]);
+      expect(hasArrow('다시 켰어요')).toBe(true);
     });
 
     it('설치 파일을 받은 것은 다른 메뉴에 다녀와도 이 탭이 기억한다 — 「다시 켰어요」는 잊는다 (PR #549 리뷰)', async () => {
