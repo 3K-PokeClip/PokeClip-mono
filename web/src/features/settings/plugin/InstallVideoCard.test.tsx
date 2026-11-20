@@ -1,8 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { INSTALL_VIDEO, InstallVideoCard } from './InstallVideoCard';
+import { INSTALL_VIDEO, INSTALL_VIDEO_SCRIPT, InstallVideoCard } from './InstallVideoCard';
 
 // web/public — 이 파일은 web/src/features/settings/plugin 에 있다
 const PUBLIC = join(__dirname, '..', '..', '..', '..', 'public');
@@ -23,6 +23,16 @@ describe('InstallVideoCard — 설치 과정 영상 (POK-615)', () => {
     const source = video?.querySelector('source');
     expect(source).toHaveAttribute('src', INSTALL_VIDEO.src);
     expect(source).toHaveAttribute('type', 'video/mp4');
+  });
+
+  it('박힌 자막이 작아지는 좁은 화면을 위해 같은 문장을 「대본 보기」로 둔다 (PR #551 리뷰)', () => {
+    render(<InstallVideoCard />);
+    const region = screen.getByRole('region', { name: '설치 과정 영상' });
+    expect(within(region).getByText('대본 보기')).toBeInTheDocument();
+    const lines = region.querySelectorAll('details li');
+    expect(lines).toHaveLength(INSTALL_VIDEO_SCRIPT.length);
+    expect(INSTALL_VIDEO_SCRIPT).toHaveLength(8);
+    expect(lines[5]).toHaveTextContent('「코드 받기」로 연동 코드를 받아요');
   });
 
   it('영상과 표지 파일이 공개 폴더에 실제로 있다 — 주소만 바꾸고 파일을 안 옮기면 화면이 빈다', () => {
