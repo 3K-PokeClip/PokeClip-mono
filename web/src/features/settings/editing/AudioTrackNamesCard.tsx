@@ -11,7 +11,7 @@ import {
   trackDisplayName,
   type TrackLabels,
 } from '@/api/audioTracks';
-import styles from './PluginSettingsScreen.module.css';
+import styles from './EditingSettingsScreen.module.css';
 
 const u = (n: number) => `calc(${n} * var(--pc-u))`;
 
@@ -24,7 +24,8 @@ const TRACK_GRID: CSSProperties = {
 const TRACK_CELL: CSSProperties = { display: 'grid', gap: u(4) };
 
 // 오디오 트랙 이름(POK-240) — OBS는 트랙 여섯을 이름 없이 보낸다. 여기서 한 번 적어 두면 편집기 오디오 탭에
-// 「트랙 3」 대신 「디스코드」가 뜬다. 시안에 없는 카드다(백엔드가 시안 뒤에 생겼다) — 플러그인 설정의 카드 모양을 그대로 쓴다.
+// 「트랙 3」 대신 「디스코드」가 뜬다. 시안에 없는 카드다(백엔드가 시안 뒤에 생겼다).
+// 처음엔 설정 › 플러그인 아래에 있었다 — 플러그인 연결과 무관한 편집기 쪽 설정이라 설정 › 편집 환경으로 옮겼다(POK-614).
 export function AudioTrackNamesCard() {
   const { toast } = useToast();
   const [labels, setLabels] = useState<TrackLabels | null>(null);
@@ -72,7 +73,7 @@ export function AudioTrackNamesCard() {
       <h2 id="audio-track-names-title" className={styles.cardTitle}>
         오디오 트랙 이름
       </h2>
-      <p className={styles.codeCardDesc}>
+      <p className={styles.cardDesc}>
         OBS의 트랙 1~6에 이름을 붙여 두면 편집기 오디오 탭에 그 이름이 보여요. BGM 트랙을 끄고
         내보낼 때 어느 줄인지 알 수 있어요.
       </p>
@@ -85,7 +86,7 @@ export function AudioTrackNamesCard() {
           <div style={TRACK_GRID}>
             {Array.from({ length: TRACK_COUNT }, (_, i) => (
               <label key={i} style={TRACK_CELL}>
-                <span className={styles.codeHint}>{trackDisplayName(i, null)}</span>
+                <span className={styles.fieldLabel}>{trackDisplayName(i, null)}</span>
                 <Input
                   id={`audio-track-name-${i}`}
                   size="sm"
@@ -101,7 +102,7 @@ export function AudioTrackNamesCard() {
               </label>
             ))}
           </div>
-          <div className={`${styles.confirmActions} ${styles.trackActions}`}>
+          <div className={styles.actions}>
             <Button variant="solid" size="sm" loading={saving} onClick={save}>
               이름 저장
             </Button>
@@ -126,7 +127,7 @@ function TrackNamesSkeleton() {
           </div>
         ))}
       </div>
-      <div className={`${styles.confirmActions} ${styles.trackActions}`} aria-hidden="true">
+      <div className={styles.actions} aria-hidden="true">
         <Skeleton width={u(76)} height={u(32)} radius="md" />
       </div>
     </LoadingRegion>

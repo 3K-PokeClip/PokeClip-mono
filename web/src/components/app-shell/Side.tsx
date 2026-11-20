@@ -15,6 +15,7 @@ import {
   Menu,
   Plug,
   Radio,
+  SlidersHorizontal,
   Upload,
   User,
   Users,
@@ -44,6 +45,7 @@ type SideItemKey =
   | 'link'
   | 'editors'
   | 'plugin'
+  | 'editing'
   | 'noti'
   | 'billing'
   | 'account'
@@ -124,6 +126,8 @@ const MENUS: Record<SideMenu, Group[]> = {
       title: '환경설정',
       items: [
         { key: 'plugin', label: '플러그인', Icon: Plug, href: '/settings/plugin', ownerOnly: true },
+        // 편집기 설정(POK-614) — 패널 위치는 편집자도 쓰므로 주인 전용이 아니다
+        { key: 'editing', label: '편집 환경', Icon: SlidersHorizontal, href: '/settings/editing' },
         { key: 'noti', label: '알림 설정', Icon: Bell, href: '/settings/notifications' },
         { key: 'billing', label: '구독 · 결제', Icon: CreditCard, ownerOnly: true },
         { key: 'account', label: '계정', Icon: User, href: '/settings/account' },

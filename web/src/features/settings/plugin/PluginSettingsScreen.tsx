@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
 import { VisuallyHidden } from '@/ui';
 import { SettingsPageHeader } from '../SettingsPageHeader';
-import { AudioTrackNamesCard } from './AudioTrackNamesCard';
 import { ConnectStepsCard } from './ConnectStepsCard';
 import { DownloadBanner } from './DownloadBanner';
 import { IssuedCodeDialog } from './IssuedCodeDialog';
@@ -139,7 +138,6 @@ export function PluginSettingsScreen() {
             onRetry={retryStatus}
           />
         )}
-        <AudioTrackNamesCard />
         {showBanner && <DownloadBanner onOpen={() => openDownload('banner')} />}
       </div>
       {/* 늘 있는 상태 칸 — 창을 닫은 뒤 이 화면에서 본 연결을 읽어 준다(위 pairedAnnouncement) */}

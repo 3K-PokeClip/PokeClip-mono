@@ -1,0 +1,229 @@
+/* 설정 › 편집 환경 (POK-614) — 도구 패널 위치 · 오디오 트랙 이름 */
+
+/* 머리말이 제목 한 줄이라(보조 설명 없음) 첫 카드와의 간격을 여기서 준다 — 채널 연동 화면과 같은 16 */
+.stack {
+  margin-top: calc(16 * var(--pc-u));
+  max-width: calc(860 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(12 * var(--pc-u));
+}
+
+/* 카드 — 설정 › 플러그인의 카드와 같은 모양 */
+.card {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  padding: calc(16 * var(--pc-u));
+}
+
+.cardTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+  margin: 0 0 calc(4 * var(--pc-u));
+}
+
+.cardDesc {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  margin: 0 0 calc(14 * var(--pc-u));
+}
+
+/* 오디오 트랙 이름 — 칸 이름표와 저장 줄 */
+.fieldLabel {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(14 * var(--pc-u));
+}
+
+/* 남의 채널에서 편집자로 있을 때 — 내 트랙 이름이라 입력 대신 안내 칸(2026-11-20 시안 A).
+   눌린 바탕 칸 하나에 자물쇠 표식 · 까닭 · 지금 채널 · 전환 버튼. 카드 안 상태색은 자물쇠 표식 하나다 */
+.lockedCallout {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(12 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+}
+
+.lockBadge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: calc(34 * var(--pc-u));
+  height: calc(34 * var(--pc-u));
+  border-radius: 50%;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.lockBadge svg {
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
+}
+
+.lockedText {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: calc(2 * var(--pc-u));
+}
+
+.lockedTitle {
+  margin: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 700;
+}
+
+.lockedSub {
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 도구 패널 위치 — 그림 타일 둘(2026-11-20 사용자 시안) ---------- */
+
+/* DS RadioGroup의 .group(세로 flex)을 덮는다 — 같은 요소라 속성 선택자로 한 단계 높인다 */
+.sideOptions[role='radiogroup'] {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(12 * var(--pc-u));
+}
+
+/* 타일 한 장 = DS Radio의 <label>. 그림을 위에 넓게, 점과 글자를 아래 줄에 둔다.
+   DS .root(inline-flex)를 덮으려고 그룹 안 자손 선택자로 쓴다 */
+.sideOptions .sideOption {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    'preview preview'
+    'dot text';
+  align-items: center;
+  column-gap: calc(10 * var(--pc-u));
+  row-gap: calc(14 * var(--pc-u));
+  padding: calc(14 * var(--pc-u));
+  border: 1.5px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  transition:
+    border-color var(--pc-duration-fast) var(--pc-ease-standard),
+    background var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+/* DS Radio 안의 점(첫 span)과 글자 칸(마지막 span). 글자 칸은 풀어서 그림과 글자가 각자 자리를 잡게 한다 */
+.sideOptions .sideOption > span:first-of-type {
+  grid-area: dot;
+}
+
+.sideOptions .sideOption > span:last-of-type {
+  display: contents;
+}
+
+.sideOptions .sideOption:hover {
+  border-color: var(--pc-color-border-default);
+}
+
+.sideOptions .sideOption:has(input:checked) {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+}
+
+.sideOptionText {
+  grid-area: text;
+  display: flex;
+  align-items: baseline;
+  gap: calc(6 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 700;
+}
+
+.sideOptionHint {
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 400;
+  color: var(--pc-color-text-muted);
+}
+
+/* 편집기 축소 그림 — 머리줄 · (레일 · 패널 · 미리보기) · 타임라인. 레일과 패널만 좌우가 바뀐다 */
+.preview {
+  grid-area: preview;
+  display: grid;
+  grid-template-rows: calc(8 * var(--pc-u)) minmax(0, 1fr) calc(22 * var(--pc-u));
+  gap: calc(5 * var(--pc-u));
+  height: calc(116 * var(--pc-u));
+  padding: calc(9 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+}
+
+.previewRow {
+  display: grid;
+  grid-template-columns: calc(7 * var(--pc-u)) calc(38 * var(--pc-u)) minmax(0, 1fr);
+  gap: calc(5 * var(--pc-u));
+}
+
+.preview[data-side='right'] .previewRow {
+  grid-template-columns: minmax(0, 1fr) calc(38 * var(--pc-u)) calc(7 * var(--pc-u));
+}
+
+.preview[data-side='right'] .previewRail {
+  order: 3;
+}
+
+.preview[data-side='right'] .previewStage {
+  order: -1;
+}
+
+.previewBar,
+.previewStage {
+  border-radius: calc(4 * var(--pc-u));
+  background: var(--pc-color-bg-surface-raised);
+}
+
+.previewRail {
+  border-radius: calc(3 * var(--pc-u));
+  background: var(--pc-color-accent);
+  opacity: 0.55;
+}
+
+.previewPanel {
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(4 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+}
+
+.sideNote {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(6 * var(--pc-u));
+  margin: calc(14 * var(--pc-u)) 0 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.sideNote svg {
+  width: calc(13 * var(--pc-u));
+  height: calc(13 * var(--pc-u));
+  flex-shrink: 0;
+}
+
+.sideNote strong {
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sideOptions .sideOption {
+    transition: none;
+  }
+}
