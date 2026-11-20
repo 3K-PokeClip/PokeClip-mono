@@ -101,17 +101,17 @@ Chrome이 아티팩트를 「위험한 파일」로 막으면 `gh run download <
 3. 워크플로가 ① 태그의 `X.Y.Z` = `buildspec.json` ② 태그 커밋이 origin/develop·main에 있음을 확인하고, CI와 같은 잡으로 빌드한 뒤 draft Release에 자산·`SHA256SUMS.txt`를 올리고 개수를 확인해 공개한다.
 4. 접미사(`-test.1`·`-rc.1` …)가 있으면 prerelease다. 이미 공개된 Release는 덮어쓰지 않는다 — 다시 내려면 접미사나 판 번호를 바꾼다. 실패로 draft만 남았으면 같은 태그로 실행을 다시 돌리면 draft를 지우고 새로 만든다.
 5. 시험 Release는 `gh release delete <태그> --repo 3K-PokeClip/PokeClip-mono --cleanup-tag --yes`로 태그째 지운다.
-6. 웹 설정 → 플러그인의 다운로드 창(POK-379)은 공개 저장소 `3K-PokeClip/pokeclip-obs-releases` 의 같은
-   태그 Release 설치 파일
-   둘(`pokeclip-obs-<X.Y.Z>-windows-x64-installer.exe`·`-macos-universal.pkg`)을
-   **고정 주소**로 건다 — `web/src/lib/pluginDownload.ts`의 `PLUGIN_VERSION`. 워크플로가 만든
-   mono Release 는 mono 가 비공개라 로그인 없이 못 받는다. 그래서 정식판이 공개되면 ① 그 Release 의 파일 넷(설치
-   exe · pkg · zip · `SHA256SUMS.txt`)을 `gh release download` 로 받아
-   `SHA256SUMS.txt` 와 대조하고 ② 공개 저장소에 **같은 태그 · 같은 파일 이름**으로 `gh release create`
-   해(본문의 mono README 링크는 빼고) 로그인 없이 두 설치 파일이 200 인지 본 **뒤** ③ 그 판으로
-   `PLUGIN_VERSION`을 올려 웹을 다시 배포한다(시험판은 웹에 걸지 않는다). 태그 모양이나 파일 이름을 바꾸면 웹 링크가
-   404가 되니 `pluginDownload.ts`도 같이 고친다. 정식 배포 때 설치 파일을 S3 + CloudFront로 옮기면
-   `PLUGIN_DOWNLOAD_BASE`만 바꾼다.
+6.  웹 설정 → 플러그인의 다운로드 창(POK-379)은 공개 저장소 `3K-PokeClip/pokeclip-obs-releases` 의
+    같은 태그 Release 설치 파일
+    둘(`pokeclip-obs-<X.Y.Z>-windows-x64-installer.exe`·`-macos-universal.pkg`)을
+    **고정 주소**로 건다 — `web/src/lib/pluginDownload.ts`의 `PLUGIN_VERSION`. 워크플로가 만든
+    mono Release 는 mono 가 비공개라 로그인 없이 못 받는다. 그래서 정식판이 공개되면 ① 그 Release 의 파일 넷(설치
+    exe · pkg · zip · `SHA256SUMS.txt`)을 `gh release download` 로 받아
+    `SHA256SUMS.txt` 와 대조하고 ② 공개 저장소에 **같은 태그 · 같은 파일 이름**으로 `gh release create`
+    해(본문의 mono README 링크는 빼고) 로그인 없이 두 설치 파일이 200 인지 본 **뒤** ③ 그 판으로
+    `PLUGIN_VERSION`을 올려 웹을 다시 배포한다(시험판은 웹에 걸지 않는다). 태그 모양이나 파일 이름을 바꾸면 웹 링크가
+    404가 되니 `pluginDownload.ts`도 같이 고친다. 정식 배포 때 설치 파일을 S3 + CloudFront로 옮기면
+    `PLUGIN_DOWNLOAD_BASE`만 바꾼다.
 
 로컬에서 템플릿 경로를 쓰려면 Windows는 Visual Studio 2022 + `cmake --preset windows-x64`, macOS는 **Xcode 16+** + `cmake --preset macos`다 (buildspec.json이 OBS 32.2.1 소스·obs-deps·Qt6를 `.deps/`에 받는다).
 
@@ -154,7 +154,8 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 
 ## 설치
 
-[GitHub Releases](https://github.com/3K-PokeClip/pokeclip-obs-releases/releases)에서 설치 파일을 받는다. **OBS를 끈 뒤** 설치한다.
+[GitHub Releases](https://github.com/3K-PokeClip/pokeclip-obs-releases/releases)에서
+설치 파일을 받는다. **OBS를 끈 뒤** 설치한다.
 
 | OS | 파일 | 설치되는 곳 | 제거 |
 |---|---|---|---|
