@@ -15,6 +15,12 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
+import {
+  DEFAULT_EDITOR_PANEL_SIDE,
+  readStoredPanelSide,
+  storePanelSide,
+  type EditorPanelSide,
+} from '@/lib/editorPanelSide';
 import { useToast } from '@/ui';
 import {
   cropRectOf,
@@ -156,24 +162,10 @@ function sameRect(a: CropRect, b: CropRect): boolean {
 const samePip = sameRect;
 
 /**
- * 도구 레일 + 패널이 붙는 쪽. 시안은 계정 설정에서 온다고 적는다 —
- * 설정 API가 서기 전까지는 브라우저에 적어 두어 "저장된다"는 약속만 지킨다.
- * 배선 티켓에서 이 읽고 쓰는 자리만 설정 API로 갈아끼우면 화면은 그대로다.
+ * 도구 레일 + 패널이 붙는 쪽. 읽고 쓰기는 lib/editorPanelSide가 맡는다 — 설정 › 편집 환경(POK-614)의
+ * 「도구 패널 위치」와 같은 값이라, 거기서 고른 쪽으로 편집기가 열리고 레일 버튼으로 옮기면 설정도 그 값을 보인다.
  */
-export type EditorPanelSide = 'left' | 'right';
-
-const PANEL_SIDE_STORAGE_KEY = 'pc-editor-panel-side';
-
-function readStoredPanelSide(): EditorPanelSide | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(PANEL_SIDE_STORAGE_KEY);
-    return raw === 'left' || raw === 'right' ? raw : null;
-  } catch {
-    /* 저장소를 못 읽는 브라우저 — 기본값(왼쪽)으로 간다 */
-    return null;
-  }
-}
+export type { EditorPanelSide };
 
 export type { EditorLayout } from './editorLayout';
 export type SubtitleMode = 'burn-cc' | 'burn' | 'cc';
@@ -784,23 +776,19 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const [storedZoom, setStoredZoom] = useState(100);
   // 초기값은 시안 기본(왼쪽). 저장된 값은 마운트 뒤에 읽는다 —
   // 모듈 스코프나 초기화 함수에서 읽으면 서버가 그린 HTML과 어긋난다(onboarding 스토어 선례).
-  const [panelSide, setPanelSide] = useState<EditorPanelSide>('left');
+  const [panelSide, setPanelSide] = useState<EditorPanelSide>(DEFAULT_EDITOR_PANEL_SIDE);
   useEffect(() => {
     const stored = readStoredPanelSide();
     if (stored !== null) setPanelSide(stored);
   }, []);
 
+  // 저장은 업데이터 밖에서 한다 — storePanelSide는 구독자(설정 카드)에게 알리므로 그리는 도중에 부르면 안 된다.
+  // 저장 실패(저장소가 막힌 브라우저)면 이번 세션에서만 옮겨진 채로 둔다
   const togglePanelSide = useCallback(() => {
-    setPanelSide((current) => {
-      const next: EditorPanelSide = current === 'right' ? 'left' : 'right';
-      try {
-        window.localStorage.setItem(PANEL_SIDE_STORAGE_KEY, next);
-      } catch {
-        /* 저장 실패 — 이번 세션에서만 옮겨진 채로 둔다 */
-      }
-      return next;
-    });
-  }, []);
+    const next: EditorPanelSide = panelSide === 'right' ? 'left' : 'right';
+    setPanelSide(next);
+    storePanelSide(next);
+  }, [panelSide]);
 
   // 언마운트 뒤 남은 목업 타이머가 상태를 건드리지 않게 잡아 둔다
   const subtitleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
