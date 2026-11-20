@@ -69,27 +69,27 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 ### 라우트 맵
 
-| 경로                                                                                                      | 내용                                                                                  |
-| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `/`                                                                                                       | `/home` 리다이렉트 — 세션 분기는 `(dock)`의 AuthGuard가 한다                          |
-| `/login`                                                                                                  | 로그인 진입 (셸 없음) — 세션이 있으면 `/home`으로 역가드                              |
-| `/auth/callback`                                                                                          | 구글 OAuth 복귀 — code를 토큰으로 교환 (백엔드 redirect_uri)                          |
-| `/oauth/chzzk/callback`                                                                                   | 치지직 동의 복귀 — code·state를 연동으로 교환 (아래 참조)                             |
-| `/home` `/broadcast` `/clips` `/settings`                                                                 | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)                                 |
-| `/broadcast`                                                                                              | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다                    |
-| `/broadcast/livenow`                                                                                      | 라이브 대시보드                                                                       |
-| `/broadcast/vod`                                                                                          | 지난 방송 목록 (시안 1f) — VOD 뷰어 진입 관문 · 60일 D-day                            |
-| `/broadcast/vod/[streamId]`                                                                               | 지난 방송 상세: 라이브 대시보드와 같은 화면(다시보기). `?card=`면 그 카드 시점부터    |
-| `/clips`                                                                                                  | `/clips/library` 리다이렉트 — 클립 그룹도 좌측 `Side`를 갖는다 (편집기는 그 밖)       |
-| `/clips/library`                                                                                          | 보관함 (시안 1g) — 편집본 그리드 · 상세 패널 액션                                     |
-| `/clips/editor`                                                                                           | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓)                |
-| `/clips/editor/studio`                                                                                    | 클립 편집기 스튜디오형 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음                     |
-| `/settings`                                                                                               | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다                      |
-| `/settings/channels` `/settings/editors` `/settings/plugin` `/settings/notifications` `/settings/account` | 채널 연동 · 편집자 관리 · 플러그인 · 알림 설정 · 계정 (구독·결제, 도움말은 별도 티켓) |
-| `/goodbye`                                                                                                | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다                 |
-| `/dev`                                                                                                    | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)                        |
-| `/api/ping`                                                                                               | 서버 핸들러 앵커                                                                      |
-| 그 밖의 모든 주소                                                                                         | 404 폴백 (`app/not-found.tsx`) — 아래 참조                                            |
+| 경로                                                                                                                          | 내용                                                                                              |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `/`                                                                                                                           | `/home` 리다이렉트 — 세션 분기는 `(dock)`의 AuthGuard가 한다                                      |
+| `/login`                                                                                                                      | 로그인 진입 (셸 없음) — 세션이 있으면 `/home`으로 역가드                                          |
+| `/auth/callback`                                                                                                              | 구글 OAuth 복귀 — code를 토큰으로 교환 (백엔드 redirect_uri)                                      |
+| `/oauth/chzzk/callback`                                                                                                       | 치지직 동의 복귀 — code·state를 연동으로 교환 (아래 참조)                                         |
+| `/home` `/broadcast` `/clips` `/settings`                                                                                     | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)                                             |
+| `/broadcast`                                                                                                                  | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다                                |
+| `/broadcast/livenow`                                                                                                          | 라이브 대시보드                                                                                   |
+| `/broadcast/vod`                                                                                                              | 지난 방송 목록 (시안 1f) — VOD 뷰어 진입 관문 · 60일 D-day                                        |
+| `/broadcast/vod/[streamId]`                                                                                                   | 지난 방송 상세: 라이브 대시보드와 같은 화면(다시보기). `?card=`면 그 카드 시점부터                |
+| `/clips`                                                                                                                      | `/clips/library` 리다이렉트 — 클립 그룹도 좌측 `Side`를 갖는다 (편집기는 그 밖)                   |
+| `/clips/library`                                                                                                              | 보관함 (시안 1g) — 편집본 그리드 · 상세 패널 액션                                                 |
+| `/clips/editor`                                                                                                               | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓)                            |
+| `/clips/editor/studio`                                                                                                        | 클립 편집기 스튜디오형 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음                                 |
+| `/settings`                                                                                                                   | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다                                  |
+| `/settings/channels` `/settings/editors` `/settings/plugin` `/settings/editing` `/settings/notifications` `/settings/account` | 채널 연동 · 편집자 관리 · 플러그인 · 편집 환경 · 알림 설정 · 계정 (구독·결제, 도움말은 별도 티켓) |
+| `/goodbye`                                                                                                                    | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다                             |
+| `/dev`                                                                                                                        | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)                                    |
+| `/api/ping`                                                                                                                   | 서버 핸들러 앵커                                                                                  |
+| 그 밖의 모든 주소                                                                                                             | 404 폴백 (`app/not-found.tsx`) — 아래 참조                                                        |
 
 **치지직 콜백 계약.** `/oauth/chzzk/callback`은 `(dock)` **밖**이라 `AuthGuard`가 덮지 않는다 — 세션 판정은 화면이 직접 하고, 세션이 없으면 로그인으로 보낸 뒤 `/settings/channels`로 되돌아온다. 이 경로는 백엔드 `CHZZK_REDIRECT_URI`, 그리고 **치지직 개발자 센터에 등록된 redirect URI**와 **정확히 같아야 한다** — 개발자 센터는 앱당 하나만 등록하므로 환경마다 앱을 따로 판다. 프론트에 치지직용 env는 없다(동의 URL을 백엔드가 조립한다). 어긋나면 개발 빌드 콘솔에 경고가 뜬다(`chzzkOAuth.warnIfCallbackMismatch`) — 그게 없으면 증상이 "동의를 다 마친 뒤 낯선 주소에서 막힘"으로만 나타난다.
 
@@ -121,6 +121,8 @@ OBS 끄고 설치 → 독에 연동 코드)를 세우고, 다운로드 버튼은
 않는다. 창의 3단계는 받는 자리를 「이 창을 닫은 화면」이라고만 말한다(회원마다 순서 카드의 3번이거나 연동 코드 카드의 재발급이다). 창을
 연 수는 `plugin_download_opened`(`from`: `guide`=순서 카드 1번·`banner`=배너), 받기를 누른 수는
 `plugin_download_clicked`(받은 수 아님).
+
+**설정 › 편집 환경 (POK-614).** 편집기에서 쓰는 설정을 모은 탭이다(`/settings/editing`, 사이드바 「환경설정」의 플러그인 아래). **도구 패널 위치** 카드는 편집기의 도구 레일과 패널을 둘 쪽(왼쪽 기본 · 오른쪽)을 그림 타일로 고른다(2026-11-20 사용자 시안). 고르는 즉시 저장하고(저장 버튼 없음), 값은 편집기 레일 맨 아래 「패널 위치」 버튼과 **같은 하나**다 — 둘 다 `src/lib/editorPanelSide.ts`를 거쳐 localStorage `pc-editor-panel-side`를 읽고 쓰므로, 여기서 고른 쪽으로 편집기가 열리고 편집기에서 옮기면 이 화면도 그 쪽이 골라져 있다(다른 탭에서 옮긴 것도 `storage` 이벤트로 따라간다). 계정 설정 API가 없어 이 브라우저에만 남는다 — 화면 테마와 같다. 미리보기·타임라인은 그대로고 레일과 패널만 옮긴다(`StudioScreen` `data-panel-side`). 카드 문구의 도구 이름은 지금 편집기의 다섯(레이아웃 · 자막 · 텍스트 · 오디오 · 이미지)이다. **오디오 트랙 이름**(POK-240) 카드는 설정 › 플러그인에서 옮겨 왔다 — 플러그인 연결과 무관한 편집기 쪽 설정이다. 이 탭은 채널 주인 전용이 아니다(패널 위치는 편집자도 쓴다). 다만 트랙 이름은 「내」 OBS 트랙 이름(`/api/auth/me/audio-tracks`)이라 남의 채널에서 편집자로 있을 때는 읽지도 않고 안내 칸(자물쇠 표식 · 「채널 주인만 바꿀 수 있어요」 · 지금 채널 · 「내 채널로 전환」 버튼 — 2026-11-20 시안 A. 흐린 글 한 줄은 카드 끝에 묻혀 안 보였다)을 둔다(플러그인 화면이 주인 전용이던 것과 같은 까닭 — 그 채널의 이름으로 착각하지 않게). 전환은 막힌 설정 화면(`OwnerOnly`)과 같은 길이다. 설정 › 플러그인 · 알림 설정 · 편집 환경의 머리말은 제목 한 줄이다(보조 설명 없음 — 2026-11-20).
 
 **clip 서버 연결 (POK-251).** 홈·라이브·지난 방송·편집기·보관함은 clip 창구에서 실제 값을 받는다. 요청은 전부
 로그인 세션의 `apiFetch`를 거친다(Bearer·401 회전) — clip 거절 사유(`{error, field}`)는 `ApiError.code`·`field`로 오고,
