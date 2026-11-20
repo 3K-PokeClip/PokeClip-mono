@@ -127,6 +127,26 @@ describe('EditingSettingsScreen — 도구 패널 위치', () => {
     expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBe('right');
   });
 
+  it('저장소가 막혀 저장하지 못하면 알리고, 이번 접속 동안만 그 쪽으로 둔다', async () => {
+    stubTracks();
+    renderWithProviders(<EditingSettingsScreen />);
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+
+    fireEvent.click(radio('오른쪽'));
+
+    expect(await screen.findByText('이 브라우저에 저장하지 못했어요')).toBeInTheDocument();
+    expect(screen.getByText('이번 접속 동안만 적용돼요')).toBeInTheDocument();
+    expect(radio('오른쪽')).toBeChecked();
+    expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBeNull();
+
+    // 뒷정리 — 저장이 되면 실패 때 고른 값은 사라진다(모듈 상태라 다음 시험에 남기지 않는다)
+    setItem.mockRestore();
+    fireEvent.click(radio('왼쪽'));
+    expect(window.localStorage.getItem(PANEL_SIDE_KEY)).toBe('left');
+  });
+
   it('저장된 값이 깨져 있으면 기본(왼쪽)으로 본다', () => {
     window.localStorage.setItem(PANEL_SIDE_KEY, 'middle');
     stubTracks();

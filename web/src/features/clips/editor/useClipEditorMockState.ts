@@ -15,12 +15,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
-import {
-  DEFAULT_EDITOR_PANEL_SIDE,
-  readStoredPanelSide,
-  storePanelSide,
-  type EditorPanelSide,
-} from '@/lib/editorPanelSide';
+import { storePanelSide, useStoredPanelSide, type EditorPanelSide } from '@/lib/editorPanelSide';
 import { useToast } from '@/ui';
 import {
   cropRectOf,
@@ -774,20 +769,11 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 여기에 고정 픽셀 상한을 걸면 배율이 큰 화면에서 마지막 트랙이 잘린다.
   const [timelineHeight, setTimelineHeightState] = useState<number | null>(null);
   const [storedZoom, setStoredZoom] = useState(100);
-  // 초기값은 시안 기본(왼쪽). 저장된 값은 마운트 뒤에 읽는다 —
-  // 모듈 스코프나 초기화 함수에서 읽으면 서버가 그린 HTML과 어긋난다(onboarding 스토어 선례).
-  const [panelSide, setPanelSide] = useState<EditorPanelSide>(DEFAULT_EDITOR_PANEL_SIDE);
-  useEffect(() => {
-    const stored = readStoredPanelSide();
-    if (stored !== null) setPanelSide(stored);
-  }, []);
-
-  // 저장은 업데이터 밖에서 한다 — storePanelSide는 구독자(설정 카드)에게 알리므로 그리는 도중에 부르면 안 된다.
-  // 저장 실패(저장소가 막힌 브라우저)면 이번 세션에서만 옮겨진 채로 둔다
+  // 설정 › 편집 환경과 같은 값을 구독한다 — 설정(다른 탭 포함)에서 바꾸면 열린 편집기도 따라간다(PR #550 리뷰).
+  // 저장소가 막힌 브라우저에서도 이번 접속 동안은 옮겨진다(lib/editorPanelSide)
+  const panelSide = useStoredPanelSide();
   const togglePanelSide = useCallback(() => {
-    const next: EditorPanelSide = panelSide === 'right' ? 'left' : 'right';
-    setPanelSide(next);
-    storePanelSide(next);
+    storePanelSide(panelSide === 'right' ? 'left' : 'right');
   }, [panelSide]);
 
   // 언마운트 뒤 남은 목업 타이머가 상태를 건드리지 않게 잡아 둔다

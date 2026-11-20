@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { storePanelSide } from '@/lib/editorPanelSide';
 import { withToastProvider } from '@/test/testProviders';
 import type { PlaybackBounds } from './editorPlayback';
 import { createPlaybackClock, type ClockedPlayback } from './playbackClock';
@@ -190,6 +191,28 @@ describe('useClipEditorMockState', () => {
     // 새로 마운트해도 저장된 자리에서 시작한다
     const second = renderEditor();
     expect(second.result.current.panelSide).toBe('right');
+    window.localStorage.removeItem('pc-editor-panel-side');
+  });
+
+  it('열린 편집기도 설정 › 편집 환경에서 바꾼 쪽을 따라간다 — 다른 탭에서 바꿔도 (PR #550 리뷰)', () => {
+    window.localStorage.removeItem('pc-editor-panel-side');
+    const { result } = renderEditor();
+    expect(result.current.panelSide).toBe('left');
+
+    // 같은 탭의 설정 카드가 고른 것
+    act(() => {
+      storePanelSide('right');
+    });
+    expect(result.current.panelSide).toBe('right');
+
+    // 옆 탭의 설정 카드가 고른 것
+    act(() => {
+      window.localStorage.setItem('pc-editor-panel-side', 'left');
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'pc-editor-panel-side', newValue: 'left' }),
+      );
+    });
+    expect(result.current.panelSide).toBe('left');
     window.localStorage.removeItem('pc-editor-panel-side');
   });
 

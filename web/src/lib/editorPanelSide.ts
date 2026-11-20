@@ -15,6 +15,10 @@ export const DEFAULT_EDITOR_PANEL_SIDE: EditorPanelSide = 'left';
 
 const STORAGE_KEY = 'pc-editor-panel-side';
 
+// 마지막 저장이 실패했을 때(저장소가 막힌 브라우저) 이 탭에서 고른 쪽 — 저장소 값보다 앞선다. 그래서 거기서도 편집기 버튼과
+// 설정 카드는 이번 접속 동안 같이 옮겨진다(새로고침하면 사라진다). 저장이 한 번 성공하면 비운다
+let unsavedSide: EditorPanelSide | null = null;
+
 /** 저장된 쪽. 고른 적 없거나 저장소를 못 읽으면 null */
 export function readStoredPanelSide(): EditorPanelSide | null {
   if (typeof window === 'undefined') return null;
@@ -28,15 +32,18 @@ export function readStoredPanelSide(): EditorPanelSide | null {
 
 const listeners = new Set<() => void>();
 
-/** 고른 쪽을 남긴다. 저장소가 막혀 못 남겼으면 false */
+/** 고른 쪽을 남긴다. 저장소가 막혀 못 남겼으면 false — 그래도 이번 접속 동안은 그쪽으로 선다 */
 export function storePanelSide(side: EditorPanelSide): boolean {
+  let saved = true;
   try {
     window.localStorage.setItem(STORAGE_KEY, side);
+    unsavedSide = null;
   } catch {
-    return false;
+    saved = false;
+    unsavedSide = side;
   }
   listeners.forEach((listener) => listener());
-  return true;
+  return saved;
 }
 
 function subscribe(listener: () => void) {
@@ -52,9 +59,11 @@ function subscribe(listener: () => void) {
   };
 }
 
-const snapshot = () => readStoredPanelSide() ?? DEFAULT_EDITOR_PANEL_SIDE;
+const snapshot = (): EditorPanelSide =>
+  unsavedSide ?? readStoredPanelSide() ?? DEFAULT_EDITOR_PANEL_SIDE;
 
-/** 지금 저장된 쪽 — 서버 렌더와 첫 수화에선 기본값이라 어긋나지 않는다 */
+/** 지금 저장된 쪽 — 설정 카드와 편집기가 같이 쓴다(한쪽에서 바꾸면 다른 쪽이 따라간다, 다른 탭 포함).
+ * 서버 렌더와 첫 수화에선 기본값이라 어긋나지 않는다 */
 export function useStoredPanelSide(): EditorPanelSide {
   return useSyncExternalStore(subscribe, snapshot, () => DEFAULT_EDITOR_PANEL_SIDE);
 }

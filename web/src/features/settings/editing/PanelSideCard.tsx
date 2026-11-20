@@ -55,7 +55,11 @@ export function PanelSideCard() {
           if (next === side) return;
           if (Date.now() - intentAt.current > INTENT_WINDOW_MS) return;
           if (!storePanelSide(next as EditorPanelSide)) {
-            toast({ tone: 'error', title: '이 브라우저에 저장하지 못했어요' });
+            toast({
+              tone: 'error',
+              title: '이 브라우저에 저장하지 못했어요',
+              description: '이번 접속 동안만 적용돼요',
+            });
           }
         }}
         aria-labelledby="panel-side-title"
