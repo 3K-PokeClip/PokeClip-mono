@@ -196,6 +196,8 @@ services:
       THUMBNAIL_ENABLED: ${THUMBNAIL_ENABLED:-false}
       THUMBNAIL_QUEUE_URL: ${THUMBNAIL_QUEUE_URL:-}
       THUMBNAIL_INTERVAL: ${THUMBNAIL_INTERVAL:-PT1M}
+      # 발표 데모 채팅 이벤트(⌃⇧C)를 쓸 사용자 번호, 쉼표로 가른다. 비면(기본) 아무에게도 안 열린다.
+      POKECLIP_DEMO_USER_IDS: ${POKECLIP_DEMO_USER_IDS:-}
       # 채팅 되감기 문 셋이 물어보는 수집기 주소(POK-234). 위 AUTH_BASE_URL 과 달리
       # 비어도 부팅은 산다 — 그 셋만 503 이고 카드 편집·목록·통로는 그대로 돈다.
       # 그래도 여기 넣는 이유는 「표에만 적혀 있고 compose 가 안 넘겨」 그 기능만 조용히
