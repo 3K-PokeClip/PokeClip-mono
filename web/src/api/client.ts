@@ -213,12 +213,18 @@ function timeoutOf({ method, timeoutMs }: ApiFetchInit): number | null {
 const timedOut = () => new ApiError(504, '서버 응답이 늦어요');
 
 /**
+ * 본문이 없어야 하는 상태. Chrome은 이런 응답에도 빈 body 스트림을 붙여 주는데(명세는 null), 그 스트림으로 Response를 다시
+ * 만들면 TypeError다. 그래서 204로 답하는 읽기(데모 채팅 이벤트 「쓸 수 있나」)가 늘 실패로 빠졌다(2026-11-25 운영 실측)
+ */
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+/**
  * 본문을 같은 한도로 지킨다. 조각마다 시계를 새로 재므로 큰 응답이 느리게 오는 것은 끊지 않고 멈춘 응답만 끊는다. 읽는 쪽이 조각을
  * 달라고 할 때만 잰다(highWaterMark 0): 본문을 읽지 않고 버린 응답에는 타이머가 없다.
  */
 function guardBody(response: Response, ms: number, stop: () => void): Response {
   const source = response.body;
-  if (!source) return response;
+  if (!source || NULL_BODY_STATUSES.has(response.status)) return response;
   const reader = source.getReader();
   const guarded = new ReadableStream(
     {
