@@ -174,10 +174,13 @@ variable "clip_broadcast_reaper_enabled" {
 # subject)다. 비면 env 를 넣지 않아 clip 기본값(빈 값 = 아무에게도 안 열림)이
 # 되고, 태스크 정의도 이 변수가 없던 때와 같다. 발표가 끝나면 [] 로 되돌려
 # platform apply(clip 재배포)한다.
+#
+# 기본값은 최종 발표 데모 계정 셋이다(2번 사용자 2026-11-25 결정 · 운영 DB 에서
+# 이메일로 찾은 번호). tfvars 는 저장소에 없어(.gitignore) 기본값에 둔다.
 variable "clip_demo_user_ids" {
   description = "clip 발표 데모 계정의 사용자 번호(POKECLIP_DEMO_USER_IDS) — 비면 데모 단축키가 아무에게도 안 열린다."
   type        = list(string)
-  default     = []
+  default     = ["2", "3", "4"]
 
   validation {
     condition     = alltrue([for id in var.clip_demo_user_ids : can(regex("^[1-9][0-9]*$", id))])

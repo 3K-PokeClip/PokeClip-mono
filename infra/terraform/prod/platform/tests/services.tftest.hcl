@@ -509,6 +509,17 @@ run "platform_reaper_env_wins_over_runtime_app_env" {
 
 # --- 발표 데모 계정(POK-616) ---
 
+# 기본값 = 최종 발표 데모 계정 셋(variables.tf 주석). 발표 뒤 [] 로 되돌리면
+# 이 run 도 함께 고친다.
+run "clip_demo_user_ids_default_is_final_presentation_accounts" {
+  command = plan
+
+  assert {
+    condition     = local.service_env.clip["POKECLIP_DEMO_USER_IDS"] == "2,3,4"
+    error_message = "clip_demo_user_ids 기본값에서 clip POKECLIP_DEMO_USER_IDS 가 \"2,3,4\" 가 아니다."
+  }
+}
+
 # 비면 env 이름째 빠진다 — 태스크 정의가 이 변수가 없던 때와 같다.
 run "clip_demo_user_ids_empty_omits_env" {
   command = plan

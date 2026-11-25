@@ -538,10 +538,12 @@ run "public_services_unchanged_by_chat" {
         MEDIA_BASE_URL           = "https://media.pokeclip.com"
         PLAYBACK_COOKIE_DOMAIN   = ".pokeclip.com"
         PLAYBACK_REQUIRED        = "true"
-        POSTGRES_AUTH            = "iam"
-        POSTGRES_DB              = "pokeclip"
-        POSTGRES_SSLROOTCERT     = "/etc/pokeclip/rds-ca/global-bundle.pem"
-        POSTGRES_USER            = "app_clip"
+        # POK-616 — chat 과 무관(발표 데모 계정 기본값).
+        POKECLIP_DEMO_USER_IDS = "2,3,4"
+        POSTGRES_AUTH          = "iam"
+        POSTGRES_DB            = "pokeclip"
+        POSTGRES_SSLROOTCERT   = "/etc/pokeclip/rds-ca/global-bundle.pem"
+        POSTGRES_USER          = "app_clip"
       })
     )
     error_message = "chat 을 더하며 next · auth · clip 의 태스크 env 가 바뀌었다."
