@@ -591,6 +591,24 @@ describe('apiFetch 읽기 시한', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  /** Chrome은 204·205 응답에도 빈 body 스트림을 붙여 준다(명세는 null). 그 응답을 흉내 낸다 */
+  function chromeNullBodyResponse(status: number) {
+    const res = new Response('');
+    Object.defineProperty(res, 'status', { value: status });
+    return res;
+  }
+
+  it.each([204, 205])(
+    '본문 없는 %i 응답은 다시 만들지 않고 그대로 돌려준다: Chrome의 빈 body로 Response를 만들면 TypeError다',
+    async (status) => {
+      stubFetch(() => chromeNullBodyResponse(status));
+
+      const res = await apiFetch('/api/clip/demo/chat-event');
+
+      expect(res.status).toBe(status);
+    },
+  );
+
   it('본문을 받는 중에 부른 쪽이 끊은 것은 시한과 가른다: 그대로 AbortError다', async () => {
     stubFetch((_url, init) => new Response(stalledBody(init?.signal)));
     const abort = new AbortController();
