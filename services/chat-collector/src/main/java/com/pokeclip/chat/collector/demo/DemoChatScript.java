@@ -34,6 +34,14 @@ final class DemoChatScript {
 
     private static final String[] CALM = {"ㅎㅇ", "안녕하세요", "오늘 뭐해요", "ㅋㅋ", "굿", "재밌다", "오 좋네요"};
 
+    /** 실제 시청자처럼 보이는 가상 닉네임. 실존 인물·채널 이름은 쓰지 않는다 */
+    private static final String[] NICKNAMES = {
+            "감자튀김왕", "새벽세시", "고양이집사", "퇴근하고싶다", "치킨은반반", "졸린판다", "민트초코러버", "월요병환자",
+            "라면한그릇", "구경꾼1호", "눈팅전문", "하늘다람쥐", "떡볶이중독", "야식요정", "출근싫어", "방구석여포",
+            "콜라는제로", "주말만기다림", "고구마말랭이", "솜사탕구름", "삼겹살천국", "택배기다리는중", "밤샘장인", "귤까먹는중",
+            "멍멍이산책", "아아한잔", "알람끄는요정", "편의점털이", "붕어빵파", "호떡러버", "게임은핑계", "코코아한잔",
+            "노래방가자", "비오는날", "느긋한거북이", "치즈볼", "오늘도무사히", "랜선집사", "도토리묵", "반숙계란"};
+
     private DemoChatScript() {
     }
 
@@ -62,6 +70,6 @@ final class DemoChatScript {
     private static DemoChat chat(int n, int viewer, String text, long at) {
         Platform platform = n % 2 == 0 ? Platform.CHZZK : Platform.SOOP;
         String id = "demo-viewer-%03d".formatted(viewer);
-        return new DemoChat(platform, id, "시청자%03d".formatted(viewer), text, at);
+        return new DemoChat(platform, id, NICKNAMES[viewer % NICKNAMES.length], text, at);
     }
 }

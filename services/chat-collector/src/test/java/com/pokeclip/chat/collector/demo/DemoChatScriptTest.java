@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector.demo;
 import com.pokeclip.chat.collector.Platform;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -45,6 +46,18 @@ class DemoChatScriptTest {
         long perWindow = burst.size() * 5_000L / (DemoChatScript.BURST_TICKS * 250L);
         assertThat(perWindow).as("평소가 창당 1건이면 배율 3을 한참 넘어야 한다").isGreaterThanOrEqualTo(30);
         assertThat(burst).extracting(DemoChat::senderId).as("말한 사람 수도 같이 오른다").doesNotHaveDuplicates();
+    }
+
+    @Test
+    void 닉네임은_번호가_아니라_실제_시청자_같은_가상_이름이다() {
+        List<DemoChat> all = new ArrayList<>(DemoChatScript.calm(NOW));
+        IntStream.range(0, DemoChatScript.BURST_TICKS).forEach(i -> all.addAll(DemoChatScript.tick(i, NOW)));
+
+        assertThat(all).extracting(DemoChat::nickname)
+                .as("발표 화면에 「시청자012」가 보이면 가짜 티가 난다")
+                .noneMatch(name -> name.matches(".*\\d{3}$"));
+        assertThat(all.stream().map(DemoChat::nickname).distinct().count())
+                .as("한 사람이 도배하는 것처럼 보이지 않게 이름이 여럿이다").isGreaterThanOrEqualTo(30);
     }
 
     @Test
