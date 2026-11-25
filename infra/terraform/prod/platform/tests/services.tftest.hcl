@@ -507,6 +507,57 @@ run "platform_reaper_env_wins_over_runtime_app_env" {
   }
 }
 
+# --- 발표 데모 계정(POK-616) ---
+
+# 비면 env 이름째 빠진다 — 태스크 정의가 이 변수가 없던 때와 같다.
+run "clip_demo_user_ids_empty_omits_env" {
+  command = plan
+
+  variables {
+    clip_demo_user_ids = []
+  }
+
+  assert {
+    condition     = !contains(keys(local.service_env.clip), "POKECLIP_DEMO_USER_IDS")
+    error_message = "clip_demo_user_ids = [] 인데 clip env 에 POKECLIP_DEMO_USER_IDS 가 있다."
+  }
+}
+
+# clip 은 쉼표로 갈라 앞뒤 공백을 지운다(DemoProperties) — 공백 없이 잇는다.
+run "clip_demo_user_ids_joined_with_comma" {
+  command = plan
+
+  variables {
+    clip_demo_user_ids = ["12", "345"]
+  }
+
+  assert {
+    condition     = local.service_env.clip["POKECLIP_DEMO_USER_IDS"] == "12,345"
+    error_message = "clip_demo_user_ids = [\"12\", \"345\"] 인데 clip POKECLIP_DEMO_USER_IDS 가 \"12,345\" 가 아니다."
+  }
+}
+
+run "clip_demo_user_ids_reject_email" {
+  command = plan
+
+  variables {
+    clip_demo_user_ids = ["demo@example.com"]
+  }
+
+  expect_failures = [var.clip_demo_user_ids]
+}
+
+# 한 칸에 쉼표로 둘을 넣으면 join 뒤 구분이 흐려진다 — 칸마다 하나.
+run "clip_demo_user_ids_reject_comma_in_one_item" {
+  command = plan
+
+  variables {
+    clip_demo_user_ids = ["12,345"]
+  }
+
+  expect_failures = [var.clip_demo_user_ids]
+}
+
 # --- 앱 DB IAM 인증(POK-407) ---
 
 run "iam_db_auth_by_default" {
