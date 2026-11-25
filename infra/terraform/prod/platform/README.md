@@ -226,6 +226,7 @@ auth · clip 처럼 두지 않습니다. 배포 비율은 chat-collector 가 ECS
 | clip | `COLLECTOR_BASE_URL` | auth 와 같은 값(비어도 부팅은 되지만 채팅 문 셋이 503) |
 | clip | `PLAYBACK_REQUIRED` | `true`(서명 값 셋 중 하나라도 빠지면 부팅 거부 — POK-321) |
 | clip | `BROADCAST_REAPER_ENABLED` | `clip_broadcast_reaper_enabled`(기본 `true` — 아래 「clip 치우개 스위치」) |
+| clip | `POKECLIP_DEMO_USER_IDS` | `clip_demo_user_ids` 를 쉼표로 이음(기본 `2,3,4` — 최종 발표 데모 계정 · POK-616). 목록이 비면 이름째 넣지 않는다 |
 | clip | `CLOUDFRONT_PRIVATE_KEY_PEM`(비밀) | secrets `signing_key_secret_arn` |
 | chat-collector | `BROADCAST_INTAKE_ENABLED` | `true`(방송 편지로 세션을 연다 — 운영의 시작 경로) |
 | chat-collector | `AUTH_BASE_URL` · `CLIP_BASE_URL` | clip 과 같은 auth 주소 · auth 와 같은 clip 주소 |
@@ -548,6 +549,7 @@ aws sns get-subscription-attributes --region ap-northeast-2 \
 | `chat_services` | chat-collector 8083 · 1024/2048, chat-detector 8084 · 512/1024 | 포트 · CPU · 메모리(MiB). 키는 이 둘뿐. 포트는 앱 `application.yml` 의 `server.port` 맨값이라 8083 · 8084 고정(다른 값은 plan 이 막음) — 바꾸려면 앱부터 고친다 |
 | `chat_collector_features` | 위 「chat 기능 스위치」 | chat-collector 기능 스위치 여섯 |
 | `clip_broadcast_reaper_enabled` | `true` | clip 치우개(`BROADCAST_REAPER_ENABLED` — 위 「clip 치우개 스위치」). 유예 30분 · 주기 1분은 앱 기본값 |
+| `clip_demo_user_ids` | `["2", "3", "4"]` | 발표 데모 채팅 이벤트(⌃⇧C)를 쓸 auth 사용자 번호(`POKECLIP_DEMO_USER_IDS` — POK-616). 최종 발표 데모 계정 셋이다. 발표가 끝나면 `[]` 로 되돌려 apply(clip 재배포) |
 | `app_db_auth` | `iam` | `password` 면 `rds-db:connect` · `POSTGRES_AUTH` 없음 |
 | `postgres_sslrootcert` | `/etc/pokeclip/rds-ca/global-bundle.pem` | 서버 이미지의 RDS CA 번들 경로(POK-407 코멘트 10715 · 커밋 2975805e) — iam 에서만 넣음 |
 | `cors_allowed_origins` | `https://app.pokeclip.com` | auth · clip 부팅 필수 값(실사용 없음) |
