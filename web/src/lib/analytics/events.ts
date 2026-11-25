@@ -172,7 +172,7 @@ export interface AnalyticsEvents {
   profile_photo_changed: { source: 'file' | 'preset' };
   /** 표시 이름을 바꿈 — 이름은 싣지 않는다 */
   profile_name_changed: Record<string, never>;
-  /** 플러그인 설정의 오디오 트랙 이름을 저장함. 이름이 있는 칸 수(0~6)만 싣는다 */
+  /** 설정 › 편집 환경의 오디오 트랙 이름을 저장함(POK-614 전엔 설정 › 플러그인). 이름이 있는 칸 수(0~6)만 싣는다 */
   audio_track_names_saved: { named_count: number };
   /** 설정 › 계정 「화면 테마」에서 다른 값을 고름(같은 값을 다시 누른 건 세지 않는다) */
   theme_changed: { theme: Theme };

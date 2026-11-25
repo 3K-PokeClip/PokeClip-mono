@@ -186,6 +186,11 @@ pokeclip:
     # chat-collector는 localhost 기본값을 주는데 그쪽은 조건부(편지 경로)라 처지가 다르다.
     base-url: ${AUTH_BASE_URL:}
 
+  demo:
+    # 발표 데모 도구(채팅 이벤트 단축키)를 쓸 수 있는 사용자 번호, 쉼표로 가른다. 🔴 비우면 아무에게도 안 열린다(기본).
+    # 데모가 끝나면 비운다.
+    user-ids: ${POKECLIP_DEMO_USER_IDS:}
+
   collector-client:
     # 수집기(chat-collector, 8083) 내부 창구 주소. 🔴 비어도 부팅은 산다 — auth-client와
     # 다른 이유는, 자격 판정이 없으면 사람 문 전부가 무방비지만 수집기가 없으면 채팅 문 셋만

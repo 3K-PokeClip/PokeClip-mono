@@ -1,7 +1,9 @@
 /* 디자인 1m은 블록 사이 간격이 일정하다 — 각 블록에 margin을 두지 않고 여기서 한 번에 준다.
    본문 폭은 가두지 않되(사이드바 화면 공통 규칙, docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」) 설명문
    위주 블록 셋이 같은 오른쪽 끝을 공유해야 하므로 시안 폭 860u는 개별 카드가 아니라 이 묶음이 갖는다 */
+/* 머리말이 제목 한 줄이라(보조 설명 없음) 첫 카드와의 간격을 여기서 준다 — 채널 연동 화면과 같은 16 */
 .stack {
+  margin-top: calc(16 * var(--pc-u));
   max-width: calc(860 * var(--pc-u));
   display: flex;
   flex-direction: column;
@@ -95,7 +97,39 @@
   color: var(--pc-color-text-secondary);
 }
 
+/* ---------- 설치 과정 영상 (POK-615) ---------- */
+/* 카드 폭을 채우고 16:9를 지킨다. 표지가 뜨기 전에도 높이가 잡혀 아래 배너가 밀리지 않는다 */
+.installVideo {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+}
+
 /* ---------- 다운로드 배너 (디자인 1m 하단) ---------- */
+/* 영상 아래 「대본 보기」 — 좁은 화면에서 박힌 자막이 작아질 때 같은 문장을 글로 본다 */
+.installTranscript {
+  margin-top: calc(10 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.installTranscript summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--pc-color-text-secondary);
+}
+
+.installTranscript ol {
+  margin: calc(8 * var(--pc-u)) 0 0;
+  padding-left: calc(18 * var(--pc-u));
+  display: grid;
+  gap: calc(4 * var(--pc-u));
+  line-height: 1.6;
+}
+
 .downloadBanner {
   display: flex;
   align-items: center;
@@ -180,6 +214,15 @@
 .connectStep[data-state='done'] .connectStepNum {
   border-color: var(--pc-color-accent-text);
   color: var(--pc-color-accent-text);
+}
+
+/* 지금 할 단계 — 번호 원을 채워 진한 버튼과 같은 줄임을 보인다(POK-613). 카드 안 강조색은 여전히 하나다 */
+.connectStep[aria-current='step'] .connectStepNum {
+  background: var(--pc-color-accent);
+  border-color: var(--pc-color-accent);
+  /* 다크의 text-on-accent(gray-50)는 이 바탕에 4.10:1이라 11u 글자에 모자란다 — 흰색은 4.68:1(PR #549 리뷰).
+     라이트의 text-on-accent도 흰색이라 두 테마가 같다. DS 진한 버튼의 같은 색 쌍은 토큰 일이라 여기서 안 건드린다 */
+  color: var(--pc-white); /* 테마 고정 */
 }
 
 /* 아직 못 하는 단계 — 글을 흐리게(버튼은 disabled가 흐리게 한다) */
@@ -383,12 +426,6 @@
   display: flex;
   justify-content: flex-end;
   gap: calc(10 * var(--pc-u));
-}
-
-/* 오디오 트랙 카드의 저장 줄 — 위가 입력 칸이라 여백을 직접 준다(설명 → 칸 간격 14와 같게).
-   발급 창은 위 문단의 아래 여백(22)이 간격을 잡으므로 .confirmActions 자체에는 두지 않는다 */
-.trackActions {
-  margin-top: calc(14 * var(--pc-u));
 }
 
 /* ---------- 발급 직후 코드 모달 (디자인 1m ③, POK-103) ---------- */

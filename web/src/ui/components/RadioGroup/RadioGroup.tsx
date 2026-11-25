@@ -114,8 +114,10 @@ export const Radio = forwardRef<HTMLInputElement, RadioProps>(function Radio(
         data-disabled={isDisabled || undefined}
         tabIndex={roving.tabIndex}
         onChange={() => group.setValue(value)}
+        // 화살표 · Home · End는 roving(onKeyDown)이 초점을 옮기며 바로 고른다. 초점만 받았다고 고르지는 않는다(roving.onFocus를
+        // 걸지 않는다) — 값이 밖에서 바뀌는 controlled 그룹(설정 › 편집 환경의 패널 위치는 다른 탭이 바꾼다)에서 탭으로 돌아와
+        // 브라우저가 옛 라디오에 초점을 돌려주면 옛 값으로 덮어썼다(PR #550 리뷰). Tab으로 들어올 때 고르지 않는 것은 APG와 같다
         onKeyDown={roving.onKeyDown}
-        onFocus={roving.onFocus}
         className={styles.input}
       />
       <span className={styles.dot} aria-hidden="true" />

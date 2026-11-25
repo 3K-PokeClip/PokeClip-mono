@@ -74,6 +74,8 @@ const nextConfig: NextConfig = {
       ...OAUTH_CALLBACK_PATHS.map((source) => ({ source, headers: referrerPolicy('no-referrer') })),
       // public 파일은 이름에 해시가 없어 immutable로 두면 교체가 안 보인다. 하루 쓰고 일주일은 뒤에서 새로 받는다
       { source: '/brand/:path*', headers: BRAND_ASSET_CACHE },
+      // 설치 과정 영상 · 표지(POK-615) — 브랜드 자산과 같은 캐시. 매번 304 재검증을 받지 않게(PR #551 리뷰)
+      { source: '/guide/:path*', headers: BRAND_ASSET_CACHE },
     ];
   },
 };

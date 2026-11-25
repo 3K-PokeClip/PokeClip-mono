@@ -172,7 +172,8 @@ clip: `FORWARD_HEADERS_STRATEGY`(`native` — POK-551) ·
 `CLOUDFRONT_KEY_PAIR_ID` · `MEDIA_BASE_URL` · `PLAYBACK_COOKIE_DOMAIN` ·
 `AUTH_BASE_URL` · `CORS_ALLOWED_ORIGINS` · `COLLECTOR_BASE_URL` ·
 `PLAYBACK_REQUIRED` · `BROADCAST_REAPER_ENABLED`(platform 변수
-`clip_broadcast_reaper_enabled`) · `POSTGRES_USER` · `POSTGRES_AUTH` ·
+`clip_broadcast_reaper_enabled`) · `POKECLIP_DEMO_USER_IDS`(platform 변수
+`clip_demo_user_ids` — 비면 넣지 않음) · `POSTGRES_USER` · `POSTGRES_AUTH` ·
 `POSTGRES_SSLROOTCERT`(IAM 일 때), 비밀 `CLOUDFRONT_PRIVATE_KEY_PEM`.
 chat-collector: `BROADCAST_INTAKE_ENABLED`(`true`) · `AUTH_BASE_URL` ·
 `CLIP_BASE_URL` · 기능 스위치 여섯(`CHAT_REATTACH_ENABLED` ·
@@ -251,6 +252,7 @@ clip 의 큐 수신 스위치 `BROADCAST_INTAKE_ENABLED` 는 이 목록에 없�
 | clip | `BROADCAST_INTAKE_ENABLED` · `BROADCAST_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수. 큐는 `broadcast_queue_arn` 과 같은 것 |
 | clip | `BROADCAST_REAPER_ENABLED` | platform | `false` | 값 = platform 변수 `clip_broadcast_reaper_enabled`(기본 `true` — kty 2026-11-16 · POK-588). 켰는데 `stream_segments` 표가 없으면 부팅 거부. 끄기 = 그 변수 `false` 로 platform apply |
 | clip | `BROADCAST_REAPER_INTERVAL` · `BROADCAST_REAPER_GRACE` | 넣지 않음 | `PT1M` · `PT30M` | yml 기본값 그대로(kty 2026-11-16) |
+| clip | `POKECLIP_DEMO_USER_IDS` | platform | 빈 값 | 발표 데모 채팅 이벤트(⌃⇧C — POK-616)를 쓸 auth 사용자 번호, 쉼표로 가름. 비면 아무에게도 안 열린다. 값 = platform 변수 `clip_demo_user_ids`(기본 `["2", "3", "4"]` — 최종 발표 데모 계정, 2026-11-25). 목록이 비면 이름째 넣지 않는다. 발표 뒤 `[]` 로 platform apply |
 | clip | `RENDER_ENABLED` · `RENDER_QUEUE_URL` · `RENDER_DLQ_URL` · `CLIPS_BUCKET` · `SEGMENT_BUCKET` | `app_env` | `false` · 빈 값 | 켜면 넷 필수. 큐 · 버킷은 「작업 역할 대상」 의 같은 이름 ARN 과 짝. 스위치 셋은 런타임 변수 `clip_job_features`(기본 셋 다 `"true"`)이고, 큐 주소 · 창고 이름은 스위치와 무관하게 늘 준다 — 한쪽이 꺼진 배포의 탈퇴 정리가 두 창고 이름으로 지운다 |
 | clip | `UPLOAD_ENABLED` · `UPLOAD_QUEUE_URL` · `UPLOAD_DLQ_URL` | `app_env` | `false` · 빈 값 | 켜면 둘 필수. `RENDER_ENABLED` 와 둘 다 `"false"` 인 값은 런타임 plan 이 거부한다 — clip 의 창고 지우기가 render 또는 upload 가 켜져야 생겨, 둘 다 끄면 탈퇴 정리가 rewind 녹화 조각을 지우지 않은 채 완료된다 |
 | clip | `THUMBNAIL_ENABLED` · `THUMBNAIL_QUEUE_URL` | `app_env` | `false` · 빈 값 | 켜면 URL 필수 |

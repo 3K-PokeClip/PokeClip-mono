@@ -70,7 +70,6 @@ describe('NotificationSettingsScreen', () => {
     renderWithProviders(<NotificationSettingsScreen />);
 
     expect(screen.getByRole('heading', { name: '알림 설정' })).toBeInTheDocument();
-    expect(screen.getByText('알림은 오른쪽 위 종 아이콘에서 볼 수 있어요')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '방송 중 방해 금지' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '알림' })).toBeInTheDocument();
 

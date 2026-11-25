@@ -27,7 +27,14 @@ const HINT: Record<PluginOs, string> = {
   macos: '설치 파일(.pkg) · Apple Silicon·Intel 공용',
 };
 
-export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) {
+export function PluginDownloadPanel({
+  detectedOs,
+  onDownloadClick,
+}: {
+  detectedOs: DetectedOs;
+  /** 설치 파일 링크를 누른 순간 — 연결 순서 카드가 1번을 끝낸 것으로 세운다(POK-613). 받았는지는 여전히 모른다 */
+  onDownloadClick?: () => void;
+}) {
   // 감지는 첫 탭만 정한다 — 사용자가 고른 탭을 늦게 온 감지 결과가 덮지 않는다. 모르면 Windows
   const [chosen, setChosen] = useState<PluginOs | null>(null);
   const os: PluginOs = chosen ?? (detectedOs === 'macos' ? 'macos' : 'windows');
@@ -44,10 +51,10 @@ export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) 
           </Tabs.Trigger>
         </Tabs.List>
         <Tabs.Panel value="windows" className={styles.downloadTabPanel}>
-          <OsSteps os="windows" />
+          <OsSteps os="windows" onDownloadClick={onDownloadClick} />
         </Tabs.Panel>
         <Tabs.Panel value="macos" className={styles.downloadTabPanel}>
-          <OsSteps os="macos" />
+          <OsSteps os="macos" onDownloadClick={onDownloadClick} />
         </Tabs.Panel>
       </Tabs>
       <p className={styles.downloadMeta}>
@@ -58,8 +65,14 @@ export function PluginDownloadPanel({ detectedOs }: { detectedOs: DetectedOs }) 
   );
 }
 
-function OsSteps({ os }: { os: PluginOs }) {
+function OsSteps({ os, onDownloadClick }: { os: PluginOs; onDownloadClick?: () => void }) {
   const { kind, url } = PLUGIN_DOWNLOADS[os];
+  // 누른 순간을 센다(받은 수가 아니다). 가운데 버튼(휠)은 click이 아니라 auxclick을 낸다 — 새 탭으로 열어도 첨부라 바로
+  // 받아지므로 같은 「누름」이다. 오른쪽 버튼(메뉴)은 받은 게 아니라 세지 않는다(PR #549 2차 리뷰)
+  const markClicked = () => {
+    track('plugin_download_clicked', { os, kind });
+    onDownloadClick?.();
+  };
 
   // role="list"는 겹쳐 보여도 지우지 않는다 — list-style: none인 목록은 Safari가 목록 의미를 벗겨,
   // 번호 원까지 aria-hidden인 VoiceOver 사용자에게 받기 → 설치 → 연동 순서가 전달되지 않는다
@@ -77,7 +90,10 @@ function OsSteps({ os }: { os: PluginOs }) {
             size="md"
             fullWidth
             iconStart={<Download size={16} aria-hidden />}
-            onClick={() => track('plugin_download_clicked', { os, kind })}
+            onClick={markClicked}
+            onAuxClick={(event) => {
+              if (event.button === 1) markClicked();
+            }}
           >
             다운로드
             <VisuallyHidden>

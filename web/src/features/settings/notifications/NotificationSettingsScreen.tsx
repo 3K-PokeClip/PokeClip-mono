@@ -63,13 +63,12 @@ export function NotificationSettingsScreen() {
 
   return (
     <div>
-      {/* 「인앱」 열 이름이 사라져 알림이 어디로 오는지 머리말이 말한다 */}
-      <SettingsPageHeader
-        title="알림 설정"
-        description="알림은 오른쪽 위 종 아이콘에서 볼 수 있어요"
-      />
+      <SettingsPageHeader title="알림 설정" />
 
-      <section className={`${styles.card} ${styles.cardGap}`} aria-labelledby={dndTitleId}>
+      <section
+        className={`${styles.card} ${styles.cardGap} ${styles.firstCard}`}
+        aria-labelledby={dndTitleId}
+      >
         <div className={styles.dnd}>
           <span className={styles.dndIcon} aria-hidden>
             <BellOff />

@@ -112,6 +112,10 @@ locals {
         # clip_broadcast_reaper_enabled 주석).
         BROADCAST_REAPER_ENABLED = tostring(var.clip_broadcast_reaper_enabled)
       },
+      # 발표 데모 계정(variables.tf 의 clip_demo_user_ids 주석) — 비면 이름째 뺀다.
+      length(var.clip_demo_user_ids) > 0 ? {
+        POKECLIP_DEMO_USER_IDS = join(",", var.clip_demo_user_ids)
+      } : {},
     )
     # CHZZK_CLIENT_ID · SOOP_CLIENT_ID(방송 정보 · SOOP 채팅)와 채팅 원본 보관
     # 창고 이름 S3_BUCKET 은 런타임 app_env 가 준다. 넣지 않는 것:

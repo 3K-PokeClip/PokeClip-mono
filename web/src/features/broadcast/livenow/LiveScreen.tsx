@@ -69,6 +69,7 @@ import { useLiveSession } from './useLiveSession';
 import { usePastVod } from './usePastVod';
 import { LINK_LOCK_WORD, useLinkLock, type LinkLock } from './linkLock';
 import { useManualMarking, withMarkLabel } from './useManualMarking';
+import { useDemoChatEvent } from './useDemoChatEvent';
 import { infoWaitOver } from '../infoWait';
 import { cardPositionUptime } from './highlightCardView';
 
@@ -775,6 +776,8 @@ function LiveDashboard({ reselect }: { reselect: Reselect }) {
       seekTo(card.streamTimestampMs / 1000, readPlayerAtMs(card));
     },
   });
+  // 발표 데모의 채팅 이벤트(⌃⇧C). 서버가 데모 계정이라고 답할 때만 키가 붙는다
+  useDemoChatEvent(streamId, clock.status === 'live');
   const markDisabled = markMode === 'unknown' || (markMode === 'past' && !pastMarkable);
   // 같은 값이면 같은 객체: 플레이어(memo)가 대시보드가 다시 그려질 때마다 새 mark를 받아 같이 다시 그려지지 않는다
   const markStatus =

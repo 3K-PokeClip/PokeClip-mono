@@ -16,6 +16,11 @@
   margin-bottom: calc(12 * var(--pc-u));
 }
 
+/* 머리말이 제목 한 줄이라(보조 설명 없음) 첫 카드와의 간격을 여기서 준다 — 채널 연동 화면과 같은 16 */
+.firstCard {
+  margin-top: calc(16 * var(--pc-u));
+}
+
 /* 카드 제목(계정 화면 1p의 카드 제목과 같은 13u) */
 .cardTitle {
   margin: 0;

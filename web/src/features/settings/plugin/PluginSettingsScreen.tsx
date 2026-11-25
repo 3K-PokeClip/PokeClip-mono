@@ -4,12 +4,13 @@ import { useEffect, useRef, useState } from 'react';
 import { track } from '@/lib/analytics';
 import { VisuallyHidden } from '@/ui';
 import { SettingsPageHeader } from '../SettingsPageHeader';
-import { AudioTrackNamesCard } from './AudioTrackNamesCard';
 import { ConnectStepsCard } from './ConnectStepsCard';
 import { DownloadBanner } from './DownloadBanner';
+import { InstallVideoCard } from './InstallVideoCard';
 import { IssuedCodeDialog } from './IssuedCodeDialog';
 import { PairingCodeCard } from './PairingCodeCard';
 import { PluginDownloadDialog } from './PluginDownloadDialog';
+import { rememberPluginDownloadClicked, useRememberedPluginDownload } from './pluginDownloadMark';
 import { useDetectedOs } from './useDetectedOs';
 import { useStreamKeyState } from './useStreamKeyState';
 import styles from './PluginSettingsScreen.module.css';
@@ -92,6 +93,17 @@ export function PluginSettingsScreen() {
   // 고정 주소라, 읽기가 오래 걸리거나 실패했다고 받을 길까지 막을 까닭이 없다(GET 한도 30초 + 재시도 1회면 1분).
   // 맨 아래 블록이라 늦게 온 「연결한 적 없음」에 거둬도 위쪽이 밀리지 않는다 — 그때는 순서 카드 1번이 받을 길이다
   const showBanner = paired || error || (loading && slow);
+  // 설치 파일 링크를 누른 적(POK-613) — 순서 카드가 1번을 끝낸 것으로 세우고 진한 버튼을 2번으로 넘긴다.
+  // 창을 연 것만으로는 세지 않는다 — 안내만 읽고 닫은 사람에게는 받은 파일이 없다. 화면이 들고 있는 까닭은 받기 창을
+  // 여는 길이 둘(순서 카드 1번 · 배너)이기 때문이다: 읽기가 늦어 배너로 먼저 받은 뒤 순서 카드가 붙어도 1번이 끝난
+  // 것으로 선다(PR #549 리뷰). 이 탭에 기억해 두어 다른 메뉴에 다녀오거나 새로고침해도 남는다(pluginDownloadMark)
+  const rememberedDownload = useRememberedPluginDownload();
+  const [downloadClicked, setDownloadClicked] = useState(false);
+  const downloaded = downloadClicked || rememberedDownload;
+  const markDownloadClicked = () => {
+    rememberPluginDownloadClicked();
+    setDownloadClicked(true);
+  };
   // 창을 연 것도 센다 — 받기 링크(plugin_download_clicked)까지 안 간 사람이 창은 봤는지 가른다
   const openDownload = (from: 'guide' | 'banner') => {
     setDownloadOpen(true);
@@ -100,16 +112,14 @@ export function PluginSettingsScreen() {
 
   return (
     <div>
-      <SettingsPageHeader
-        title="플러그인"
-        description="OBS 플러그인이 방송 송출과 하이라이트 감지 신호를 PokeClip 서버로 보냅니다"
-      />
+      <SettingsPageHeader title="플러그인" />
       <div className={styles.stack}>
         {showSteps ? (
           <ConnectStepsCard
             titleRef={topCardTitleRef}
             codeIssued={code.issued}
             codeWaiting={codeWaiting}
+            downloaded={downloaded}
             busy={busy}
             onDownload={() => openDownload('guide')}
             onIssue={issue}
@@ -126,7 +136,9 @@ export function PluginSettingsScreen() {
             onRetry={retryStatus}
           />
         )}
-        <AudioTrackNamesCard />
+        {/* 설치 과정 영상(POK-615) — 연결한 적 없다고 읽은 회원에게만(순서 카드와 같은 조건). 영상은 「다시 켰어요」 →
+            「코드 받기」를 보여 주는데 연결한 회원 화면엔 그 버튼이 없다 — 다른 PC는 배너 · 「재발급」이 길이다(PR #551 리뷰) */}
+        {showSteps && <InstallVideoCard />}
         {showBanner && <DownloadBanner onOpen={() => openDownload('banner')} />}
       </div>
       {/* 늘 있는 상태 칸 — 창을 닫은 뒤 이 화면에서 본 연결을 읽어 준다(위 pairedAnnouncement) */}
@@ -142,6 +154,7 @@ export function PluginSettingsScreen() {
         open={downloadOpen}
         onClose={() => setDownloadOpen(false)}
         detectedOs={detectedOs}
+        onDownloadClick={markDownloadClicked}
       />
     </div>
   );
