@@ -15,6 +15,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -47,7 +48,7 @@ class DemoChatEndpointTest extends IntegrationTestSupport {
     }
 
     @Test
-    void 누르면_두_플랫폼_채팅이_표에_들어가고_흐르는_동안_또_누르면_무시한다() throws Exception {
+    void 누르면_임시_채팅이_표에_들어가고_흐르는_동안_또_누르면_무시한다() throws Exception {
         HttpResponse<String> first = post(TOKEN);
         HttpResponse<String> again = post(TOKEN);
 
@@ -62,8 +63,11 @@ class DemoChatEndpointTest extends IntegrationTestSupport {
             persister.flushOnce();
             Thread.sleep(200);
         }
+        // 두 플랫폼을 다 요구하지 않는다 — 닉네임별 무작위라 한쪽으로 쏠릴 수 있다. 이 방송의 배정에 나온 플랫폼과 같으면 된다
+        List<String> assigned = DemoChatScript.audienceOf(STREAM).byNickname().stream()
+                .map(Enum::name).distinct().sorted().toList();
         assertThat(jdbc.queryForList("SELECT DISTINCT platform FROM chat_messages WHERE stream_id = ? ORDER BY 1",
-                String.class, STREAM)).containsExactly("CHZZK", "SOOP");
+                String.class, STREAM)).isEqualTo(assigned);
     }
 
     private int count() {

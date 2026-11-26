@@ -75,7 +75,10 @@ class DemoChatBurstTest {
             assertThat(chat.receivedAtMillis()).as("판별기는 받은 시각으로 방송이 살아 있는지 본다")
                     .isEqualTo(clock.get());
         });
-        assertThat(saved).extracting(PersistableChat::platform).contains(Platform.CHZZK, Platform.SOOP);
+        // 두 플랫폼을 다 요구하지 않는다 — 닉네임별 무작위라 한쪽으로 쏠릴 수 있다(두 플랫폼은 씨앗 고정 DemoChatScriptTest가 본다)
+        DemoChatScript.Audience audience = DemoChatScript.audienceOf(STREAM);
+        assertThat(saved).as("플랫폼은 이 방송의 닉네임별 배정을 따른다").allSatisfy(chat -> assertThat(chat.platform())
+                .isEqualTo(audience.of(Integer.parseInt(chat.senderChannelId().substring("demo-viewer-".length())))));
         assertThat(relayed).allSatisfy(chat -> assertThat(chat.time().toEpochMilli()).isEqualTo(clock.get()));
     }
 
