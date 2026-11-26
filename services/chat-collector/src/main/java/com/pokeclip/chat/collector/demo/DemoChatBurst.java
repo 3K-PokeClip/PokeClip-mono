@@ -19,7 +19,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -80,7 +79,7 @@ public class DemoChatBurst {
         if (!running.add(streamId)) {
             return false;
         }
-        DemoChatScript.Audience audience = DemoChatScript.audience(ThreadLocalRandom.current());
+        DemoChatScript.Audience audience = DemoChatScript.audienceOf(streamId);
         // 평소 채팅은 지난 시각이라 채팅창(중계)에는 안 보낸다. 보내면 26건이 한꺼번에 쏟아진다
         for (DemoChat chat : DemoChatScript.calm(clockMillis.getAsLong(), audience)) {
             buffer.offer(persistable(streamId, chat));

@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.Platform;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.SplittableRandom;
 import java.util.random.RandomGenerator;
 
 /**
@@ -58,7 +59,7 @@ final class DemoChatScript {
     }
 
     /**
-     * 한 번 누른 동안의 시청자 플랫폼. 닉네임마다 무작위로 한 번 정한다(사용자 결정, 2026-11-27): 채팅 번호의 짝·홀로 정하던
+     * 한 방송의 시청자 플랫폼. 닉네임마다 무작위로 한 번 정한다(사용자 결정, 2026-11-27): 채팅 번호의 짝·홀로 정하던
      * 때는 채팅창 아이콘이 치지직 · SOOP 번갈아 나와 지어낸 티가 났다. 같은 사람이 줄마다 플랫폼을 바꿔도 티가 나므로 사람 단위로 정한다
      */
     record Audience(List<Platform> byNickname) {
@@ -68,7 +69,15 @@ final class DemoChatScript {
         }
     }
 
-    /** 누를 때마다 새로 정한다. 둘 중 하나로만 쏠릴 확률은 닉네임 40개라 2의 39제곱분의 1이다 */
+    /**
+     * 방송마다 한 번 정한다(씨앗 = 방송 번호). 누를 때마다 새로 뽑으면 잠금이 풀린 뒤 다시 누를 때 같은 닉네임이 반대
+     * 플랫폼으로 나오는데, 채팅창은 최근 300줄을 남겨 앞 급증과 함께 보인다. 방송이 다르면 배정도 다르다
+     */
+    static Audience audienceOf(String streamId) {
+        return audience(new SplittableRandom(streamId.hashCode()));
+    }
+
+    /** 둘 중 하나로만 쏠릴 확률은 닉네임 40개라 2의 39제곱분의 1이다 */
     static Audience audience(RandomGenerator random) {
         List<Platform> platforms = new ArrayList<>(NICKNAMES.length);
         for (int i = 0; i < NICKNAMES.length; i++) {

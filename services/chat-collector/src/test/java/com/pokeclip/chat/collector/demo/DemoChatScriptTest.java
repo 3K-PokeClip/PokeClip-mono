@@ -88,7 +88,10 @@ class DemoChatScriptTest {
         assertThat(byNickname.values()).as("같은 닉네임이 줄마다 플랫폼을 바꾸지 않는다").allSatisfy(p -> assertThat(p).hasSize(1));
 
         assertThat(DemoChatScript.audience(new Random(8)))
-                .as("누를 때마다 새로 정한다 — 씨앗이 다르면 배정도 다르다").isNotEqualTo(AUDIENCE);
+                .as("씨앗이 다르면 배정도 다르다").isNotEqualTo(AUDIENCE);
+        assertThat(DemoChatScript.audienceOf("stream-1"))
+                .as("같은 방송은 다시 눌러도 같은 배정이다").isEqualTo(DemoChatScript.audienceOf("stream-1"))
+                .as("방송이 다르면 배정도 다르다").isNotEqualTo(DemoChatScript.audienceOf("stream-2"));
     }
 
     @Test

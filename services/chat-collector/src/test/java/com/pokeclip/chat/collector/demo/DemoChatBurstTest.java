@@ -9,7 +9,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -136,6 +140,26 @@ class DemoChatBurstTest {
 
         assertThat(slow.start(STREAM)).as("밀린 급증을 막 흘렸다 — 누른 지 LOCK_TICKS가 지났어도 아직 잠금 안이다").isFalse();
         기다린다(() -> slow.start(STREAM));
+    }
+
+    /**
+     * 같은 방송에서 잠금이 풀린 뒤 다시 눌러도 같은 사람은 같은 플랫폼이다. 채팅창은 최근 300줄을 남겨 앞 급증(120줄)과
+     * 뒤 급증이 같이 보이므로, 누를 때마다 새로 뽑으면 같은 닉네임이 치지직 · SOOP 아이콘으로 섞여 지어낸 티가 난다
+     */
+    @Test
+    void 같은_방송에서_다시_눌러도_같은_사람은_같은_플랫폼이다() {
+        DemoChatBurst slow = new DemoChatBurst(buffer, relay, scheduler, clock::get, SHORT_TICK);
+        int burst = DemoChatScript.BURST_TICKS * DemoChatScript.PER_TICK;
+
+        assertThat(slow.start(STREAM)).isTrue();
+        기다린다(() -> relayed.size() == burst);
+        기다린다(() -> slow.start(STREAM));
+        기다린다(() -> relayed.size() == burst * 2);
+
+        Map<String, Set<Platform>> byNickname = new HashMap<>();
+        relayed.forEach(chat -> byNickname.computeIfAbsent(chat.nickname(), k -> new HashSet<>()).add(chat.platform()));
+        assertThat(byNickname.values()).as("두 번 누른 사이에 같은 닉네임이 플랫폼을 바꾸지 않는다")
+                .allSatisfy(platforms -> assertThat(platforms).hasSize(1));
     }
 
     /**
