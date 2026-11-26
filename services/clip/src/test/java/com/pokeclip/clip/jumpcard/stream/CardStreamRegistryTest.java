@@ -211,6 +211,47 @@ class CardStreamRegistryTest {
         awaitUntil(ended::completed);
     }
 
+    /**
+     * <b>끝난 방송으로 연 연결은 닫으면서 자리도 돌려준다</b> — 컨테이너 콜백을 기다리지 않는다.
+     *
+     * <p>스트라이프가 {@code ok} · {@code ended}를 보내고 {@code complete()}까지 하는 데 마이크로초면 끝난다. 그 사이 요청
+     * 스레드는 아직 컨트롤러에서 돌아오는 중이라 Spring이 emitter를 넘겨받기({@code initialize}) 전이다. 넘겨받을 때
+     * 이미 닫혀 있으면 Spring은 {@code onCompletion} · {@code onTimeout} · {@code onError}를 <b>등록조차 안 하고</b> 응답만
+     * 끝낸다(spring-webmvc 7.0.9 {@code ResponseBodyEmitter.initialize} 바이트코드 확인). 그러면 명부의 자리가 재시작
+     * 전까지 남는다. 2026-11-26 운영: 볼 수 있는 라이브 방송이 하나도 없는 회원의 통로가 4초 간격 네 번 모두
+     * {@code 503 stream_limit scope=user}였고, 그 회원(발표 계정)의 라이브 화면은 실시간 채팅을 못 받아 5초 읽기로만
+     * 채팅이 몰려 들어왔다.
+     *
+     * <p>이 가짜 emitter는 {@code complete()}가 콜백을 안 부른다 — 위의 「넘겨받기 전에 닫힘」과 같은 상태다.
+     */
+    @Test
+    void 끝난_방송으로_연_연결은_닫으면서_자리도_돌려준다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+
+        for (int i = 0; i < 6; i++) {
+            RecordingEmitter emitter = (RecordingEmitter) registry.openWithSnapshot("s-ended", "2401",
+                    () -> Duration.ofMinutes(1), () -> new CardStreamRegistry.InitialSnapshot(true));
+            awaitUntil(emitter::completed);
+            assertThat(emitter.named()).extracting(RecordingEmitter.Event::name).containsExactly("ended");
+        }
+
+        assertThat(registry.connectionCount())
+                .as("닫은 연결이 남으면 상한 4를 넘긴 다섯 번째부터 그 회원의 통로가 전부 503이다").isZero();
+        assertThatCode(() -> registry.open("s-live", "2401", Duration.ofMinutes(1)))
+                .as("끝난 방송을 몇 번 열었어도 라이브 방송 통로는 열린다").doesNotThrowAnyException();
+    }
+
+    @Test
+    void broadcastEnded로_닫은_연결도_콜백을_기다리지_않고_자리를_돌려준다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+
+        registry.broadcastEnded("s-1");
+
+        awaitUntil(emitter::completed);
+        assertThat(registry.connectionCount()).isZero();
+    }
+
     @Test
     void broadcastEnded는_그_방송_연결에_ended를_보내고_닫는다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));

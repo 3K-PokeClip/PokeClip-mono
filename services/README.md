@@ -1513,6 +1513,12 @@ the event type buffer to the empty string and return"* 이라 `MessageEvent`를 
   그런데 **작은 쓰기 한 번으로는 부족하다**: 트래픽 없이 재니 하트비트 **두 주기 = 39,267ms**
   뒤에 회수됐다(2026-08-24 실측). 자동 회수되지만
   **탭을 닫고 바로 다시 열면 `max-per-user` 4가 3처럼 느껴질 수 있다**
+- **🔴 서버가 스스로 닫는 연결(`ended`)은 닫는 자리에서 명부 자리를 뺀다 — 정리 콜백을 기다리지 않는다.**
+  끝난 방송에 연 통로는 스트라이프가 `ok` · `ended` · `complete()`를 마이크로초 만에 끝내 Spring이 emitter를 넘겨받기(`initialize`)
+  전에 닫히는 일이 잦고, 이미 닫힌 emitter를 넘겨받으면 Spring은 `onCompletion` · `onTimeout` · `onError`를 **등록조차 안 한다**
+  (spring-webmvc 7.0.9). 그 자리가 재시작 전까지 남아 2026-11-26 운영에서 지난 방송을 몇 번 연 회원의 라이브 통로가 전부
+  `503 stream_limit scope=user`였다(화면은 60초 쉬고 다시 붙으며 그동안 채팅은 5초 읽기로만 들어온다). 실 HTTP 시험
+  `JumpCardStreamLimitTest.끝난_방송_통로를_상한보다_많이_열어도_라이브_통로는_열린다`가 고치기 전 다섯 번째에서 503을 재현한다
 - **🔴 쓸기가 낡은 발행을 통과시키는 창이 하나 있다. 안 고쳤다 — 열리는 조건이 이 구멍의 크기다.**
   연결이 전부 끊긴 사이 하트비트의 순번 표 쓸기(`sweepIdleStreams`)가 그 방송 표를 버리는데,
   그때 **커밋은 됐지만 `afterCommit`이 아직 안 돈 낡은 발행**이 남아 있으면 그것이 빈 표를 만나
