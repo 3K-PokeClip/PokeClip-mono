@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -130,8 +131,37 @@ class JumpCardStreamLimitTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * <b>끝난 방송 통로를 상한보다 많이 열어도 자리가 안 남는다.</b> 화면은 방송 상태를 알기 전(지난 방송 주소 · 방송이 막
+     * 끝남)에 통로를 연다. 서버가 {@code ok} · {@code ended}를 보내고 바로 닫는데, 그 닫기가 Spring이 emitter를 넘겨받기
+     * 전이면 정리 콜백이 등록되지 않아 자리가 재시작 전까지 남았다 — 2026-11-26 운영에서 발표 계정의 라이브 통로가 전부
+     * {@code 503 stream_limit scope=user}였다. 경합이라 한 번에 안 날 수 있어 상한의 세 배를 연다.
+     */
+    @Test
+    void 끝난_방송_통로를_상한보다_많이_열어도_라이브_통로는_열린다() {
+        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, null, 2L, Instant.now()));
+        String token = TestTokens.access("2103");
+
+        for (int i = 0; i < 12; i++) {
+            try (SseReader ended = open("s-ended", token)) {
+                assertThat(ended.statusCode()).as("끝난 방송 통로 " + i).isEqualTo(200);
+                assertThat(ended.awaitName("ended", Duration.ofSeconds(3))).as("ended " + i).isTrue();
+                assertThat(ended.awaitClosed(Duration.ofSeconds(3))).as("서버가 닫는다 " + i).isTrue();
+            }
+        }
+
+        try (SseReader live = open("s-1", token)) {
+            assertThat(live.statusCode())
+                    .as("끝난 방송에서 닫힌 자리가 남으면 여기서 503 stream_limit이다").isEqualTo(200);
+        }
+    }
+
     private SseReader open(String token) {
-        return new SseReader("http://localhost:" + port + "/api/clip/broadcasts/s-1/events",
+        return open("s-1", token);
+    }
+
+    private SseReader open(String streamId, String token) {
+        return new SseReader("http://localhost:" + port + "/api/clip/broadcasts/" + streamId + "/events",
                 Map.of("Authorization", "Bearer " + token));
     }
 }

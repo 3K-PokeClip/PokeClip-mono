@@ -4,6 +4,8 @@ import com.pokeclip.chat.collector.Platform;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.SplittableRandom;
+import java.util.random.RandomGenerator;
 
 /**
  * 발표 데모의 「채팅 이벤트」 대본. 시청자가 없는 데모 방송에서 판별기가 반응을 잡게 하려고 임시 채팅을 만든다.
@@ -26,6 +28,17 @@ final class DemoChatScript {
     /** 급증을 몇 번에 나눠 넣나. 틱 간격({@link DemoChatBurst})이 250ms면 10초 동안 흐른다 */
     static final int BURST_TICKS = 40;
 
+    /**
+     * 누른 뒤 이 틱까지는 같은 방송에서 또 눌러도 무시한다. 틱 간격이 250ms면 45초다. 실제 잠금은 마지막 급증 틱부터
+     * 남은 틱만큼 잰다({@link DemoChatBurst#cooldown}) — 실행기가 밀렸다가 밀린 틱을 몰아 돌아도 급증 사이가 안 줄어든다.
+     *
+     * <p>🔴 판별기 사건 묶기에 기댄다: 튄 창 뒤 20초(episode-gap) 안에 또 튀면 한 사건으로 묶고 카드는 튐이 멈추고
+     * 20초가 지나야 나간다. 급증 10초 + 창 정렬 최대 5초 + 간격 20초 + 유예 2초 ≈ 37초(2026-11-25 운영 실측 37.5초)라 그
+     * 앞에 또 누르면 카드가 그만큼 밀린다. 2026-11-26 운영: 23초 뒤 두 번째 키가 급증을 이어 붙여 카드가 첫 키 63초 뒤에
+     * 나왔고, 발표자는 그 전에 「안 잡혔다」고 보고 수동 마킹을 했다. 판별기 간격을 바꾸면 여기도 본다
+     */
+    static final int LOCK_TICKS = 180;
+
     static final int PER_TICK = 3;
 
     private static final String[] REACTIONS = {
@@ -45,31 +58,58 @@ final class DemoChatScript {
     private DemoChatScript() {
     }
 
+    /**
+     * 한 방송의 시청자 플랫폼. 닉네임마다 무작위로 한 번 정한다(사용자 결정, 2026-11-27): 채팅 번호의 짝·홀로 정하던
+     * 때는 채팅창 아이콘이 치지직 · SOOP 번갈아 나와 지어낸 티가 났다. 같은 사람이 줄마다 플랫폼을 바꿔도 티가 나므로 사람 단위로 정한다
+     */
+    record Audience(List<Platform> byNickname) {
+
+        Platform of(int viewer) {
+            return byNickname.get(viewer % byNickname.size());
+        }
+    }
+
+    /**
+     * 방송마다 한 번 정한다(씨앗 = 방송 번호). 누를 때마다 새로 뽑으면 잠금이 풀린 뒤 다시 누를 때 같은 닉네임이 반대
+     * 플랫폼으로 나오는데, 채팅창은 최근 300줄을 남겨 앞 급증과 함께 보인다. 방송이 다르면 배정도 다르다
+     */
+    static Audience audienceOf(String streamId) {
+        return audience(new SplittableRandom(streamId.hashCode()));
+    }
+
+    /** 둘 중 하나로만 쏠릴 확률은 닉네임 40개라 2의 39제곱분의 1이다 */
+    static Audience audience(RandomGenerator random) {
+        List<Platform> platforms = new ArrayList<>(NICKNAMES.length);
+        for (int i = 0; i < NICKNAMES.length; i++) {
+            platforms.add(random.nextBoolean() ? Platform.CHZZK : Platform.SOOP);
+        }
+        return new Audience(List.copyOf(platforms));
+    }
+
     /** 지금 창 바로 앞 창부터 {@link #CALM_WINDOWS}개 창에 한 건씩. 지금 창은 비운다 */
-    static List<DemoChat> calm(long nowMillis) {
+    static List<DemoChat> calm(long nowMillis, Audience audience) {
         long currentWindowStart = nowMillis - Math.floorMod(nowMillis, WINDOW_MS);
         List<DemoChat> chats = new ArrayList<>(CALM_WINDOWS);
         for (int i = 1; i <= CALM_WINDOWS; i++) {
             long at = currentWindowStart - i * WINDOW_MS + 1_000;
             int viewer = 900 + i % 8;
-            chats.add(chat(i, viewer, CALM[i % CALM.length], at));
+            chats.add(chat(viewer, CALM[i % CALM.length], at, audience));
         }
         return chats;
     }
 
     /** 급증 {@code index}번째 틱. 보낸 사람이 틱마다·건마다 달라 같은 ms에 넣어도 지문이 안 겹친다 */
-    static List<DemoChat> tick(int index, long nowMillis) {
+    static List<DemoChat> tick(int index, long nowMillis, Audience audience) {
         List<DemoChat> chats = new ArrayList<>(PER_TICK);
         for (int j = 0; j < PER_TICK; j++) {
             int n = index * PER_TICK + j;
-            chats.add(chat(n, n, REACTIONS[n % REACTIONS.length], nowMillis));
+            chats.add(chat(n, REACTIONS[n % REACTIONS.length], nowMillis, audience));
         }
         return chats;
     }
 
-    private static DemoChat chat(int n, int viewer, String text, long at) {
-        Platform platform = n % 2 == 0 ? Platform.CHZZK : Platform.SOOP;
+    private static DemoChat chat(int viewer, String text, long at, Audience audience) {
         String id = "demo-viewer-%03d".formatted(viewer);
-        return new DemoChat(platform, id, NICKNAMES[viewer % NICKNAMES.length], text, at);
+        return new DemoChat(audience.of(viewer), id, NICKNAMES[viewer % NICKNAMES.length], text, at);
     }
 }

@@ -9,12 +9,18 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,6 +32,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DemoChatBurstTest {
 
     private static final String STREAM = "demo-stream-1";
+
+    /** 잠금(LOCK_TICKS 180틱)을 실제로 기다리는 시험의 틱. 180틱이 0.72초다 */
+    private static final Duration SHORT_TICK = Duration.ofMillis(4);
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
@@ -66,13 +75,16 @@ class DemoChatBurstTest {
             assertThat(chat.receivedAtMillis()).as("판별기는 받은 시각으로 방송이 살아 있는지 본다")
                     .isEqualTo(clock.get());
         });
-        assertThat(saved).extracting(PersistableChat::platform).contains(Platform.CHZZK, Platform.SOOP);
+        // 두 플랫폼을 다 요구하지 않는다 — 닉네임별 무작위라 한쪽으로 쏠릴 수 있다(두 플랫폼은 씨앗 고정 DemoChatScriptTest가 본다)
+        DemoChatScript.Audience audience = DemoChatScript.audienceOf(STREAM);
+        assertThat(saved).as("플랫폼은 이 방송의 닉네임별 배정을 따른다").allSatisfy(chat -> assertThat(chat.platform())
+                .isEqualTo(audience.of(Integer.parseInt(chat.senderChannelId().substring("demo-viewer-".length())))));
         assertThat(relayed).allSatisfy(chat -> assertThat(chat.time().toEpochMilli()).isEqualTo(clock.get()));
     }
 
     @Test
     void 흐르는_동안_또_누르면_무시하고_끝나면_다시_된다() {
-        DemoChatBurst slow = new DemoChatBurst(buffer, relay, scheduler, clock::get, Duration.ofMillis(20));
+        DemoChatBurst slow = new DemoChatBurst(buffer, relay, scheduler, clock::get, SHORT_TICK);
 
         assertThat(slow.start(STREAM)).isTrue();
         assertThat(slow.start(STREAM)).as("두 번 눌러 급증이 겹치지 않게").isFalse();
@@ -81,11 +93,98 @@ class DemoChatBurstTest {
         기다린다(() -> slow.start(STREAM));
     }
 
+    /**
+     * 다 흘린 뒤에도 카드가 나올 때까지는 또 눌러도 무시한다. 이어 붙은 급증을 판별기가 한 사건으로 묶어 카드가 밀린다
+     * (2026-11-26 운영: 23초 뒤 두 번째 키 → 카드가 첫 키 63초 뒤). 무시한 누름은 아무것도 더 넣지 않는다
+     */
+    @Test
+    void 다_흘린_뒤에도_카드가_나올_때까지는_또_눌러도_무시한다() throws InterruptedException {
+        DemoChatBurst slow = new DemoChatBurst(buffer, relay, scheduler, clock::get, SHORT_TICK);
+        int burst = DemoChatScript.BURST_TICKS * DemoChatScript.PER_TICK;
+
+        assertThat(slow.start(STREAM)).isTrue();
+        기다린다(() -> relayed.size() == burst);
+        long burstDone = System.nanoTime();
+        // 틱 열 개를 더 흘린다 — 잠금이 없으면 마지막 급증 틱 다음 틱에 풀리므로, 바로 누르면 잠금 없이도 무시될 수 있다
+        Thread.sleep(SHORT_TICK.multipliedBy(10).toMillis());
+
+        assertThat(slow.start(STREAM)).as("급증은 끝났지만 아직 잠금 안이다").isFalse();
+        assertThat(relayed).as("무시한 누름은 아무것도 더 안 흘린다").hasSize(burst);
+        assertThat(buffer.size()).isEqualTo(DemoChatScript.CALM_WINDOWS + burst);
+
+        기다린다(() -> slow.start(STREAM));
+        // 아래 경계는 넉넉히 반만 본다 — 급증이 끝난 것을 시험 스레드가 늦게 볼수록 잰 시간이 짧아진다
+        assertThat(Duration.ofNanos(System.nanoTime() - burstDone))
+                .as("마지막 급증부터 잠금 시간이 지나야 풀린다")
+                .isGreaterThanOrEqualTo(DemoChatBurst.cooldown(SHORT_TICK).dividedBy(2));
+    }
+
+    /**
+     * 실행기가 밀렸다가 밀린 틱을 몰아 돌아도 잠금은 <b>마지막 급증부터</b> 잰다. 누른 시각부터 틱 수로 세면 몰아 돈
+     * 빈 틱이 잠금을 같이 써 버려, 늦게 흘린 급증 바로 뒤에 또 누를 수 있다 — 두 급증이 판별기 묶기 간격(20초) 안에
+     * 붙어 한 사건이 되고 카드가 밀린다
+     */
+    @Test
+    void 실행기가_밀렸다_몰아_돌아도_잠금은_마지막_급증부터_잰다() throws InterruptedException {
+        AtomicBoolean stalled = new AtomicBoolean();
+        RelaySink stalling = (streamId, payload) -> {
+            // 첫 급증 틱에서 실행기를 누른 뒤 잠금 전체(LOCK_TICKS)보다 오래 붙잡는다
+            if (stalled.compareAndSet(false, true)) {
+                LockSupport.parkNanos(SHORT_TICK.multipliedBy(DemoChatScript.LOCK_TICKS + 50).toNanos());
+            }
+            relay.offer(streamId, payload);
+        };
+        DemoChatBurst slow = new DemoChatBurst(buffer, stalling, scheduler, clock::get, SHORT_TICK);
+        int burst = DemoChatScript.BURST_TICKS * DemoChatScript.PER_TICK;
+
+        assertThat(slow.start(STREAM)).isTrue();
+        기다린다(() -> relayed.size() == burst);
+        Thread.sleep(SHORT_TICK.multipliedBy(10).toMillis());
+
+        assertThat(slow.start(STREAM)).as("밀린 급증을 막 흘렸다 — 누른 지 LOCK_TICKS가 지났어도 아직 잠금 안이다").isFalse();
+        기다린다(() -> slow.start(STREAM));
+    }
+
+    /**
+     * 같은 방송에서 잠금이 풀린 뒤 다시 눌러도 같은 사람은 같은 플랫폼이다. 채팅창은 최근 300줄을 남겨 앞 급증(120줄)과
+     * 뒤 급증이 같이 보이므로, 누를 때마다 새로 뽑으면 같은 닉네임이 치지직 · SOOP 아이콘으로 섞여 지어낸 티가 난다
+     */
+    @Test
+    void 같은_방송에서_다시_눌러도_같은_사람은_같은_플랫폼이다() {
+        DemoChatBurst slow = new DemoChatBurst(buffer, relay, scheduler, clock::get, SHORT_TICK);
+        int burst = DemoChatScript.BURST_TICKS * DemoChatScript.PER_TICK;
+
+        assertThat(slow.start(STREAM)).isTrue();
+        기다린다(() -> relayed.size() == burst);
+        기다린다(() -> slow.start(STREAM));
+        기다린다(() -> relayed.size() == burst * 2);
+
+        Map<String, Set<Platform>> byNickname = new HashMap<>();
+        relayed.forEach(chat -> byNickname.computeIfAbsent(chat.nickname(), k -> new HashSet<>()).add(chat.platform()));
+        assertThat(byNickname.values()).as("두 번 누른 사이에 같은 닉네임이 플랫폼을 바꾸지 않는다")
+                .allSatisfy(platforms -> assertThat(platforms).hasSize(1));
+    }
+
+    /**
+     * 실제 틱(250ms)으로 잠금이 카드가 나오는 시각보다 길다. 판별기 묶기 간격 20초 안에 또 누르면 두 급증이 한 사건으로
+     * 묶여 카드가 그만큼 밀린다. 카드는 누른 뒤 약 37.5초에 나온다(2026-11-25 운영 실측)
+     */
+    @Test
+    void 평소에는_누른_뒤_카드가_나올_때까지_잠근다() {
+        Duration lastBurstTick = DemoChatBurst.TICK.multipliedBy(DemoChatScript.BURST_TICKS - 1);
+        Duration unlockAfterPress = lastBurstTick.plus(DemoChatBurst.cooldown(DemoChatBurst.TICK));
+
+        assertThat(unlockAfterPress).isEqualTo(DemoChatBurst.TICK.multipliedBy(DemoChatScript.LOCK_TICKS));
+        assertThat(unlockAfterPress).as("카드(약 37.5초)가 나오기 전에 풀리면 또 누른 급증이 카드를 민다")
+                .isGreaterThan(Duration.ofMillis(37_500));
+    }
+
+    /** 바쁜 대기로 코어를 태우지 않게 1ms씩 쉰다 */
     private static void 기다린다(BooleanSupplier condition) {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (!condition.getAsBoolean()) {
             assertThat(System.nanoTime()).as("5초 안에 안 됐다").isLessThan(deadline);
-            Thread.onSpinWait();
+            LockSupport.parkNanos(Duration.ofMillis(1).toNanos());
         }
     }
 }

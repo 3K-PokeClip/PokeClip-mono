@@ -163,6 +163,11 @@ public class CardStreamRegistry implements EndedListener, ViewerPresence {
                 if (completeAfter) {
                     writable = false;   // 우리가 닫았다 — 아래에서 또 닫지 않는다
                     closed = true;
+                    // 🔴 자리는 여기서 뺀다. 정리 콜백을 기다리면 안 된다: 끝난 방송으로 연 연결은 이 줄이 Spring이
+                    // emitter를 넘겨받기(initialize) 전에 돌 때가 많고, 이미 닫힌 emitter를 넘겨받으면 Spring은 콜백을
+                    // 등록조차 안 한다 — 그 자리가 재시작 전까지 남아 회원당 상한(4)을 채웠다(2026-11-26 운영, 503 stream_limit).
+                    // complete()보다 앞이다: 그것이 던져도 자리는 돌아온다. 콜백이 나중에 또 빼도 멱등이다
+                    evict.run();
                     emitter.complete();
                 }
                 return Result.SENT;

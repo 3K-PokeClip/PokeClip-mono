@@ -4,8 +4,11 @@ import com.pokeclip.chat.collector.Platform;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.stream.IntStream;
 
@@ -19,9 +22,12 @@ class DemoChatScriptTest {
 
     private static final long NOW = 1_800_000_003_210L;
 
+    /** 씨앗을 고정해 시험마다 같은 무작위다 */
+    private static final DemoChatScript.Audience AUDIENCE = DemoChatScript.audience(new Random(7));
+
     @Test
     void 평소_채팅은_지난_창마다_한_건씩이고_되돌아보기_안에_있다() {
-        List<DemoChat> calm = DemoChatScript.calm(NOW);
+        List<DemoChat> calm = DemoChatScript.calm(NOW, AUDIENCE);
 
         Set<Long> windows = new HashSet<>();
         for (DemoChat chat : calm) {
@@ -37,7 +43,7 @@ class DemoChatScriptTest {
     @Test
     void 급증은_두_플랫폼에서_오고_한_창에_최소_건수와_배율을_넘는다() {
         List<DemoChat> burst = IntStream.range(0, DemoChatScript.BURST_TICKS)
-                .mapToObj(i -> DemoChatScript.tick(i, NOW + i * 250L))
+                .mapToObj(i -> DemoChatScript.tick(i, NOW + i * 250L, AUDIENCE))
                 .flatMap(List::stream)
                 .toList();
 
@@ -50,8 +56,8 @@ class DemoChatScriptTest {
 
     @Test
     void 닉네임은_번호가_아니라_실제_시청자_같은_가상_이름이다() {
-        List<DemoChat> all = new ArrayList<>(DemoChatScript.calm(NOW));
-        IntStream.range(0, DemoChatScript.BURST_TICKS).forEach(i -> all.addAll(DemoChatScript.tick(i, NOW)));
+        List<DemoChat> all = new ArrayList<>(DemoChatScript.calm(NOW, AUDIENCE));
+        IntStream.range(0, DemoChatScript.BURST_TICKS).forEach(i -> all.addAll(DemoChatScript.tick(i, NOW, AUDIENCE)));
 
         assertThat(all).extracting(DemoChat::nickname)
                 .as("발표 화면에 「시청자012」가 보이면 가짜 티가 난다")
@@ -60,10 +66,38 @@ class DemoChatScriptTest {
                 .as("한 사람이 도배하는 것처럼 보이지 않게 이름이 여럿이다").isGreaterThanOrEqualTo(30);
     }
 
+    /**
+     * 플랫폼은 번갈아가 아니라 무작위다(사용자 결정, 2026-11-27 — 치지직 · SOOP 아이콘이 정직하게 번갈아 나와 지어낸 티가 났다).
+     * 같은 사람은 한 번 누른 동안 플랫폼이 같다: 줄마다 바뀌면 그것도 티가 난다
+     */
+    @Test
+    void 플랫폼은_번갈아_나오지_않고_사람마다_무작위로_정한다() {
+        List<DemoChat> burst = IntStream.range(0, DemoChatScript.BURST_TICKS)
+                .mapToObj(i -> DemoChatScript.tick(i, NOW, AUDIENCE))
+                .flatMap(List::stream)
+                .toList();
+
+        boolean alternates = IntStream.range(1, burst.size())
+                .allMatch(i -> burst.get(i).platform() != burst.get(i - 1).platform());
+        assertThat(alternates).as("치지직 · SOOP가 한 줄씩 번갈아 나오면 지어낸 티가 난다").isFalse();
+
+        Map<String, Set<Platform>> byNickname = new HashMap<>();
+        List<DemoChat> all = new ArrayList<>(DemoChatScript.calm(NOW, AUDIENCE));
+        all.addAll(burst);
+        all.forEach(chat -> byNickname.computeIfAbsent(chat.nickname(), k -> new HashSet<>()).add(chat.platform()));
+        assertThat(byNickname.values()).as("같은 닉네임이 줄마다 플랫폼을 바꾸지 않는다").allSatisfy(p -> assertThat(p).hasSize(1));
+
+        assertThat(DemoChatScript.audience(new Random(8)))
+                .as("씨앗이 다르면 배정도 다르다").isNotEqualTo(AUDIENCE);
+        assertThat(DemoChatScript.audienceOf("stream-1"))
+                .as("같은 방송은 다시 눌러도 같은 배정이다").isEqualTo(DemoChatScript.audienceOf("stream-1"))
+                .as("방송이 다르면 배정도 다르다").isNotEqualTo(DemoChatScript.audienceOf("stream-2"));
+    }
+
     @Test
     void 한_틱의_채팅은_보낸_사람이_달라_지문이_안_겹친다() {
         // 지문 UNIQUE가 (채널, 보낸 사람, 시각, 본문)이라 같은 ms에 같은 사람이 같은 말을 하면 하나가 버려진다
-        List<DemoChat> tick = DemoChatScript.tick(7, NOW);
+        List<DemoChat> tick = DemoChatScript.tick(7, NOW, AUDIENCE);
 
         assertThat(tick).extracting(DemoChat::senderId).doesNotHaveDuplicates();
         assertThat(tick).allSatisfy(chat -> assertThat(chat.messageTimeMillis()).isEqualTo(NOW));
