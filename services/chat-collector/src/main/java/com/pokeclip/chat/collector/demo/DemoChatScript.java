@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.Platform;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.random.RandomGenerator;
 
 /**
  * 발표 데모의 「채팅 이벤트」 대본. 시청자가 없는 데모 방송에서 판별기가 반응을 잡게 하려고 임시 채팅을 만든다.
@@ -55,31 +56,50 @@ final class DemoChatScript {
     private DemoChatScript() {
     }
 
+    /**
+     * 한 번 누른 동안의 시청자 플랫폼. 닉네임마다 무작위로 한 번 정한다(사용자 결정, 2026-11-27): 채팅 번호의 짝·홀로 정하던
+     * 때는 채팅창 아이콘이 치지직 · SOOP 번갈아 나와 지어낸 티가 났다. 같은 사람이 줄마다 플랫폼을 바꿔도 티가 나므로 사람 단위로 정한다
+     */
+    record Audience(List<Platform> byNickname) {
+
+        Platform of(int viewer) {
+            return byNickname.get(viewer % byNickname.size());
+        }
+    }
+
+    /** 누를 때마다 새로 정한다. 둘 중 하나로만 쏠릴 확률은 닉네임 40개라 2의 39제곱분의 1이다 */
+    static Audience audience(RandomGenerator random) {
+        List<Platform> platforms = new ArrayList<>(NICKNAMES.length);
+        for (int i = 0; i < NICKNAMES.length; i++) {
+            platforms.add(random.nextBoolean() ? Platform.CHZZK : Platform.SOOP);
+        }
+        return new Audience(List.copyOf(platforms));
+    }
+
     /** 지금 창 바로 앞 창부터 {@link #CALM_WINDOWS}개 창에 한 건씩. 지금 창은 비운다 */
-    static List<DemoChat> calm(long nowMillis) {
+    static List<DemoChat> calm(long nowMillis, Audience audience) {
         long currentWindowStart = nowMillis - Math.floorMod(nowMillis, WINDOW_MS);
         List<DemoChat> chats = new ArrayList<>(CALM_WINDOWS);
         for (int i = 1; i <= CALM_WINDOWS; i++) {
             long at = currentWindowStart - i * WINDOW_MS + 1_000;
             int viewer = 900 + i % 8;
-            chats.add(chat(i, viewer, CALM[i % CALM.length], at));
+            chats.add(chat(viewer, CALM[i % CALM.length], at, audience));
         }
         return chats;
     }
 
     /** 급증 {@code index}번째 틱. 보낸 사람이 틱마다·건마다 달라 같은 ms에 넣어도 지문이 안 겹친다 */
-    static List<DemoChat> tick(int index, long nowMillis) {
+    static List<DemoChat> tick(int index, long nowMillis, Audience audience) {
         List<DemoChat> chats = new ArrayList<>(PER_TICK);
         for (int j = 0; j < PER_TICK; j++) {
             int n = index * PER_TICK + j;
-            chats.add(chat(n, n, REACTIONS[n % REACTIONS.length], nowMillis));
+            chats.add(chat(n, REACTIONS[n % REACTIONS.length], nowMillis, audience));
         }
         return chats;
     }
 
-    private static DemoChat chat(int n, int viewer, String text, long at) {
-        Platform platform = n % 2 == 0 ? Platform.CHZZK : Platform.SOOP;
+    private static DemoChat chat(int viewer, String text, long at, Audience audience) {
         String id = "demo-viewer-%03d".formatted(viewer);
-        return new DemoChat(platform, id, NICKNAMES[viewer % NICKNAMES.length], text, at);
+        return new DemoChat(audience.of(viewer), id, NICKNAMES[viewer % NICKNAMES.length], text, at);
     }
 }

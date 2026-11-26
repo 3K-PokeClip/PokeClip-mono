@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -79,8 +80,9 @@ public class DemoChatBurst {
         if (!running.add(streamId)) {
             return false;
         }
+        DemoChatScript.Audience audience = DemoChatScript.audience(ThreadLocalRandom.current());
         // 평소 채팅은 지난 시각이라 채팅창(중계)에는 안 보낸다. 보내면 26건이 한꺼번에 쏟아진다
-        for (DemoChat chat : DemoChatScript.calm(clockMillis.getAsLong())) {
+        for (DemoChat chat : DemoChatScript.calm(clockMillis.getAsLong(), audience)) {
             buffer.offer(persistable(streamId, chat));
         }
         AtomicInteger next = new AtomicInteger();
@@ -89,7 +91,7 @@ public class DemoChatBurst {
             int index = next.getAndIncrement();
             try {
                 if (index < DemoChatScript.BURST_TICKS) {
-                    offerTick(streamId, index);
+                    offerTick(streamId, index, audience);
                     return;
                 }
                 if (index < DemoChatScript.LOCK_TICKS) {
@@ -108,8 +110,8 @@ public class DemoChatBurst {
         return true;
     }
 
-    private void offerTick(String streamId, int index) {
-        for (DemoChat chat : DemoChatScript.tick(index, clockMillis.getAsLong())) {
+    private void offerTick(String streamId, int index, DemoChatScript.Audience audience) {
+        for (DemoChat chat : DemoChatScript.tick(index, clockMillis.getAsLong(), audience)) {
             buffer.offer(persistable(streamId, chat));
             relay.offer(streamId, new RelayPayload.Chat(chat.platform(), Instant.ofEpochMilli(chat.messageTimeMillis()),
                     chat.nickname(), chat.senderId(), null, chat.text()));
