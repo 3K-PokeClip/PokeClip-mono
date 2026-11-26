@@ -81,6 +81,27 @@ class DemoChatBurstTest {
         기다린다(() -> slow.start(STREAM));
     }
 
+    /**
+     * 다 흘린 뒤에도 카드가 나올 때까지는 또 눌러도 무시한다. 이어 붙은 급증을 판별기가 한 사건으로 묶어 카드가 밀린다
+     * (2026-11-26 운영: 23초 뒤 두 번째 키 → 카드가 첫 키 63초 뒤). 무시한 누름은 아무것도 더 넣지 않는다
+     */
+    @Test
+    void 다_흘린_뒤에도_카드가_나올_때까지는_또_눌러도_무시한다() throws InterruptedException {
+        DemoChatBurst slow = new DemoChatBurst(buffer, relay, scheduler, clock::get, Duration.ofMillis(20));
+        int burst = DemoChatScript.BURST_TICKS * DemoChatScript.PER_TICK;
+
+        assertThat(slow.start(STREAM)).isTrue();
+        기다린다(() -> relayed.size() == burst);
+        // 틱 열 개를 더 흘린다 — 잠금이 없으면 마지막 급증 틱 다음 틱에 풀리므로, 바로 누르면 잠금 없이도 무시될 수 있다
+        Thread.sleep(200);
+
+        assertThat(slow.start(STREAM)).as("급증은 끝났지만 아직 잠금 틱 안이다").isFalse();
+        assertThat(relayed).as("무시한 누름은 아무것도 더 안 흘린다").hasSize(burst);
+        assertThat(buffer.size()).isEqualTo(DemoChatScript.CALM_WINDOWS + burst);
+
+        기다린다(() -> slow.start(STREAM));
+    }
+
     private static void 기다린다(BooleanSupplier condition) {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (!condition.getAsBoolean()) {

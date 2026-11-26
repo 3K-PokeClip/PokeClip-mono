@@ -49,7 +49,7 @@ public class DemoChatBurst {
     private final LongSupplier clockMillis;
     private final Duration tick;
 
-    /** 지금 흐르고 있는 방송. 두 번 눌러 급증이 겹치면 한 창에 몰려 숫자가 발표 때와 달라진다 */
+    /** 흐르고 있거나 카드를 기다리는 방송({@link DemoChatScript#LOCK_TICKS}). 또 눌러 급증이 이어 붙으면 카드가 밀린다 */
     private final Set<String> running = ConcurrentHashMap.newKeySet();
 
     @Autowired
@@ -73,7 +73,7 @@ public class DemoChatBurst {
     /**
      * 지난 2분치 평소 채팅을 저장하고, 급증을 10초 동안 흘린다.
      *
-     * @return 시작했으면 {@code true}. 이 방송에 이미 흐르고 있으면 아무것도 안 하고 {@code false}
+     * @return 시작했으면 {@code true}. 이 방송에 이미 흐르고 있거나 카드를 기다리는 중이면 아무것도 안 하고 {@code false}
      */
     public boolean start(String streamId) {
         if (!running.add(streamId)) {
@@ -92,11 +92,15 @@ public class DemoChatBurst {
                     offerTick(streamId, index);
                     return;
                 }
+                if (index < DemoChatScript.LOCK_TICKS) {
+                    // 다 흘렸지만 카드가 나오기 전이다 — 또 누르면 급증이 이어 붙어 카드가 밀린다(LOCK_TICKS)
+                    return;
+                }
             } catch (RuntimeException e) {
                 // 던진 채로 두면 실행기가 이 작업을 조용히 멈추고 running에서도 안 빠져 다시 못 누른다
                 log.warn("demo.chat_burst.failed stream={} tick={} cause={}", streamId, index, e.getClass().getSimpleName());
             }
-            // 여기 오는 것은 틱 40개가 다 지난 뒤(또는 실패)라 handle.set은 이미 끝나 있다
+            // 여기 오는 것은 잠금 틱이 다 지난 뒤(또는 실패)라 handle.set은 이미 끝나 있다
             handle.get().cancel(false);
             running.remove(streamId);
         }, 0, tick.toMillis(), TimeUnit.MILLISECONDS));

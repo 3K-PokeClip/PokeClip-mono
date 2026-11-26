@@ -26,6 +26,16 @@ final class DemoChatScript {
     /** 급증을 몇 번에 나눠 넣나. 틱 간격({@link DemoChatBurst})이 250ms면 10초 동안 흐른다 */
     static final int BURST_TICKS = 40;
 
+    /**
+     * 누른 뒤 이 틱까지는 같은 방송에서 또 눌러도 무시한다. 틱 간격이 250ms면 45초다.
+     *
+     * <p>🔴 판별기 사건 묶기에 기댄다: 튄 창 뒤 20초(episode-gap) 안에 또 튀면 한 사건으로 묶고 카드는 튐이 멈추고
+     * 20초가 지나야 나간다. 급증 10초 + 창 정렬 최대 5초 + 간격 20초 + 유예 2초 ≈ 37초(2026-11-25 운영 실측 37.5초)라 그
+     * 앞에 또 누르면 카드가 그만큼 밀린다. 2026-11-26 운영: 23초 뒤 두 번째 키가 급증을 이어 붙여 카드가 첫 키 63초 뒤에
+     * 나왔고, 발표자는 그 전에 「안 잡혔다」고 보고 수동 마킹을 했다. 판별기 간격을 바꾸면 여기도 본다
+     */
+    static final int LOCK_TICKS = 180;
+
     static final int PER_TICK = 3;
 
     private static final String[] REACTIONS = {
