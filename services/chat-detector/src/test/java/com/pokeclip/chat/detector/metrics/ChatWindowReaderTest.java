@@ -54,12 +54,42 @@ class ChatWindowReaderTest extends IntegrationTestSupport {
 
     /** 치지직이 찍은 시각과 우리가 받은 시각을 <b>따로</b> 준다. 시계가 어긋난 상황을 만든다. */
     private void 채팅(String streamId, String sender, Instant messageTime, Instant receivedAt) {
+        채팅("c1", streamId, sender, messageTime, receivedAt);
+    }
+
+    /** 채널 번호까지 준다. 발표 데모 채팅(수집기 {@code DemoChatBurst})은 채널이 {@code demo-<플랫폼>-<방송>}이다 */
+    private void 채팅(String channelId, String streamId, String sender, Instant messageTime, Instant receivedAt) {
         jdbc.update("""
                 INSERT INTO app_chat_collector.chat_messages
                     (channel_id, sender_channel_id, content, message_time, received_at, content_sha256, stream_id)
-                VALUES ('c1', ?, 'hi', ?, ?, repeat('a', 64), ?)
-                """, sender, java.sql.Timestamp.from(messageTime),
+                VALUES (?, ?, 'hi', ?, ?, repeat('a', 64), ?)
+                """, channelId, sender, java.sql.Timestamp.from(messageTime),
                 java.sql.Timestamp.from(receivedAt), streamId);
+    }
+
+    /**
+     * 🔴 발표 데모 채팅은 네 조회 모두 안 센다(2026-11-27). 그 급증의 카드는 수집기가 70번째 채팅에서 직접 낸다 — 여기서 세면
+     * 같은 급증에 카드가 한 장 더 선다. 데모 채팅만 있는 방송은 활성도 아니다(「활성인데 집계 0줄」 경보를 안 켠다)
+     */
+    @Test
+    void 발표_데모_채팅은_활성도_집계도_다_받은_시각도_늦은_도착도_안_센다() {
+        채팅("c1", "s1", "u1", T0.plusMillis(1_000), T0.plusMillis(1_175));
+        // 실제 채팅보다 늦게 받은 데모 채팅 — 세면 「다 받은 시각」이 뒤로 밀린다
+        채팅("demo-chzzk-s1", "s1", "demo-viewer-000", T0.plusMillis(2_000), T0.plusMillis(3_000));
+        채팅("demo-soop-s1", "s1", "demo-viewer-001", T0.plusMillis(2_000), T0.plusMillis(3_000));
+        // 데모 채팅만 있는 방송. 늦게 도착한 것처럼 찍어 늦은 도착 요약에도 걸리게 한다
+        채팅("demo-chzzk-s2", "s2", "demo-viewer-002", T0.plusMillis(1_000), T0.plusSeconds(30));
+
+        assertThat(reader.activeStreams(T0.minusSeconds(60))).as("데모 채팅만 있는 방송은 활성이 아니다").containsExactly("s1");
+
+        List<MetricRow> rows = reader.countWindows("s1", 5_000L, T0, T0.plusSeconds(5));
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).messageCount()).as("실제 채팅만 센다").isEqualTo(1);
+        assertThat(rows.get(0).chatterCount()).isEqualTo(1);
+
+        assertThat(reader.lastReceivedAt("s1", T0, T0.plusSeconds(5), T0.plusSeconds(7)))
+                .contains(T0.plusMillis(1_175));
+        assertThat(reader.lateArrivals("s2", T0, T0.plusSeconds(60), 2_000, 7_000).total()).isZero();
     }
 
     @Test

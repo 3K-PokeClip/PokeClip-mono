@@ -270,6 +270,11 @@ pokeclip:
     # clip 내부 창구 주소(POK-397). 수집기가 그 플랫폼에서 방송을 확인하면 clip 플랫폼 묶음(PUT …/platforms/{P})에 알린다.
     # 재부착·중계와 같은 환경변수를 받되 값은 따로 든다. 방송 정보(liveinfo)가 켜져 있는데 비면 ClipPlatformClient 생성자가 부팅을 죽인다.
     clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+  demo:
+    # 발표 데모 카드(⌃⇧C의 70번째 채팅, DemoHighlight)를 넣을 clip 내부 창구 주소. 재부착·중계와 같은 환경변수를 받되 값은 따로 든다.
+    # 중계와 묶지 않는다 — 중계가 꺼져도 화면은 저장된 채팅을 5초마다 읽어 데모 채팅을 띄운다(PR #558 리뷰).
+    # 이 값이나 내부 토큰(pokeclip.link.internal-token)이 비면 카드를 안 보낸다(DemoConfiguration, 부팅은 안 죽인다).
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
   soop:
     # SOOP 방송 지켜보기(POK-397). 켜면 SOOP 연동 스트리머의 방송을 1분마다 확인해 방송 정보(platform SOOP)를 남기고 화면에 밀고
     # clip 플랫폼 묶음에 SOOP을 알린다. 채팅 세션 자리는 안 쓴다(SOOP 채팅은 PR4).
