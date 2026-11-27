@@ -36,6 +36,16 @@ class DemoChatEndpointTest extends IntegrationTestSupport {
     @LocalServerPort int port;
     @Autowired JdbcTemplate jdbc;
     @Autowired ChatPersister persister;
+    @Autowired DemoHighlight.Sink cardSink;
+
+    /**
+     * 중계가 꺼진(시험 기본) 운영 컨텍스트에서도 내부 토큰 · clip 주소가 있으면 카드를 clip에 넣는 클라이언트가 물린다(PR #558 리뷰).
+     * 화면은 중계 없이도 저장된 채팅을 5초마다 읽어 데모 채팅을 띄우므로, 여기서 {@code NONE}이면 그 배포에서 카드가 영영 안 선다
+     */
+    @Test
+    void 중계가_꺼져도_내부_토큰이_있으면_카드를_clip에_넣는_클라이언트가_물린다() {
+        assertThat(cardSink).isInstanceOf(ClipDemoCardClient.class);
+    }
 
     @BeforeEach
     void 내_방송만_비운다() {

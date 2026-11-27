@@ -1,7 +1,5 @@
 package com.pokeclip.chat.collector.demo;
 
-import com.pokeclip.chat.collector.link.LinkProperties;
-import com.pokeclip.chat.collector.relay.RelayProperties;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
 import org.springframework.http.MediaType;
@@ -13,11 +11,10 @@ import java.util.Map;
 /**
  * clip의 {@code POST /internal/broadcasts/{streamId}/highlights}(계약 2A — 판별기가 카드를 넣는 문)에 데모 카드를 넣는다.
  *
- * <p>clip 주소는 중계({@code pokeclip.relay.clip-base-url})의 것을 쓴다. 데모 채팅은 중계로만 화면에 가므로 중계가 꺼진 배포에는
- * 데모 카드도 뜻이 없다({@link DemoConfiguration}). 쌍둥이는 {@code platforms/ClipPlatformClient}(같은 clip · 같은 토큰 헤더 ·
- * 「주입받은 빌더를 쓴다」)다.
+ * <p>쌍둥이는 {@code platforms/ClipPlatformClient}(같은 clip · 같은 토큰 헤더 · 「주입받은 빌더를 쓴다」)다. 주소 · 토큰이 비었을 때 이것을
+ * 만들지 않는 것은 {@link DemoConfiguration}이 정한다.
  *
- * <p>던지지 않는다. 재시도하지 않는다 — 같은 카드는 clip이 (방송, 구간 시작) 유일 색인으로 한 장만 남긴다.
+ * <p>던지지 않는다. 다시 보내는 것은 부르는 쪽({@link DemoHighlight}) 몫이다 — 같은 카드는 clip이 (방송, 구간 시작) 유일 색인으로 한 장만 남긴다.
  */
 final class ClipDemoCardClient implements DemoHighlight.Sink {
 
@@ -33,12 +30,17 @@ final class ClipDemoCardClient implements DemoHighlight.Sink {
     private final String baseUrl;
     private final String internalToken;
 
-    ClipDemoCardClient(RestClient.Builder builder, RelayProperties relay, LinkProperties link) {
-        relay.validate();
-        link.validate();
+    ClipDemoCardClient(RestClient.Builder builder, String baseUrl, String internalToken) {
+        // 값은 메시지에 넣지 않는다 — 부팅 실패 메시지는 로그에 그대로 찍힌다
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("pokeclip.demo.clip-base-url이(가) 비어 있다. CLIP_BASE_URL 환경변수를 준다.");
+        }
+        if (internalToken == null || internalToken.isBlank()) {
+            throw new IllegalStateException("pokeclip.link.internal-token이(가) 비어 있다. INTERNAL_API_TOKEN 환경변수를 준다.");
+        }
         this.restClient = builder.build();
-        this.baseUrl = relay.clipBaseUrl();
-        this.internalToken = link.internalToken();
+        this.baseUrl = baseUrl;
+        this.internalToken = internalToken;
     }
 
     /**
@@ -46,9 +48,9 @@ final class ClipDemoCardClient implements DemoHighlight.Sink {
      * httpclient5가 잡혀 스택이 조용히 바뀐다({@code RelayConfiguration}과 같은 이유).
      */
     static ClipDemoCardClient create(RestClient.Builder builder, ClientHttpRequestFactoryBuilder<?> factoryBuilder,
-                                     RelayProperties relay, LinkProperties link) {
+                                     String baseUrl, String internalToken) {
         return new ClipDemoCardClient(builder.requestFactory(factoryBuilder.build(
-                HttpClientSettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT))), relay, link);
+                HttpClientSettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT))), baseUrl, internalToken);
     }
 
     @Override
