@@ -56,7 +56,7 @@ class DemoChatEndpointTest extends IntegrationTestSupport {
         assertThat(again.statusCode()).isEqualTo(200);
         assertThat(again.body()).contains("\"started\":false");
 
-        int total = DemoChatScript.CALM_WINDOWS + DemoChatScript.BURST_TICKS * DemoChatScript.PER_TICK;
+        int total = DemoChatScript.BURST_TICKS * DemoChatScript.PER_TICK;
         long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
         while (count() < total) {
             assertThat(System.nanoTime()).as("30초 안에 %d건이 안 들어갔다(지금 %d)", total, count()).isLessThan(deadline);

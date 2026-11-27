@@ -8,44 +8,29 @@ import java.util.SplittableRandom;
 import java.util.random.RandomGenerator;
 
 /**
- * 발표 데모의 「채팅 이벤트」 대본. 시청자가 없는 데모 방송에서 판별기가 반응을 잡게 하려고 임시 채팅을 만든다.
+ * 발표 데모의 「채팅 이벤트」 대본. 시청자가 없는 데모 방송에 몰려드는 임시 시청자 채팅을 만든다.
  *
- * <p>🔴 <b>숫자가 판별기(chat-detector) 기본 설정에 기대고 있다.</b> 그쪽 값을 바꾸면 여기도 본다.
- * <ul>
- *   <li>워밍업: 「채팅이 있던 5초 창 24개」가 쌓여야 판정을 시작한다. 시청자가 없는 방송에는 그 창이 없어서
- *       급증만 넣으면 카드가 안 뜬다. 그래서 {@link #calm}이 지난 창마다 한 건씩 채운다(사용자 결정, 2026-11-22)
- *   <li>되돌아보기 150초: 판별기는 지난 150초 안의 창만 다시 센다. 평소 채팅을 그보다 앞에 두면 안 세어진다
- *   <li>최소 건수 10 · 배율 3: 급증 창은 평소(창당 1건)의 수십 배다. 실제 시청자 채팅이 창당 20건쯤까지 있어도 넘는다
- * </ul>
+ * <p>카드는 판별기(chat-detector)가 아니라 {@link DemoHighlight}가 {@link #CARD_AT_CHAT}번째 채팅에서 낸다(사용자 결정,
+ * 2026-11-27). 판별기는 급증이 멈추고 사건 묶기 간격 20초를 더 기다려 누른 뒤 약 37초에야 카드를 냈고, 5초 창에 맞춰
+ * 세므로 「몇 번째 채팅에서」를 맞출 수 없다. 판별기는 데모 채널({@code demo-…}) 채팅을 아예 안 센다 — 세면 같은 급증에
+ * 카드가 한 장 더 선다
  */
 final class DemoChatScript {
-
-    static final long WINDOW_MS = 5_000;
-
-    /** 평소 채팅을 채우는 지난 창 수. 워밍업 24 + 여유 2, 26창 = 130초라 되돌아보기 150초 안이다 */
-    static final int CALM_WINDOWS = 26;
 
     /** 급증을 몇 번에 나눠 넣나. 틱 간격({@link DemoChatBurst})이 250ms면 10초 동안 흐른다 */
     static final int BURST_TICKS = 40;
 
-    /**
-     * 누른 뒤 이 틱까지는 같은 방송에서 또 눌러도 무시한다. 틱 간격이 250ms면 45초다. 실제 잠금은 마지막 급증 틱부터
-     * 남은 틱만큼 잰다({@link DemoChatBurst#cooldown}) — 실행기가 밀렸다가 밀린 틱을 몰아 돌아도 급증 사이가 안 줄어든다.
-     *
-     * <p>🔴 판별기 사건 묶기에 기댄다: 튄 창 뒤 20초(episode-gap) 안에 또 튀면 한 사건으로 묶고 카드는 튐이 멈추고
-     * 20초가 지나야 나간다. 급증 10초 + 창 정렬 최대 5초 + 간격 20초 + 유예 2초 ≈ 37초(2026-11-25 운영 실측 37.5초)라 그
-     * 앞에 또 누르면 카드가 그만큼 밀린다. 2026-11-26 운영: 23초 뒤 두 번째 키가 급증을 이어 붙여 카드가 첫 키 63초 뒤에
-     * 나왔고, 발표자는 그 전에 「안 잡혔다」고 보고 수동 마킹을 했다. 판별기 간격을 바꾸면 여기도 본다
-     */
-    static final int LOCK_TICKS = 180;
-
     static final int PER_TICK = 3;
+
+    /**
+     * 이 번째 채팅을 넣는 순간 자동 하이라이트 카드를 낸다(사용자 결정, 2026-11-27: 「120건 중 70건에서 고정」). 3건씩 넣으므로
+     * 24번째 틱(누른 뒤 5.75초)의 첫 채팅이다
+     */
+    static final int CARD_AT_CHAT = 70;
 
     private static final String[] REACTIONS = {
             "ㅋㅋㅋㅋㅋㅋ", "와 미쳤다", "클립각", "ㄷㄷㄷㄷ", "방금 뭐임", "레전드", "이게 되네", "와아아아",
             "실화냐", "개웃기네 ㅋㅋ", "다시 보여줘", "역대급", "ㅋㅋㅋㅋ 이거지", "소름", "대박", "미쳤네 진짜"};
-
-    private static final String[] CALM = {"ㅎㅇ", "안녕하세요", "오늘 뭐해요", "ㅋㅋ", "굿", "재밌다", "오 좋네요"};
 
     /** 실제 시청자처럼 보이는 가상 닉네임. 실존 인물·채널 이름은 쓰지 않는다 */
     private static final String[] NICKNAMES = {
@@ -70,8 +55,8 @@ final class DemoChatScript {
     }
 
     /**
-     * 방송마다 한 번 정한다(씨앗 = 방송 번호). 누를 때마다 새로 뽑으면 잠금이 풀린 뒤 다시 누를 때 같은 닉네임이 반대
-     * 플랫폼으로 나오는데, 채팅창은 최근 300줄을 남겨 앞 급증과 함께 보인다. 방송이 다르면 배정도 다르다
+     * 방송마다 한 번 정한다(씨앗 = 방송 번호). 누를 때마다 새로 뽑으면 다시 누를 때 같은 닉네임이 반대 플랫폼으로 나오는데,
+     * 채팅창은 최근 300줄을 남겨 앞 급증과 함께 보인다. 방송이 다르면 배정도 다르다
      */
     static Audience audienceOf(String streamId) {
         return audience(new SplittableRandom(streamId.hashCode()));
@@ -86,19 +71,10 @@ final class DemoChatScript {
         return new Audience(List.copyOf(platforms));
     }
 
-    /** 지금 창 바로 앞 창부터 {@link #CALM_WINDOWS}개 창에 한 건씩. 지금 창은 비운다 */
-    static List<DemoChat> calm(long nowMillis, Audience audience) {
-        long currentWindowStart = nowMillis - Math.floorMod(nowMillis, WINDOW_MS);
-        List<DemoChat> chats = new ArrayList<>(CALM_WINDOWS);
-        for (int i = 1; i <= CALM_WINDOWS; i++) {
-            long at = currentWindowStart - i * WINDOW_MS + 1_000;
-            int viewer = 900 + i % 8;
-            chats.add(chat(viewer, CALM[i % CALM.length], at, audience));
-        }
-        return chats;
-    }
-
-    /** 급증 {@code index}번째 틱. 보낸 사람이 틱마다·건마다 달라 같은 ms에 넣어도 지문이 안 겹친다 */
+    /**
+     * 급증 {@code index}번째 틱. 보낸 사람이 틱마다·건마다 달라 같은 ms에 넣어도 지문이 안 겹친다. 채팅 순번(0부터)은
+     * {@code index * PER_TICK + j}다 — {@link DemoChatBurst}가 그것으로 {@link #CARD_AT_CHAT}번째를 찾는다
+     */
     static List<DemoChat> tick(int index, long nowMillis, Audience audience) {
         List<DemoChat> chats = new ArrayList<>(PER_TICK);
         for (int j = 0; j < PER_TICK; j++) {
