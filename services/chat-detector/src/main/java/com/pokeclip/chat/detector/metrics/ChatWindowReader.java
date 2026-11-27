@@ -18,6 +18,11 @@ import java.util.Optional;
  * 직접 읽지 않는다는 규칙(ADR-022)은 <b>담당이 다를 때</b>의 규칙이고 여기 해당하지 않는다.
  *
  * <p><b>수집 경로를 되부르지 않는다</b>(POK-137 완료 조건). 흐름은 한 방향이다.
+ *
+ * <p>🔴 <b>발표 데모 채팅(채널 {@code demo-…})은 네 조회 모두 안 본다</b>(2026-11-27). 수집기의 ⌃⇧C가 지어낸 채팅이고, 그 카드는
+ * 수집기({@code DemoHighlight})가 70번째 채팅에서 직접 낸다 — 여기서도 세면 같은 급증에 카드가 한 장 더 선다. 실제 채팅은 플랫폼
+ * 채널 번호라 이 접두어로 시작하지 않는다. 접두어는 수집기 {@code DemoChatBurst.channelId}가 정한다 — 그쪽을 바꾸면 네 조회의
+ * {@code channel_id NOT LIKE 'demo-%'}도 바꾼다
  */
 @Component
 public class ChatWindowReader {
@@ -47,6 +52,7 @@ public class ChatWindowReader {
               FROM app_chat_collector.chat_messages
              WHERE stream_id IS NOT NULL
                AND received_at >= ?
+               AND channel_id NOT LIKE 'demo-%'
              ORDER BY stream_id
             """;
 
@@ -129,6 +135,7 @@ public class ChatWindowReader {
              WHERE stream_id = ?
                AND received_at  >= ? AND received_at  <  ?
                AND message_time >= ? AND message_time <  ?
+               AND channel_id NOT LIKE 'demo-%'
              GROUP BY 1
              ORDER BY 1
             """;
@@ -166,7 +173,8 @@ public class ChatWindowReader {
               FROM (SELECT EXTRACT(EPOCH FROM (received_at - message_time)) * 1000 AS delay_ms
                       FROM app_chat_collector.chat_messages
                      WHERE stream_id = ?
-                       AND received_at >= ? AND received_at < ?) d
+                       AND received_at >= ? AND received_at < ?
+                       AND channel_id NOT LIKE 'demo-%') d
             """;
 
     /**
@@ -340,6 +348,7 @@ public class ChatWindowReader {
              WHERE stream_id = ?
                AND message_time >= ? AND message_time < ?
                AND received_at  >= ? AND received_at  <  ?
+               AND channel_id NOT LIKE 'demo-%'
             """;
 
     /** {@code [from, to)} 구간을 창 크기로 묶어 센다. 채팅이 없는 창은 줄이 안 나온다. */
