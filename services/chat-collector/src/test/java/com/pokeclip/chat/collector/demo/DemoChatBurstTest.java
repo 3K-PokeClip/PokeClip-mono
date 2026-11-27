@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -42,13 +43,19 @@ class DemoChatBurstTest {
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
     /**
-     * 카드 실행기. 넘겨받은 일을 <b>부른 스레드에서 바로</b> 돌린다 — 그래야 카드를 내는 순간 몇 건이 흘렀는지 잴 수 있다.
-     * 운영은 따로 도는 실행기다(급증 틱을 안 붙잡는다)
+     * 카드 실행기. 넘겨받은 일을 기다림 없이 <b>부른 스레드에서 바로</b> 돌린다 — 그래야 카드를 내는 순간 몇 건이 흘렀는지 잴 수 있다.
+     * 운영은 따로 도는 실행기이고, 70번째 채팅이 화면에 닿게 {@link DemoHighlight#AFTER_CHAT}만큼 기다린 뒤 돈다({@link DemoHighlightTest})
      */
     private final ScheduledExecutorService inline = new ScheduledThreadPoolExecutor(1) {
         @Override
         public void execute(Runnable command) {
             command.run();
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            command.run();
+            return null;
         }
     };
 
@@ -79,7 +86,7 @@ class DemoChatBurstTest {
             cards.add(card);
         }
         return 201;
-    }, inline, Duration.ofMillis(1));
+    }, inline, Duration.ofMillis(1), Duration.ZERO);
 
     private final DemoChatBurst burst = new DemoChatBurst(buffer, relay, highlight, scheduler, clock::get,
             Duration.ofMillis(1));
@@ -118,7 +125,7 @@ class DemoChatBurstTest {
         assertThat(burst.start(STREAM)).isTrue();
 
         기다린다(() -> relayed.size() == BURST);
-        assertThat(relayedWhenCard).as("70번째 채팅을 채팅창에 보낸 바로 다음, 71번째 전이다")
+        assertThat(relayedWhenCard).as("70번째 채팅을 채팅창(중계)에 넣은 바로 다음, 71번째 전에 카드를 맡긴다")
                 .containsExactly(DemoChatScript.CARD_AT_CHAT);
         assertThat(cards).hasSize(1);
         assertThat(cards.get(0).eventId()).as("누른 시각으로 카드를 가른다").isEqualTo("demo-" + pressedAt);
