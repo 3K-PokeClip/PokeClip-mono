@@ -3225,11 +3225,15 @@ OBS 문(위 절)과 같은 `recordHotkey`라 **두 문의 카드가 한 판정�
   플랫폼(치지직 · SOOP)은 방송마다 닉네임별로 무작위로 정한다 — 번갈아 나오면 지어낸 티가 나고, 같은 사람이 줄마다 바뀌어도 티가 난다(2026-11-27).
   씨앗이 방송 번호라 같은 방송에서 다시 눌러도 같은 사람은 같은 플랫폼이다(채팅창이 최근 300줄을 남겨 앞 급증과 같이 보인다)
 - 들어가는 자리는 실제 채팅과 같은 저장 바구니·중계다. 그 뒤(저장 · 반응 그래프 · 화면)는 실제 채팅과 같은 길이다. **원본 보관(S3)에는 안 넣는다**(플랫폼 원문 프레임 자리라 지어낸 채팅을 섞지 않는다)
-- **카드는 판별기가 아니라 수집기가 70번째 채팅에서 낸다**(`DemoChatScript.CARD_AT_CHAT`, 누른 뒤 5.75초 · 사용자 결정 2026-11-27).
-  70번째 채팅을 채팅창에 보낸 바로 다음 `DemoHighlight`가 누른 시각의 영상 위치를 이 서버 변환기로 바꿔(조각이 아직이면 500ms마다 20번까지 다시 묻는다)
-  판별기와 같은 문 `POST /internal/broadcasts/{id}/highlights`(clip 계약 2A, 출처 `auto`)에 넣는다. 구간은 판별기와 같은 꼴 — 누른 자리 앞 15초 ~ 급증 끝 뒤 5초(30초), 지점은 구간 시작.
+- **카드는 판별기가 아니라 수집기가 70번째 채팅에서 낸다**(`DemoChatScript.CARD_AT_CHAT` · 사용자 결정 2026-11-27). 화면에는 누른 뒤 약 6초에 선다.
+  70번째 채팅을 중계에 넣고 **0.3초 뒤**(`DemoHighlight.AFTER_CHAT` — 중계 0.1초 + 화면 채팅 묶음 `RELAY_FLUSH_MS` 0.15초, 카드는 오는 즉시 그려져 안 기다리면 70번째보다 먼저 뜬다)
+  `DemoHighlight`가 누른 시각의 영상 위치를 이 서버 변환기로 바꿔(조각이 아직이면 500ms마다 20번까지 다시 묻는다)
+  판별기와 같은 문 `POST /internal/broadcasts/{id}/highlights`(clip 계약 2A, 출처 `auto`)에 넣는다. 못 닿음 · 시한(3초) · 5xx면 500ms 뒤 같은 카드를 다시 보낸다(3번까지, 판별기와 같다).
+  **구간은 누른 자리 앞 15초 ~ 누른 자리(15초)**, 지점은 구간 시작이다. 🔴 끝을 누른 자리 뒤로 잡지 않는다 — 카드가 설 때 그 뒤는 아직 녹화 전이라 clip이 `playerWindow`를 비우고,
+  화면이 카드 「저장」을 「편집기에서 범위를 정해 저장」으로 막는다(목록을 30초 다시 써서 그동안 계속, PR #558 리뷰).
   근거는 `{"demo":true,"messageCount":70}`이라 화면에는 「채팅 급증 (70건)」으로 선다(배율은 평소 채팅이 없는 방송에서 지어낸 숫자라 안 싣는다).
-  clip 주소 · 토큰은 중계의 것(`CHAT_RELAY_ENABLED` · `CLIP_BASE_URL` · `INTERNAL_API_TOKEN`)을 쓰고, 중계가 꺼진 배포에서는 카드도 안 보낸다(`demo.chat_card.skipped reason=relay_off`)
+  clip 주소는 `pokeclip.demo.clip-base-url`(`CLIP_BASE_URL`), 토큰은 `INTERNAL_API_TOKEN`이다. **중계(`CHAT_RELAY_ENABLED`)와 묶지 않는다** — 중계가 꺼져도 화면은 저장된 채팅을
+  5초마다 읽어 데모 채팅을 띄운다. 둘 중 하나가 비면 부팅은 그대로 두고 카드만 안 보낸다(`demo.chat_card.skipped reason=no_clip_link`)
 - 🔴 **판별기는 데모 채널(`demo-…`) 채팅을 아예 안 센다**(`ChatWindowReader`의 네 조회 · `channel_id NOT LIKE 'demo-%'`). 세면 같은 급증에 판별기 카드가 약 37초 뒤 한 장 더 선다.
   그래서 판별기 워밍업을 채우던 평소 채팅 26건(지난 130초에 5초 칸마다 1건)도 없앴다. 실제 시청자 채팅은 그대로 센다 — 데모 방송에 진짜 채팅이 몰리면 판별기 카드도 따로 선다.
   🔴 **수집기와 판별기를 같이 배포한다.** 수집기만 먼저면 데모 채팅이 워밍업(채팅이 있던 5초 창 24개)을 못 채워 판별기 카드는 대개 안 서지만 여러 번 누르면 쌓여 설 수 있고,
@@ -3240,9 +3244,12 @@ OBS 문(위 절)과 같은 `recordHotkey`라 **두 문의 카드가 한 판정�
   판별기 카드 시절에는 이어 붙은 급증을 판별기가 한 사건으로 묶어 카드가 밀려(2026-11-26 운영: 23초 뒤 두 번째 키 → 카드가 첫 키 63초 뒤) 45초를 잠갔는데,
   카드를 수집기가 누를 때마다 바로 내므로 그 잠금은 없앴다(2026-11-27)
 - **로그**: 수집기 `demo.chat_burst.started stream=` · `demo.chat_burst.failed stream= tick= cause=` ·
-  `demo.chat_card.sent stream= eventId= status= startMs= endMs= attempts=` · `demo.chat_card.skipped stream= reason=(not_yet_indexed|no_footage|invalid_position|relay_off)` ·
-  `demo.chat_card.failed stream= (eventId= status= | cause=)`
-- **알려진 한계 둘**(로컬 리뷰, 고치지 않고 적는다)
+  `demo.chat_card.sent stream= eventId= startMs= endMs= sendAttempts=` · `demo.chat_card.duplicate stream= eventId= status= startMs=` ·
+  `demo.chat_card.retrying stream= eventId= status= sendAttempt=` · `demo.chat_card.skipped stream= reason=(no_clip_link|not_yet_indexed|no_footage|invalid_position)` ·
+  `demo.chat_card.failed stream= (eventId= status= sendAttempts= | cause=)`
+- **알려진 한계 셋**(리뷰, 고치지 않고 적는다)
+  - **방송 영상 15초 안에서 두 번 누르면 두 번째 카드는 안 선다.** 구간 시작이 둘 다 0으로 잘려 clip 자동 카드 유일 색인(방송, 구간 시작)에 접힌다 — clip은 200을 주고 수집기는
+    `demo.chat_card.duplicate`를 남긴다. 판별기 카드도 같은 자르기다. 방송을 켜고 15초가 지난 뒤 누른다
   - 데모 채팅은 채널 번호가 `demo-…`라 탈퇴 · 연동 해제의 채널 단위 정리가 못 지운다. 지어낸 글이라 개인정보는 없고, 보관 기한 청소가 지운다
   - 「이미 흐르는 중」 판정은 수집기 한 대의 메모리에 있다. 수집기가 여러 대로 뜨면 두 맥북이 거의 동시에 누를 때 급증이 겹칠 수 있다
 
